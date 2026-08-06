@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Active Order Navigation - Night Mode</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary-fixed": "#002203",
+                        "surface-container": "#f0eded",
+                        "on-secondary-fixed-variant": "#544600",
+                        "outline": "#717a6d",
+                        "error-container": "#ffdad6",
+                        "on-error-container": "#93000a",
+                        "on-primary": "#ffffff",
+                        "primary-fixed": "#acf4a4",
+                        "on-surface": "#1b1c1c",
+                        "primary-fixed-dim": "#91d78a",
+                        "on-primary-fixed-variant": "#0c5216",
+                        "surface-container-lowest": "#ffffff",
+                        "secondary-fixed": "#ffe170",
+                        "primary-container": "#1b5e20",
+                        "secondary-fixed-dim": "#e9c400",
+                        "on-tertiary": "#ffffff",
+                        "surface-dim": "#dcd9d9",
+                        "surface-bright": "#fcf9f8",
+                        "inverse-primary": "#91d78a",
+                        "secondary": "#705d00",
+                        "tertiary-fixed": "#e2e2e2",
+                        "inverse-surface": "#303030",
+                        "secondary-container": "#fdd400",
+                        "surface-container-highest": "#e5e2e1",
+                        "on-tertiary-fixed-variant": "#454747",
+                        "primary": "#00450d",
+                        "on-secondary-container": "#6f5c00",
+                        "on-secondary-fixed": "#221b00",
+                        "on-background": "#1b1c1c",
+                        "inverse-on-surface": "#f3f0ef",
+                        "on-secondary": "#ffffff",
+                        "on-error": "#ffffff",
+                        "surface-container-low": "#f6f3f2",
+                        "on-surface-variant": "#41493e",
+                        "surface-tint": "#2a6b2c",
+                        "on-tertiary-fixed": "#1a1c1c",
+                        "surface-variant": "#e5e2e1",
+                        "on-tertiary-container": "#c4c5c5",
+                        "on-primary-container": "#90d689",
+                        "error": "#ba1a1a",
+                        "background": "#fcf9f8",
+                        "tertiary": "#393b3b",
+                        "tertiary-container": "#505252",
+                        "surface-container-high": "#eae7e7",
+                        "outline-variant": "#c0c9bb",
+                        "surface": "#fcf9f8",
+                        "tertiary-fixed-dim": "#c6c6c7"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "gutter-mobile": "12px",
+                        "md": "24px",
+                        "xl": "48px",
+                        "lg": "32px",
+                        "margin-mobile": "16px",
+                        "sm": "16px",
+                        "xs": "8px",
+                        "base": "4px"
+                    },
+                    "fontFamily": {
+                        "body-sm": ["Plus Jakarta Sans"],
+                        "headline-lg": ["Plus Jakarta Sans"],
+                        "headline-lg-mobile": ["Plus Jakarta Sans"],
+                        "label-bold": ["Plus Jakarta Sans"],
+                        "body-lg": ["Plus Jakarta Sans"],
+                        "display-lg": ["Plus Jakarta Sans"],
+                        "title-md": ["Plus Jakarta Sans"]
+                    },
+                    "fontSize": {
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "700" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "700" }],
+                        "label-bold": ["12px", { "lineHeight": "16px", "fontWeight": "700" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "display-lg": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.02em", "fontWeight": "800" }],
+                        "title-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .map-gradient {
+            background: linear-gradient(180deg, rgba(48,48,48,0.8) 0%, rgba(48,48,48,0) 20%, rgba(48,48,48,0) 80%, rgba(48,48,48,1) 100%);
+        }
+    </style>
+</head>
+<body class="bg-inverse-surface text-inverse-on-surface h-screen w-full overflow-hidden flex flex-col font-body-sm selection:bg-primary selection:text-on-primary">
+<!-- Top Navigation Header -->
+<header class="fixed top-0 w-full z-50 bg-inverse-surface border-b-2 border-secondary flex flex-col justify-end px-md py-md min-h-[120px]">
+<div class="flex justify-between items-center w-full">
+<button aria-label="Menu" class="flex items-center justify-center p-2 rounded-full hover:bg-surface-variant transition-colors duration-200 tap-highlight-transparent text-primary-fixed-dim">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">menu</span>
+</button>
+<h1 class="font-headline-lg-mobile text-headline-lg-mobile font-black uppercase tracking-wider text-on-primary">Active Order</h1>
+<button aria-label="Notifications" class="flex items-center justify-center p-2 rounded-full hover:bg-surface-variant transition-colors duration-200 tap-highlight-transparent text-primary-fixed-dim">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">notifications_active</span>
+</button>
+</div>
+<!-- Step Indicator -->
+<div class="mt-4 flex items-center w-full bg-surface-container-highest p-3 rounded-lg shadow-md border border-outline-variant">
+<div class="w-10 h-10 rounded-full bg-secondary-container flex items-center justify-center mr-3 shrink-0">
+<span class="material-symbols-outlined text-on-secondary-container font-bold" style="font-variation-settings: 'FILL' 1;">directions_car</span>
+</div>
+<div class="flex-1">
+<p class="font-label-bold text-label-bold text-secondary-fixed-dim uppercase tracking-wider">Step 1</p>
+<h2 class="font-title-md text-title-md text-on-primary">Go to Dhaba</h2>
+</div>
+<div class="text-right ml-3">
+<p class="font-headline-lg-mobile text-headline-lg-mobile text-primary-fixed">1.2<span class="font-body-sm text-body-sm ml-1">km</span></p>
+<p class="font-body-sm text-body-sm text-tertiary-fixed-dim">~4 mins</p>
+</div>
+</div>
+</header>
+<!-- Main Map Canvas -->
+<main class="flex-1 relative mt-[180px] mb-[220px]">
+<!-- Map Background Placeholder -->
+<div class="absolute inset-0 w-full h-full bg-cover bg-center" data-alt="A dark-mode navigation map interface showing streets at night. The map utilizes deep charcoal grays and subtle neon green route lines. Street names are faintly visible. High-contrast modern UI style optimized for low-light environments, feeling like a premium delivery application dashboard." data-location="Vellore" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuBBK48cIsRwlqdS8VB05H858CD8L_IeC8CkIzexAOakDbQ9X5nkwxjPvUVX0heosW2HjcAB43GC5m2oavUbFY1IJE3AXUzkeJLdQNWOQVC9iQiPBeKEWJNb7Pa2CzQ5ptdyb6mSvk9Vra-PSWSWKJOSCCrvK4JjHIHCSwRMoW0xgxOeEU4Qgs4y0954MiO1Vt7Dgp6POHKorG2ZKRb8Kiff5ze_YMdGlt9P6FV8w6oybgnKKrG8h9dn')">
+</div>
+<!-- Map Gradient Overlay -->
+<div class="absolute inset-0 map-gradient pointer-events-none"></div>
+<!-- Simulated Map Elements -->
+<div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center pointer-events-none">
+<div class="bg-primary-container text-on-primary-container px-3 py-1 rounded-full font-label-bold text-label-bold shadow-lg mb-2 border border-primary-fixed-dim animate-pulse">
+                You are here
+             </div>
+<div class="w-6 h-6 bg-primary-fixed rounded-full shadow-[0_0_15px_rgba(172,244,164,0.6)] border-2 border-on-primary-fixed"></div>
+</div>
+<div class="absolute top-1/4 right-1/4 flex flex-col items-center pointer-events-none">
+<div class="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full font-label-bold text-label-bold shadow-lg mb-2 border border-secondary-fixed">
+                Dhaba
+             </div>
+<span class="material-symbols-outlined text-secondary-fixed drop-shadow-md text-3xl" style="font-variation-settings: 'FILL' 1;">storefront</span>
+</div>
+<!-- Route Line Simulation -->
+<svg class="absolute inset-0 w-full h-full pointer-events-none" preserveaspectratio="none">
+<path class="opacity-80 drop-shadow-[0_0_5px_rgba(172,244,164,0.5)]" d="M 50% 50% Q 60% 40% 75% 25%" fill="none" stroke="#acf4a4" stroke-dasharray="8 4" stroke-width="4"></path>
+</svg>
+</main>
+<!-- Bottom Drawer (Order Summary & Action) -->
+<footer class="fixed bottom-0 w-full z-50 bg-inverse-surface border-t border-outline-variant shadow-[0px_-8px_24px_rgba(0,0,0,0.5)] rounded-t-xl transition-transform duration-300 transform translate-y-0 pb-6 pt-2">
+<!-- Drag Handle -->
+<div class="w-full flex justify-center mb-4">
+<div class="w-12 h-1.5 bg-outline-variant rounded-full"></div>
+</div>
+<div class="px-margin-mobile">
+<!-- Order Details -->
+<div class="flex justify-between items-start mb-6">
+<div>
+<p class="font-label-bold text-label-bold text-tertiary-fixed-dim uppercase mb-1">Order #8842</p>
+<h3 class="font-title-md text-title-md text-on-primary mb-1">2x Paneer Tikka, 4x Roti</h3>
+<p class="font-body-sm text-body-sm text-outline-variant">Customer: Student Profile • Ph: ...4567</p>
+</div>
+<button aria-label="Call Customer" class="bg-surface-container-highest p-3 rounded-full hover:bg-surface-variant transition-colors text-primary-fixed-dim">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">phone</span>
+</button>
+</div>
+<!-- Action Button -->
+<button class="w-full bg-primary-container text-on-primary-container font-title-md text-title-md py-4 rounded-xl flex items-center justify-center shadow-lg hover:bg-primary transition-colors active:scale-95 border border-primary-fixed-dim group">
+<span class="material-symbols-outlined mr-2 group-hover:scale-110 transition-transform" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+                Confirm Pickup from Dhaba
+            </button>
+</div>
+</footer>
+</body></html>

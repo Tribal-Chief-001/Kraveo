@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Active Order - Delivery Partner</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-secondary": "#ffffff",
+                        "surface-bright": "#fcf9f8",
+                        "on-secondary-fixed": "#221b00",
+                        "tertiary-fixed-dim": "#c6c6c7",
+                        "on-tertiary": "#ffffff",
+                        "on-secondary-container": "#6f5c00",
+                        "on-secondary-fixed-variant": "#544600",
+                        "primary-container": "#1b5e20",
+                        "inverse-on-surface": "#f3f0ef",
+                        "primary": "#00450d",
+                        "on-background": "#1b1c1c",
+                        "surface-dim": "#dcd9d9",
+                        "surface": "#fcf9f8",
+                        "on-tertiary-container": "#c4c5c5",
+                        "secondary-fixed": "#ffe170",
+                        "outline-variant": "#c0c9bb",
+                        "surface-container-low": "#f6f3f2",
+                        "error": "#ba1a1a",
+                        "surface-container-high": "#eae7e7",
+                        "on-primary": "#ffffff",
+                        "secondary-fixed-dim": "#e9c400",
+                        "on-tertiary-fixed": "#1a1c1c",
+                        "surface-tint": "#2a6b2c",
+                        "secondary": "#705d00",
+                        "primary-fixed-dim": "#91d78a",
+                        "background": "#fcf9f8",
+                        "surface-variant": "#e5e2e1",
+                        "inverse-primary": "#91d78a",
+                        "on-primary-fixed": "#002203",
+                        "on-error-container": "#93000a",
+                        "primary-fixed": "#acf4a4",
+                        "on-surface-variant": "#41493e",
+                        "tertiary-fixed": "#e2e2e2",
+                        "inverse-surface": "#303030",
+                        "on-error": "#ffffff",
+                        "secondary-container": "#fdd400",
+                        "surface-container-lowest": "#ffffff",
+                        "error-container": "#ffdad6",
+                        "on-surface": "#1b1c1c",
+                        "surface-container-highest": "#e5e2e1",
+                        "surface-container": "#f0eded",
+                        "on-primary-container": "#90d689",
+                        "on-tertiary-fixed-variant": "#454747",
+                        "outline": "#717a6d",
+                        "tertiary": "#393b3b",
+                        "on-primary-fixed-variant": "#0c5216",
+                        "tertiary-container": "#505252"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "md": "24px",
+                        "sm": "16px",
+                        "base": "4px",
+                        "gutter-mobile": "12px",
+                        "xl": "48px",
+                        "xs": "8px",
+                        "margin-mobile": "16px",
+                        "lg": "32px"
+                    },
+                    "fontFamily": {
+                        "body-lg": ["Plus Jakarta Sans"],
+                        "headline-lg": ["Plus Jakarta Sans"],
+                        "headline-lg-mobile": ["Plus Jakarta Sans"],
+                        "body-sm": ["Plus Jakarta Sans"],
+                        "display-lg": ["Plus Jakarta Sans"],
+                        "label-bold": ["Plus Jakarta Sans"],
+                        "title-md": ["Plus Jakarta Sans"]
+                    },
+                    "fontSize": {
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "700" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "700" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "display-lg": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.02em", "fontWeight": "800" }],
+                        "label-bold": ["12px", { "lineHeight": "16px", "fontWeight": "700" }],
+                        "title-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .map-bg {
+            background-color: #e5e3df;
+            background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M10 10h80v80H10z' fill='none' stroke='%23d0cabe' stroke-width='1'/%3E%3C/svg%3E");
+            background-size: 50px 50px;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-lg min-h-screen flex flex-col antialiased">
+<!-- Top App Bar -->
+<header class="bg-surface dark:bg-surface-dim text-primary dark:text-primary-fixed font-headline-lg-mobile text-headline-lg-mobile full-width top-0 sticky border-b border-outline-variant dark:border-outline flat no shadows flex justify-between items-center px-margin-mobile py-base h-16 w-full z-40">
+<button aria-label="Menu" class="text-on-surface-variant hover:bg-surface-container-low transition-colors rounded-full p-2">
+<span class="material-symbols-outlined">menu</span>
+</button>
+<div class="font-display-lg text-display-lg font-extrabold tracking-tighter text-primary dark:text-primary-fixed">KRAVEO</div>
+<button aria-label="User Profile" class="text-on-surface-variant hover:bg-surface-container-low transition-colors rounded-full overflow-hidden w-10 h-10">
+<img alt="User profile photo" class="w-full h-full object-cover" data-alt="A smiling young delivery partner wearing a green helmet and jacket, high-quality, modern, well-lit, professional profile photo style." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBjAYaOWFhJMQdO-eL4Gr15TAjS3wV9phXneVCrhjouKKXEHemiCs1yJMnFVTpfTzT1lLHOpGUZmRSCBbPA1lKD1qXPr6m-BjiajBRRIOeh7q6OceHb_9XY7OZ7HtvDxgL89V75UJk47RWQ_tJI8HmzslzrG-6BYyWgz0G5t_cAa30isMme3xLUCdYBlbI4GGkh6Okmm1pu-tcZlSBJbx87RInndrrGKSC4Z04MNx-VbhgcByL9dBqE"/>
+</button>
+</header>
+<!-- Main Content Canvas -->
+<main class="flex-grow flex flex-col">
+<!-- Map Area -->
+<div class="relative w-full h-[40vh] md:h-[50vh] bg-surface-container-highest map-bg" data-location="University Campus Area" style="">
+<!-- Simulated Map Route -->
+<svg class="absolute inset-0 w-full h-full pointer-events-none" preserveaspectratio="none">
+<path class="opacity-70 animate-pulse" d="M 20% 30% Q 50% 10% 80% 70%" fill="none" stroke="#1b5e20" stroke-dasharray="10 10" stroke-width="6"></path>
+</svg>
+<!-- Pickup Pin -->
+<div class="absolute top-[30%] left-[20%] transform -translate-x-1/2 -translate-y-full flex flex-col items-center">
+<div class="bg-surface px-3 py-1 rounded-full shadow-lg border border-outline-variant mb-1 font-label-bold text-label-bold text-on-surface whitespace-nowrap">
+                    Highway Dhaba
+                </div>
+<div class="w-10 h-10 bg-primary-container text-on-primary-container rounded-full flex items-center justify-center shadow-lg border-2 border-surface">
+<span class="material-symbols-outlined text-xl">restaurant</span>
+</div>
+</div>
+<!-- Drop-off Pin -->
+<div class="absolute top-[70%] left-[80%] transform -translate-x-1/2 -translate-y-full flex flex-col items-center">
+<div class="bg-surface px-3 py-1 rounded-full shadow-lg border border-outline-variant mb-1 font-label-bold text-label-bold text-on-surface whitespace-nowrap">
+                    Hostel Gate
+                </div>
+<div class="w-10 h-10 bg-secondary text-on-secondary rounded-full flex items-center justify-center shadow-lg border-2 border-surface">
+<span class="material-symbols-outlined text-xl">location_on</span>
+</div>
+</div>
+<!-- Delivery Partner Pin -->
+<div class="absolute top-[50%] left-[50%] transform -translate-x-1/2 -translate-y-1/2">
+<div class="w-12 h-12 bg-surface rounded-full flex items-center justify-center shadow-xl border-4 border-primary">
+<span class="material-symbols-outlined text-primary text-2xl" data-weight="fill">two_wheeler</span>
+</div>
+</div>
+</div>
+<!-- Order Details Panel -->
+<div class="bg-surface flex-grow rounded-t-[32px] -mt-6 z-10 shadow-[0px_-8px_24px_rgba(0,0,0,0.1)] flex flex-col pb-safe">
+<!-- Handle -->
+<div class="w-full flex justify-center py-4">
+<div class="w-16 h-1.5 bg-outline-variant rounded-full"></div>
+</div>
+<div class="px-margin-mobile flex-grow overflow-y-auto pb-32">
+<!-- Earnings Header -->
+<div class="flex justify-between items-center mb-6 bg-surface-container-low p-4 rounded-2xl border border-outline-variant">
+<div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Estimated Earnings</p>
+<h2 class="font-headline-lg-mobile text-headline-lg-mobile text-primary">₹65.00</h2>
+</div>
+<div class="text-right">
+<p class="font-body-sm text-body-sm text-on-surface-variant">Est. Time</p>
+<h2 class="font-title-md text-title-md text-on-surface">12 mins</h2>
+</div>
+</div>
+<!-- Customer Details -->
+<div class="mb-6 flex items-center justify-between border-b border-outline-variant pb-6">
+<div class="flex items-center gap-4">
+<div class="w-14 h-14 rounded-full bg-surface-container-high overflow-hidden">
+<img alt="Customer Profile" class="w-full h-full object-cover" data-alt="A close up of a student waiting for food, looking happy, modern university setting, bright natural light." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAWg6B5WBZNDaWEPruFxiAAAchKT3okMDlW9KIwPWN9xC9DkZzromIkw1arXMm7zmYkrVZn6vo0b0FfrrZHBZUp5uLlT8q1a5JcXFx-o_RDE7PDZJxRUIehKRfqtVwG11D2J718a9tlCDuLhyvlCWNPRI6nUISw-KgzZWjr4iTmLcfhMd__VXsRSLpbVLCXmocigmPVFVC_lMreRpZUCsu2iNgiHjCaP2CnZEIhZzJMiKzkKVkpI8Dc"/>
+</div>
+<div>
+<h3 class="font-title-md text-title-md text-on-surface">Rahul S.</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-sm">call</span> +91 98765 43210
+                            </p>
+</div>
+</div>
+<button class="w-12 h-12 bg-secondary-container text-on-secondary-container rounded-full flex items-center justify-center hover:bg-secondary transition-colors">
+<span class="material-symbols-outlined" data-weight="fill">chat</span>
+</button>
+</div>
+<!-- Order Status Tracker -->
+<div class="relative pl-8 mb-8">
+<div class="absolute left-3.5 top-2 bottom-2 w-0.5 bg-outline-variant"></div>
+<div class="absolute left-3.5 top-2 h-1/2 w-0.5 bg-primary"></div>
+<div class="relative mb-6">
+<div class="absolute -left-8 w-6 h-6 rounded-full bg-primary flex items-center justify-center border-2 border-surface">
+<span class="material-symbols-outlined text-[12px] text-on-primary">check</span>
+</div>
+<h4 class="font-title-md text-title-md text-on-surface">Picked Up</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Highway Dhaba</p>
+</div>
+<div class="relative">
+<div class="absolute -left-8 w-6 h-6 rounded-full bg-surface border-2 border-primary flex items-center justify-center">
+<div class="w-2 h-2 rounded-full bg-primary"></div>
+</div>
+<h4 class="font-title-md text-title-md text-on-surface">Delivering</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Hostel Gate</p>
+</div>
+</div>
+</div>
+<!-- Sticky Action Button -->
+<div class="fixed bottom-0 left-0 w-full bg-surface p-margin-mobile shadow-[0px_-4px_16px_rgba(0,0,0,0.08)] z-20">
+<button class="w-full bg-primary text-on-primary font-title-md text-title-md py-4 rounded-xl flex items-center justify-center gap-2 hover:bg-primary-container transition-all active:scale-95 shadow-lg">
+<span class="material-symbols-outlined">flag</span>
+                    ARRIVED AT GATE
+                </button>
+</div>
+</div>
+</main>
+</body></html>

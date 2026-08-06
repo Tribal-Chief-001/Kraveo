@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>VIT Eats Vendor - Active Orders</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "on-primary-fixed": "#002203",
+                      "surface-container": "#f0eded",
+                      "on-secondary-fixed-variant": "#544600",
+                      "outline": "#717a6d",
+                      "error-container": "#ffdad6",
+                      "on-error-container": "#93000a",
+                      "on-primary": "#ffffff",
+                      "primary-fixed": "#acf4a4",
+                      "on-surface": "#1b1c1c",
+                      "primary-fixed-dim": "#91d78a",
+                      "on-primary-fixed-variant": "#0c5216",
+                      "surface-container-lowest": "#ffffff",
+                      "secondary-fixed": "#ffe170",
+                      "primary-container": "#1b5e20",
+                      "secondary-fixed-dim": "#e9c400",
+                      "on-tertiary": "#ffffff",
+                      "surface-dim": "#dcd9d9",
+                      "surface-bright": "#fcf9f8",
+                      "inverse-primary": "#91d78a",
+                      "secondary": "#705d00",
+                      "tertiary-fixed": "#e2e2e2",
+                      "inverse-surface": "#303030",
+                      "secondary-container": "#fdd400",
+                      "surface-container-highest": "#e5e2e1",
+                      "on-tertiary-fixed-variant": "#454747",
+                      "primary": "#00450d",
+                      "on-secondary-container": "#6f5c00",
+                      "on-secondary-fixed": "#221b00",
+                      "on-background": "#1b1c1c",
+                      "inverse-on-surface": "#f3f0ef",
+                      "on-secondary": "#ffffff",
+                      "on-error": "#ffffff",
+                      "surface-container-low": "#f6f3f2",
+                      "on-surface-variant": "#41493e",
+                      "surface-tint": "#2a6b2c",
+                      "on-tertiary-fixed": "#1a1c1c",
+                      "surface-variant": "#e5e2e1",
+                      "on-tertiary-container": "#c4c5c5",
+                      "on-primary-container": "#90d689",
+                      "error": "#ba1a1a",
+                      "background": "#fcf9f8",
+                      "tertiary": "#393b3b",
+                      "tertiary-container": "#505252",
+                      "surface-container-high": "#eae7e7",
+                      "outline-variant": "#c0c9bb",
+                      "surface": "#fcf9f8",
+                      "tertiary-fixed-dim": "#c6c6c7"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "gutter-mobile": "12px",
+                      "md": "24px",
+                      "xl": "48px",
+                      "lg": "32px",
+                      "margin-mobile": "16px",
+                      "sm": "16px",
+                      "xs": "8px",
+                      "base": "4px"
+              },
+              "fontFamily": {
+                      "body-sm": ["Plus Jakarta Sans"],
+                      "headline-lg": ["Plus Jakarta Sans"],
+                      "headline-lg-mobile": ["Plus Jakarta Sans"],
+                      "label-bold": ["Plus Jakarta Sans"],
+                      "body-lg": ["Plus Jakarta Sans"],
+                      "display-lg": ["Plus Jakarta Sans"],
+                      "title-md": ["Plus Jakarta Sans"]
+              },
+              "fontSize": {
+                      "body-sm": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                      "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "700"}],
+                      "headline-lg-mobile": ["24px", {"lineHeight": "32px", "fontWeight": "700"}],
+                      "label-bold": ["12px", {"lineHeight": "16px", "fontWeight": "700"}],
+                      "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                      "display-lg": ["40px", {"lineHeight": "48px", "letterSpacing": "-0.02em", "fontWeight": "800"}],
+                      "title-md": ["20px", {"lineHeight": "28px", "fontWeight": "600"}]
+              }
+            }
+          }
+        }
+    </script>
+</head>
+<body class="bg-background text-on-background font-body-lg min-h-screen pt-[120px] pb-32">
+<!-- TopAppBar Medium -->
+<header class="fixed top-0 w-full z-50 bg-primary border-b-2 border-secondary flex flex-col justify-end px-md py-md min-h-[120px]">
+<div class="flex justify-between items-center w-full max-w-7xl mx-auto">
+<div class="flex items-center gap-xs text-on-primary">
+<span class="material-symbols-outlined text-title-md font-title-md" style="font-variation-settings: 'FILL' 1;">menu</span>
+</div>
+<div class="text-center flex-grow">
+<h1 class="text-on-primary font-black uppercase tracking-wider font-headline-lg text-headline-lg">Orders Management</h1>
+</div>
+<div class="flex items-center gap-xs text-on-primary opacity-80">
+<span class="material-symbols-outlined text-title-md font-title-md" style="font-variation-settings: 'FILL' 1;">notifications_active</span>
+</div>
+</div>
+<!-- Vendor Status Toggle -->
+<div class="w-full max-w-7xl mx-auto mt-sm flex justify-center">
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer" type="checkbox" value=""/>
+<div class="w-14 h-7 bg-surface-variant peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-secondary"></div>
+<span class="ml-3 font-title-md text-title-md text-on-primary">TAKING ORDERS</span>
+</label>
+</div>
+</header>
+<main class="w-full max-w-7xl mx-auto px-margin-mobile md:px-md py-md flex flex-col gap-sm">
+<!-- Order Card 1 -->
+<div class="bg-surface rounded-lg border border-outline-variant p-sm flex flex-col gap-sm shadow-sm relative overflow-hidden">
+<!-- Status indicator line -->
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-secondary-container"></div>
+<div class="flex justify-between items-start pl-base">
+<div>
+<span class="font-headline-lg-mobile text-headline-lg-mobile text-on-surface">#A01</span>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Arun K. • Table 4</p>
+</div>
+<div class="bg-surface-variant text-on-surface-variant px-2 py-1 rounded font-label-bold text-label-bold flex items-center gap-1">
+<span class="material-symbols-outlined text-sm">schedule</span>
+                     06:45
+                 </div>
+</div>
+<div class="pl-base border-t border-outline-variant pt-sm">
+<ul class="font-body-lg text-body-lg text-on-surface flex flex-col gap-1">
+<li class="flex justify-between"><span>2x Paneer Tikka</span></li>
+<li class="flex justify-between"><span>4x Butter Naan</span></li>
+<li class="flex justify-between"><span>1x Lassi</span></li>
+</ul>
+</div>
+<button class="w-full bg-primary text-on-primary font-title-md text-title-md py-3 rounded-lg mt-xs hover:bg-primary-container transition-colors shadow-sm">
+                 MARK READY FOR PICKUP
+             </button>
+</div>
+<!-- Order Card 2 -->
+<div class="bg-surface rounded-lg border border-outline-variant p-sm flex flex-col gap-sm shadow-sm relative overflow-hidden">
+<!-- Status indicator line -->
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-secondary-container"></div>
+<div class="flex justify-between items-start pl-base">
+<div>
+<span class="font-headline-lg-mobile text-headline-lg-mobile text-on-surface">#A02</span>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Priya M. • Takeaway</p>
+</div>
+<div class="bg-error-container text-on-error-container px-2 py-1 rounded font-label-bold text-label-bold flex items-center gap-1">
+<span class="material-symbols-outlined text-sm">schedule</span>
+                     12:30
+                 </div>
+</div>
+<div class="pl-base border-t border-outline-variant pt-sm">
+<ul class="font-body-lg text-body-lg text-on-surface flex flex-col gap-1">
+<li class="flex justify-between"><span>1x Veg Biryani</span></li>
+<li class="flex justify-between"><span>1x Raita</span></li>
+</ul>
+<p class="font-body-sm text-body-sm text-error mt-1">Note: Extra spicy</p>
+</div>
+<button class="w-full bg-primary text-on-primary font-title-md text-title-md py-3 rounded-lg mt-xs hover:bg-primary-container transition-colors shadow-sm">
+                 MARK READY FOR PICKUP
+             </button>
+</div>
+</main>
+<!-- BottomNavBar Icons Only -->
+<nav class="fixed bottom-0 w-full z-50 bg-surface-container-highest border-t border-outline-variant flex justify-evenly items-center h-20 w-full md:hidden">
+<button class="bg-primary-container text-on-primary-container rounded-xl p-3 flex flex-col items-center justify-center vibrate-on-tap">
+<span class="material-symbols-outlined font-label-bold text-label-bold" style="font-variation-settings: 'FILL' 1;">task</span>
+</button>
+<button class="text-outline p-3 flex flex-col items-center justify-center hover:bg-surface-variant vibrate-on-tap">
+<span class="material-symbols-outlined font-label-bold text-label-bold" style="font-variation-settings: 'FILL' 1;">navigation</span>
+</button>
+<button class="text-outline p-3 flex flex-col items-center justify-center hover:bg-surface-variant vibrate-on-tap">
+<span class="material-symbols-outlined font-label-bold text-label-bold" style="font-variation-settings: 'FILL' 1;">history</span>
+</button>
+</nav>
+</body></html>

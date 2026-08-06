@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>VIT Eats - Restaurant Menu</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary-fixed": "#002203",
+                        "surface-container": "#f0eded",
+                        "on-secondary-fixed-variant": "#544600",
+                        "outline": "#717a6d",
+                        "error-container": "#ffdad6",
+                        "on-error-container": "#93000a",
+                        "on-primary": "#ffffff",
+                        "primary-fixed": "#acf4a4",
+                        "on-surface": "#1b1c1c",
+                        "primary-fixed-dim": "#91d78a",
+                        "on-primary-fixed-variant": "#0c5216",
+                        "surface-container-lowest": "#ffffff",
+                        "secondary-fixed": "#ffe170",
+                        "primary-container": "#1b5e20",
+                        "secondary-fixed-dim": "#e9c400",
+                        "on-tertiary": "#ffffff",
+                        "surface-dim": "#dcd9d9",
+                        "surface-bright": "#fcf9f8",
+                        "inverse-primary": "#91d78a",
+                        "secondary": "#705d00",
+                        "tertiary-fixed": "#e2e2e2",
+                        "inverse-surface": "#303030",
+                        "secondary-container": "#fdd400",
+                        "surface-container-highest": "#e5e2e1",
+                        "on-tertiary-fixed-variant": "#454747",
+                        "primary": "#00450d",
+                        "on-secondary-container": "#6f5c00",
+                        "on-secondary-fixed": "#221b00",
+                        "on-background": "#1b1c1c",
+                        "inverse-on-surface": "#f3f0ef",
+                        "on-secondary": "#ffffff",
+                        "on-error": "#ffffff",
+                        "surface-container-low": "#f6f3f2",
+                        "on-surface-variant": "#41493e",
+                        "surface-tint": "#2a6b2c",
+                        "on-tertiary-fixed": "#1a1c1c",
+                        "surface-variant": "#e5e2e1",
+                        "on-tertiary-container": "#c4c5c5",
+                        "on-primary-container": "#90d689",
+                        "error": "#ba1a1a",
+                        "background": "#fcf9f8",
+                        "tertiary": "#393b3b",
+                        "tertiary-container": "#505252",
+                        "surface-container-high": "#eae7e7",
+                        "outline-variant": "#c0c9bb",
+                        "surface": "#fcf9f8",
+                        "tertiary-fixed-dim": "#c6c6c7"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "gutter-mobile": "12px",
+                        "md": "24px",
+                        "xl": "48px",
+                        "lg": "32px",
+                        "margin-mobile": "16px",
+                        "sm": "16px",
+                        "xs": "8px",
+                        "base": "4px"
+                    },
+                    "fontFamily": {
+                        "body-sm": ["Plus Jakarta Sans"],
+                        "headline-lg": ["Plus Jakarta Sans"],
+                        "headline-lg-mobile": ["Plus Jakarta Sans"],
+                        "label-bold": ["Plus Jakarta Sans"],
+                        "body-lg": ["Plus Jakarta Sans"],
+                        "display-lg": ["Plus Jakarta Sans"],
+                        "title-md": ["Plus Jakarta Sans"]
+                    },
+                    "fontSize": {
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "700" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "700" }],
+                        "label-bold": ["12px", { "lineHeight": "16px", "fontWeight": "700" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "display-lg": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.02em", "fontWeight": "800" }],
+                        "title-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-sm antialiased overflow-x-hidden min-h-screen pb-[120px]">
+<!-- TopAppBar (Small) -->
+<header class="fixed top-0 w-full z-50 bg-surface dark:bg-surface-dim shadow-none transition-colors duration-200">
+<div class="flex justify-between items-center px-margin-mobile py-xs w-full max-w-[1200px] mx-auto">
+<button class="text-primary dark:text-primary-fixed-dim hover:bg-surface-container-low rounded-full p-2 transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="arrow_back">arrow_back</span>
+</button>
+<h1 class="font-headline-lg-mobile text-headline-lg-mobile font-bold text-primary dark:text-primary-fixed-dim md:font-headline-lg md:text-headline-lg">VIT Eats</h1>
+<div class="text-primary dark:text-primary-fixed-dim hover:bg-surface-container-low rounded-full p-2 transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="search">search</span>
+</div>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="w-full max-w-[1200px] mx-auto pt-[60px] md:pt-[72px]">
+<!-- Restaurant Hero Image & Info -->
+<section class="relative w-full h-[250px] md:h-[400px]">
+<div class="w-full h-full bg-cover bg-center absolute inset-0" data-alt="A vibrant, high-quality photograph of a modern, upscale Indian Dhaba (roadside restaurant) setting. Warm string lights illuminate rustic wooden tables, with a clay tandoor oven visible in the background. The lighting is inviting, creating a cozy and authentic atmosphere. The colors emphasize rich earthy tones, vibrant reds, and warm yellows, consistent with a high-end food delivery app aesthetic." style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuB8HBtQTcNdomgrp8tzaDeUbeSv62-WVcupdmPIgSWVPcZuDzblooIRM52yaeGVbmCSzXMDsL5d1-zczNf2nB-0jADIdqJmhrZ28wHLqr6cPlLMde_GiLe1zz8GnpO0diFxkQxR1jcK8ti4aiYgaufgU-ar1L3a5fT0eo54vil79tE2HDv9ojE6_3w_NNVvMcTFWlka7TWlZRznJE1y8zTjcH9YHS85rCidqfK7fvYR-XiIUQe3603A')"></div>
+<div class="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent"></div>
+<div class="absolute bottom-0 left-0 w-full p-margin-mobile text-white">
+<div class="flex justify-between items-end">
+<div>
+<h2 class="font-headline-lg-mobile text-headline-lg-mobile md:font-headline-lg md:text-headline-lg text-white mb-1">Punjabi Dhaba</h2>
+<p class="font-body-sm text-white/90 flex items-center gap-1">
+<span class="material-symbols-outlined text-[16px]" data-icon="star" style="font-variation-settings: 'FILL' 1;">star</span>
+                            4.5 (1.2k+ ratings) • North Indian • 25-30 min
+                        </p>
+</div>
+</div>
+</div>
+</section>
+<!-- Sticky Menu Categories -->
+<div class="sticky top-[60px] md:top-[72px] z-40 bg-surface/90 backdrop-blur-md border-b border-outline-variant/30 py-xs shadow-sm">
+<div class="flex overflow-x-auto no-scrollbar px-margin-mobile gap-sm md:justify-center">
+<button class="whitespace-nowrap px-4 py-2 rounded-full bg-primary text-on-primary font-label-bold text-label-bold transition-transform active:scale-95">Popular</button>
+<button class="whitespace-nowrap px-4 py-2 rounded-full border border-outline-variant text-on-surface-variant hover:bg-surface-variant font-label-bold text-label-bold transition-colors">Main Course</button>
+<button class="whitespace-nowrap px-4 py-2 rounded-full border border-outline-variant text-on-surface-variant hover:bg-surface-variant font-label-bold text-label-bold transition-colors">Breads</button>
+<button class="whitespace-nowrap px-4 py-2 rounded-full border border-outline-variant text-on-surface-variant hover:bg-surface-variant font-label-bold text-label-bold transition-colors">Beverages</button>
+</div>
+</div>
+<!-- Menu Section: Popular -->
+<section class="p-margin-mobile pb-xl">
+<!-- Menu Grid (Bento/Card Style) -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-margin-mobile">
+<!-- Dish Card 1 -->
+<div class="bg-white rounded-xl border border-outline-variant/50 p-sm flex gap-sm overflow-hidden hover:shadow-md transition-shadow">
+<div class="flex-1 flex flex-col justify-between">
+<div>
+<div class="flex items-center gap-1 mb-1">
+<!-- Veg Icon -->
+<div class="w-4 h-4 border border-green-600 flex items-center justify-center p-[2px] rounded-sm">
+<div class="w-2 h-2 bg-green-600 rounded-full"></div>
+</div>
+<span class="font-label-bold text-label-bold text-secondary">Bestseller</span>
+</div>
+<h3 class="font-title-md text-title-md text-on-surface mb-1">Paneer Butter Masala</h3>
+<p class="font-body-sm text-on-surface-variant mb-2 font-semibold">₹140</p>
+<p class="font-body-sm text-outline line-clamp-2 text-[12px]">Rich and creamy dish of paneer (cottage cheese) in a tomato, butter and cashew sauce.</p>
+</div>
+</div>
+<div class="w-[110px] h-[110px] relative shrink-0 rounded-lg overflow-hidden">
+<img class="w-full h-full object-cover rounded-lg" data-alt="A close-up, mouth-watering food photography shot of a bowl of rich, creamy orange Paneer Butter Masala. The dish is garnished with fresh cilantro and a swirl of cream. The lighting is warm and directional, emphasizing the texture of the gravy. The background is slightly out of focus, showing a glimpse of naan bread, maintaining a high-end food delivery aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDSR8oAGNeYZD5RbS9j_PfuDZsUCbJSa4sYf8MRmX2_P39h50Q_3kP93wcx10IePuhidVl8BnGExjoH0c99V_dnR15CIBnGeqXhr-gdgWfmMkpt02paJCMDXvjLgT2XF9RPCfFGeMZX3drIyV96MrbMGuLgglt7KRJmBVGWa9HVE6e4C-zPT4ZS9zrjdVPwlO08Iyzxd0_PbRZTkzhxfkCOEGH6_SnNNKEv8VuA_acStYeiUKpHxqpA"/>
+<button class="absolute -bottom-3 left-1/2 -translate-x-1/2 bg-primary text-on-primary font-label-bold text-label-bold px-4 py-1.5 rounded-md shadow-md border border-primary/20 hover:bg-primary-container transition-colors whitespace-nowrap z-10 flex items-center gap-1">
+                            ADD <span class="material-symbols-outlined text-[14px]" data-icon="add">add</span>
+</button>
+</div>
+</div>
+<!-- Dish Card 2 -->
+<div class="bg-white rounded-xl border border-outline-variant/50 p-sm flex gap-sm overflow-hidden hover:shadow-md transition-shadow">
+<div class="flex-1 flex flex-col justify-between">
+<div>
+<div class="flex items-center gap-1 mb-1">
+<!-- Non-Veg Icon -->
+<div class="w-4 h-4 border border-red-600 flex items-center justify-center p-[2px] rounded-sm">
+<div class="w-2 h-2 bg-red-600 rounded-full"></div>
+</div>
+<span class="font-label-bold text-label-bold text-secondary">Must Try</span>
+</div>
+<h3 class="font-title-md text-title-md text-on-surface mb-1">Chicken Tikka Masala</h3>
+<p class="font-body-sm text-on-surface-variant mb-2 font-semibold">₹180</p>
+<p class="font-body-sm text-outline line-clamp-2 text-[12px]">Roasted marinated chicken chunks (tikka) in a spiced curry sauce.</p>
+</div>
+</div>
+<div class="w-[110px] h-[110px] relative shrink-0 rounded-lg overflow-hidden">
+<img class="w-full h-full object-cover rounded-lg" data-alt="A delicious overhead food photography shot of a serving of deep red Chicken Tikka Masala in a traditional copper bowl. Steam is rising slightly, and the lighting highlights the tender chunks of chicken and rich sauce. The composition is clean, bright, and styled for a premium food ordering application." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBBaDQNouC50-XAYWdLRDy8GotvTsSxCy_JVpEsZQgXATifQQ1uuO2ESJJ8laPi-9pyq5Yq74j52eGKk6d1StlxpZTHSRkjLx5tMSJfEfCMaxz5vhiXUipjjCsDKGa_mt-8INpuJjU9VueEJJXASTNURn25HXLnI8dh8hJgmN3ofh8KTfmDS6gXOJr-IBpy6k-G4GHNsDWHAQ9RiuSCCmrZHgfRyVVIfUkQ8IBuXuqpoN5Ry4KFH5RA"/>
+<button class="absolute -bottom-3 left-1/2 -translate-x-1/2 bg-primary text-on-primary font-label-bold text-label-bold px-4 py-1.5 rounded-md shadow-md border border-primary/20 hover:bg-primary-container transition-colors whitespace-nowrap z-10 flex items-center gap-1">
+                            ADD <span class="material-symbols-outlined text-[14px]" data-icon="add">add</span>
+</button>
+</div>
+</div>
+<!-- Dish Card 3 -->
+<div class="bg-white rounded-xl border border-outline-variant/50 p-sm flex gap-sm overflow-hidden hover:shadow-md transition-shadow">
+<div class="flex-1 flex flex-col justify-between">
+<div>
+<div class="flex items-center gap-1 mb-1">
+<!-- Veg Icon -->
+<div class="w-4 h-4 border border-green-600 flex items-center justify-center p-[2px] rounded-sm">
+<div class="w-2 h-2 bg-green-600 rounded-full"></div>
+</div>
+</div>
+<h3 class="font-title-md text-title-md text-on-surface mb-1">Dal Makhani</h3>
+<p class="font-body-sm text-on-surface-variant mb-2 font-semibold">₹120</p>
+<p class="font-body-sm text-outline line-clamp-2 text-[12px]">Whole black lentils &amp; red kidney beans slow cooked with spices, butter &amp; cream.</p>
+</div>
+</div>
+<div class="w-[110px] h-[110px] relative shrink-0 rounded-lg overflow-hidden bg-surface-container-low flex items-center justify-center">
+<!-- No Image provided, just Add button -->
+<button class="absolute bottom-2 left-1/2 -translate-x-1/2 bg-primary text-on-primary font-label-bold text-label-bold px-4 py-1.5 rounded-md shadow-md border border-primary/20 hover:bg-primary-container transition-colors whitespace-nowrap z-10 flex items-center gap-1">
+                            ADD <span class="material-symbols-outlined text-[14px]" data-icon="add">add</span>
+</button>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- Floating Cart Bottom Bar (Contextual FAB Replacement) -->
+<div class="fixed bottom-0 left-0 w-full z-[60] bg-surface-container-lowest p-margin-mobile md:px-lg md:py-md shadow-[0px_-8px_16px_rgba(0,0,0,0.08)]">
+<div class="max-w-[1200px] mx-auto flex items-center justify-between bg-primary-container rounded-xl p-3 px-4 shadow-lg text-on-primary-container">
+<div class="flex flex-col">
+<span class="font-label-bold text-label-bold uppercase opacity-90 tracking-wider">2 Items | ₹280</span>
+<span class="font-body-sm text-[12px] opacity-80">Extra charges may apply</span>
+</div>
+<button class="flex items-center gap-2 bg-secondary text-on-secondary font-label-bold text-label-bold px-4 py-2 rounded-lg hover:bg-secondary-container hover:text-on-secondary-container transition-colors active:scale-95 shadow-sm">
+                View Cart
+                <span class="material-symbols-outlined" data-icon="shopping_cart">shopping_cart</span>
+</button>
+</div>
+</div>
+</body></html>

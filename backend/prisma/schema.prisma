@@ -1,0 +1,133 @@
+// Prisma Schema for Kraveo Campus Food Delivery Platform
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  STUDENT
+  VENDOR
+  DRIVER
+  ADMIN
+}
+
+enum OrderStatus {
+  PLACED
+  ACCEPTED
+  PREPARING
+  READY_FOR_PICKUP
+  PICKED_UP
+  ARRIVED_AT_GATE
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+model User {
+  id          String   @id @default(uuid())
+  phone       String   @unique
+  name        String
+  role        Role     @default(STUDENT)
+  hostelBlock String?  @default("Boys Hostel Block 1")
+  fcmToken    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  ordersPlaced  Order[] @relation("CustomerOrders")
+  ordersDriven  Order[] @relation("DriverOrders")
+}
+
+model Vendor {
+  id                 String     @id @default(uuid())
+  name               String
+  category           String
+  rating             Float      @default(4.5)
+  eta                String     @default("20-25 min")
+  bannerUrl          String
+  address            String
+  isAcceptingOrders  Boolean    @default(true)
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  menuItems MenuItem[]
+  orders    Order[]
+}
+
+model MenuItem {
+  id           String   @id @default(uuid())
+  vendorId     String
+  name         String
+  price        Float
+  category     String
+  description  String
+  imageUrl     String
+  isAvailable  Boolean  @default(true)
+  isVeg        Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+}
+
+model Order {
+  id            String        @id @default(uuid())
+  customerId    String
+  vendorId      String
+  driverId      String?
+  totalAmount   Float
+  deliveryFee   Float         @default(30.0)
+  dropoffHostel String
+  dropoffNotes  String?
+  status        OrderStatus   @default(PLACED)
+  paymentStatus PaymentStatus @default(PENDING)
+  otpCode       String        @default("1234")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  customer User      @relation("CustomerOrders", fields: [customerId], references: [id])
+  vendor   Vendor    @relation(fields: [vendorId], references: [id])
+  driver   User?     @relation("DriverOrders", fields: [driverId], references: [id])
+  items    OrderItem[]
+  payments Payment[]
+}
+
+model OrderItem {
+  id       String @id @default(uuid())
+  orderId  String
+  name     String
+  quantity Int
+  price    Float
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model Payment {
+  id               String        @id @default(uuid())
+  orderId          String
+  razorpayOrderId  String        @unique
+  razorpayPaymentId String?
+  amount           Float
+  status           PaymentStatus @default(PENDING)
+  createdAt        DateTime      @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model DriverLocation {
+  driverId    String   @id
+  driverName  String
+  lat         Float
+  lng         Float
+  heading     Float    @default(0)
+  lastUpdated DateTime @default(now())
+}

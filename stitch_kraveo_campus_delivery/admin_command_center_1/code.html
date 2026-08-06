@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>KRAVEO - Super Admin Command Center</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-secondary": "#ffffff",
+                        "surface-bright": "#fcf9f8",
+                        "on-secondary-fixed": "#221b00",
+                        "tertiary-fixed-dim": "#c6c6c7",
+                        "on-tertiary": "#ffffff",
+                        "on-secondary-container": "#6f5c00",
+                        "on-secondary-fixed-variant": "#544600",
+                        "primary-container": "#1b5e20",
+                        "inverse-on-surface": "#f3f0ef",
+                        "primary": "#00450d",
+                        "on-background": "#1b1c1c",
+                        "surface-dim": "#dcd9d9",
+                        "surface": "#fcf9f8",
+                        "on-tertiary-container": "#c4c5c5",
+                        "secondary-fixed": "#ffe170",
+                        "outline-variant": "#c0c9bb",
+                        "surface-container-low": "#f6f3f2",
+                        "error": "#ba1a1a",
+                        "surface-container-high": "#eae7e7",
+                        "on-primary": "#ffffff",
+                        "secondary-fixed-dim": "#e9c400",
+                        "on-tertiary-fixed": "#1a1c1c",
+                        "surface-tint": "#2a6b2c",
+                        "secondary": "#705d00",
+                        "primary-fixed-dim": "#91d78a",
+                        "background": "#fcf9f8",
+                        "surface-variant": "#e5e2e1",
+                        "inverse-primary": "#91d78a",
+                        "on-primary-fixed": "#002203",
+                        "on-error-container": "#93000a",
+                        "primary-fixed": "#acf4a4",
+                        "on-surface-variant": "#41493e",
+                        "tertiary-fixed": "#e2e2e2",
+                        "inverse-surface": "#303030",
+                        "on-error": "#ffffff",
+                        "secondary-container": "#fdd400",
+                        "surface-container-lowest": "#ffffff",
+                        "error-container": "#ffdad6",
+                        "on-surface": "#1b1c1c",
+                        "surface-container-highest": "#e5e2e1",
+                        "surface-container": "#f0eded",
+                        "on-primary-container": "#90d689",
+                        "on-tertiary-fixed-variant": "#454747",
+                        "outline": "#717a6d",
+                        "tertiary": "#393b3b",
+                        "on-primary-fixed-variant": "#0c5216",
+                        "tertiary-container": "#505252"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "md": "24px",
+                        "sm": "16px",
+                        "base": "4px",
+                        "gutter-mobile": "12px",
+                        "xl": "48px",
+                        "xs": "8px",
+                        "margin-mobile": "16px",
+                        "lg": "32px"
+                    },
+                    "fontFamily": {
+                        "body-lg": ["Plus Jakarta Sans"],
+                        "headline-lg": ["Plus Jakarta Sans"],
+                        "headline-lg-mobile": ["Plus Jakarta Sans"],
+                        "body-sm": ["Plus Jakarta Sans"],
+                        "display-lg": ["Plus Jakarta Sans"],
+                        "label-bold": ["Plus Jakarta Sans"],
+                        "title-md": ["Plus Jakarta Sans"]
+                    },
+                    "fontSize": {
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "700" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "700" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "display-lg": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.02em", "fontWeight": "800" }],
+                        "label-bold": ["12px", { "lineHeight": "16px", "fontWeight": "700" }],
+                        "title-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        .material-symbols-outlined {
+          font-variation-settings:
+          'FILL' 0,
+          'wght' 400,
+          'GRAD' 0,
+          'opsz' 24
+        }
+        .material-symbols-outlined.filled {
+          font-variation-settings: 'FILL' 1;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background min-h-screen flex flex-col md:flex-row overflow-hidden">
+<!-- Desktop Side Nav (Generated based on NavigationDrawer config but adapted for Super Admin desktop view) -->
+<aside class="hidden md:flex flex-col w-64 bg-surface dark:bg-surface-dim shadow-xl h-screen flex-shrink-0 z-30">
+<div class="p-lg border-b border-outline-variant/30 flex items-center justify-center">
+<span class="font-headline-lg text-headline-lg text-primary tracking-tighter">KRAVEO</span>
+<span class="ml-2 font-label-bold text-label-bold text-secondary uppercase bg-secondary-container px-2 py-1 rounded-full">ADMIN</span>
+</div>
+<div class="p-sm flex items-center space-x-sm border-b border-outline-variant/30">
+<div class="w-10 h-10 rounded-full bg-primary-container flex items-center justify-center text-on-primary-container font-bold">
+                SA
+            </div>
+<div>
+<div class="font-title-md text-body-sm font-bold text-on-surface">Super Admin</div>
+<div class="font-body-sm text-body-sm text-on-surface-variant">Command Center</div>
+</div>
+</div>
+<nav class="flex-1 overflow-y-auto py-lg space-y-base px-2">
+<!-- Dashboard / Live Map (Active) -->
+<a class="flex items-center space-x-md px-md py-sm bg-primary-container text-on-primary-container font-bold rounded-full mx-2 transition-colors duration-150" href="#">
+<span class="material-symbols-outlined filled">monitoring</span>
+<span class="font-body-lg text-body-lg">Live Operations</span>
+</a>
+<a class="flex items-center space-x-md px-md py-sm text-on-surface-variant hover:bg-surface-container-high rounded-full mx-2 transition-colors duration-150" href="#">
+<span class="material-symbols-outlined">receipt_long</span>
+<span class="font-body-lg text-body-lg">All Orders</span>
+</a>
+<a class="flex items-center space-x-md px-md py-sm text-on-surface-variant hover:bg-surface-container-high rounded-full mx-2 transition-colors duration-150" href="#">
+<span class="material-symbols-outlined">delivery_dining</span>
+<span class="font-body-lg text-body-lg">Rider Fleet</span>
+</a>
+<a class="flex items-center space-x-md px-md py-sm text-on-surface-variant hover:bg-surface-container-high rounded-full mx-2 transition-colors duration-150" href="#">
+<span class="material-symbols-outlined">storefront</span>
+<span class="font-body-lg text-body-lg">Vendors</span>
+</a>
+<a class="flex items-center space-x-md px-md py-sm text-on-surface-variant hover:bg-surface-container-high rounded-full mx-2 transition-colors duration-150" href="#">
+<span class="material-symbols-outlined">group</span>
+<span class="font-body-lg text-body-lg">Users</span>
+</a>
+</nav>
+<div class="p-md border-t border-outline-variant/30">
+<a class="flex items-center space-x-md px-md py-sm text-error hover:bg-error-container/20 rounded-full transition-colors duration-150" href="#">
+<span class="material-symbols-outlined">logout</span>
+<span class="font-body-lg text-body-lg">System Logout</span>
+</a>
+</div>
+</aside>
+<!-- Mobile Top App Bar (From JSON) -->
+<header class="md:hidden flex justify-between items-center px-margin-mobile py-base h-16 w-full z-40 bg-surface dark:bg-surface-dim text-primary dark:text-primary-fixed border-b border-outline-variant dark:border-outline flat no shadows full-width top-0 sticky">
+<button class="text-on-surface-variant hover:bg-surface-container-low transition-colors p-2 rounded-full">
+<span class="material-symbols-outlined">menu</span>
+</button>
+<span class="font-display-lg text-display-lg font-extrabold tracking-tighter text-primary dark:text-primary-fixed">KRAVEO</span>
+<div class="w-8 h-8 rounded-full bg-surface-variant overflow-hidden border border-outline-variant flex items-center justify-center">
+<span class="material-symbols-outlined text-on-surface-variant">person</span>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col h-screen overflow-hidden bg-surface-container-low">
+<!-- Top Stats Row -->
+<div class="p-md grid grid-cols-2 md:grid-cols-4 gap-sm border-b border-outline-variant/20 bg-surface z-10 shrink-0 shadow-sm">
+<div class="bg-surface-container p-sm rounded-lg border border-outline-variant/30 flex flex-col">
+<span class="font-label-bold text-label-bold text-on-surface-variant uppercase">Active Orders</span>
+<span class="font-headline-lg text-headline-lg text-primary mt-1">142</span>
+</div>
+<div class="bg-surface-container p-sm rounded-lg border border-outline-variant/30 flex flex-col">
+<span class="font-label-bold text-label-bold text-on-surface-variant uppercase">Riders Online</span>
+<div class="flex items-baseline space-x-2 mt-1">
+<span class="font-headline-lg text-headline-lg text-primary">38</span>
+<span class="font-body-sm text-body-sm text-secondary-container bg-primary-container px-2 rounded-full">Busy: 29</span>
+</div>
+</div>
+<div class="bg-surface-container p-sm rounded-lg border border-outline-variant/30 flex flex-col hidden md:flex">
+<span class="font-label-bold text-label-bold text-on-surface-variant uppercase">Avg Delivery Time</span>
+<span class="font-headline-lg text-headline-lg text-primary mt-1">24m</span>
+</div>
+<div class="bg-error-container p-sm rounded-lg border border-error/30 flex flex-col hidden md:flex">
+<span class="font-label-bold text-label-bold text-on-error-container uppercase">Critical Delays</span>
+<span class="font-headline-lg text-headline-lg text-error mt-1 flex items-center gap-2">
+<span class="material-symbols-outlined filled text-error">warning</span> 3
+                </span>
+</div>
+</div>
+<!-- Content Grid: Map & Tables -->
+<div class="flex-1 flex flex-col lg:flex-row overflow-hidden">
+<!-- Live Map Panel (Left side on desktop, top on mobile) -->
+<div class="flex-1 h-1/2 lg:h-full relative border-r border-outline-variant/20 shadow-[inset_-4px_0_12px_rgba(0,0,0,0.02)]">
+<!-- Map Background (Placeholder) -->
+<div class="absolute inset-0 bg-surface-variant overflow-hidden" data-alt="A highly detailed top-down digital map interface for a modern food delivery app admin dashboard, set in light mode. The map shows a stylized city grid with soft pastel greens for parks, light grey roads, and subtle white building footprints. Small glowing green dots indicate active riders, while pulsing yellow markers show restaurants. The UI aesthetic is clean, corporate modern, and highly functional, using the brand's forest green and sun-yellow colors as accents. The lighting is bright and flat, emphasizing data clarity over realism." data-location="University Campus Area" style="background-image: url('https://www.gstatic.com/labs-code/stitch/stitch-placeholder-300x300.svg')">
+</div>
+<!-- Map Overlay Controls -->
+<div class="absolute top-sm left-sm right-sm flex justify-between items-start pointer-events-none">
+<div class="bg-surface/90 backdrop-blur-sm p-sm rounded-lg shadow-md border border-outline-variant/50 pointer-events-auto flex items-center gap-sm">
+<span class="font-title-md text-title-md text-on-surface">Campus Operations</span>
+<div class="h-4 w-px bg-outline-variant"></div>
+<div class="flex items-center gap-1 text-primary">
+<span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+<span class="font-label-bold text-label-bold">LIVE</span>
+</div>
+</div>
+<div class="flex flex-col gap-2 pointer-events-auto">
+<button class="w-10 h-10 bg-surface rounded-full shadow-md border border-outline-variant/50 flex items-center justify-center text-on-surface hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined">add</span>
+</button>
+<button class="w-10 h-10 bg-surface rounded-full shadow-md border border-outline-variant/50 flex items-center justify-center text-on-surface hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined">remove</span>
+</button>
+<button class="w-10 h-10 bg-surface rounded-full shadow-md border border-outline-variant/50 flex items-center justify-center text-on-surface hover:bg-surface-container transition-colors mt-2">
+<span class="material-symbols-outlined">my_location</span>
+</button>
+</div>
+</div>
+<!-- Simulated Map Markers -->
+<div class="absolute top-1/4 left-1/3 w-6 h-6 bg-secondary rounded-full shadow-lg border-2 border-surface flex items-center justify-center transform -translate-x-1/2 -translate-y-1/2 cursor-pointer z-10 hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-on-secondary text-[14px]">storefront</span>
+</div>
+<div class="absolute top-[40%] left-[60%] w-5 h-5 bg-primary rounded-full shadow-lg border-2 border-surface flex items-center justify-center transform -translate-x-1/2 -translate-y-1/2 cursor-pointer z-20 animate-bounce">
+<span class="material-symbols-outlined text-on-primary text-[12px]">two_wheeler</span>
+</div>
+<div class="absolute top-[60%] left-[45%] w-5 h-5 bg-primary rounded-full shadow-lg border-2 border-surface flex items-center justify-center transform -translate-x-1/2 -translate-y-1/2 cursor-pointer z-20">
+<span class="material-symbols-outlined text-on-primary text-[12px]">two_wheeler</span>
+</div>
+</div>
+<!-- Data Panel (Right side on desktop, bottom on mobile) -->
+<div class="w-full lg:w-[500px] h-1/2 lg:h-full bg-surface flex flex-col z-20 shadow-[-4px_0_24px_rgba(0,0,0,0.05)]">
+<!-- Panel Header & Tabs -->
+<div class="p-md border-b border-outline-variant/30 bg-surface sticky top-0 z-10 shrink-0">
+<h2 class="font-title-md text-title-md text-on-surface mb-md">Dispatch Control</h2>
+<div class="flex space-x-2 bg-surface-container-low p-1 rounded-lg">
+<button class="flex-1 py-2 px-4 rounded-md bg-surface shadow-sm font-label-bold text-label-bold text-primary border border-outline-variant/20 transition-all">
+                            Active (142)
+                        </button>
+<button class="flex-1 py-2 px-4 rounded-md text-on-surface-variant font-label-bold text-label-bold hover:bg-surface-container transition-all">
+                            Unassigned (12)
+                        </button>
+</div>
+</div>
+<!-- Order List -->
+<div class="flex-1 overflow-y-auto p-sm space-y-sm bg-surface-container-lowest">
+<!-- Critical Order Card -->
+<div class="bg-surface p-sm rounded-lg border border-error shadow-sm flex flex-col gap-sm relative overflow-hidden">
+<div class="absolute top-0 left-0 w-1 h-full bg-error"></div>
+<div class="flex justify-between items-start pl-2">
+<div>
+<div class="flex items-center gap-2">
+<span class="font-title-md text-body-lg font-bold">#ORD-8924</span>
+<span class="bg-error-container text-on-error-container font-label-bold text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider">Delayed</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">The Daily Grind Coffee</span>
+</div>
+<div class="text-right">
+<span class="font-body-lg text-body-lg font-bold text-on-surface">$24.50</span>
+<div class="font-body-sm text-[12px] text-error flex items-center gap-1 justify-end">
+<span class="material-symbols-outlined text-[14px]">timer</span> 45m waiting
+                                </div>
+</div>
+</div>
+<div class="bg-surface-container-low p-2 rounded flex justify-between items-center border border-outline-variant/20 ml-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-on-surface-variant">two_wheeler</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant italic">Unassigned</span>
+</div>
+<button class="bg-secondary text-on-secondary font-label-bold text-label-bold px-3 py-1.5 rounded-md hover:bg-secondary/90 transition-colors shadow-sm">
+                                Assign Rider
+                            </button>
+</div>
+</div>
+<!-- Normal Order Card -->
+<div class="bg-surface p-sm rounded-lg border border-outline-variant/40 shadow-sm flex flex-col gap-sm">
+<div class="flex justify-between items-start">
+<div>
+<div class="flex items-center gap-2">
+<span class="font-title-md text-body-lg font-bold">#ORD-8925</span>
+<span class="bg-secondary text-on-secondary font-label-bold text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider">Preparing</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Campus Pizza &amp; Grill</span>
+</div>
+<div class="text-right">
+<span class="font-body-lg text-body-lg font-bold text-on-surface">$42.00</span>
+<div class="font-body-sm text-[12px] text-on-surface-variant">12m elapsed</div>
+</div>
+</div>
+<div class="bg-surface-container-low p-2 rounded flex justify-between items-center border border-outline-variant/20">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded-full bg-primary-container flex items-center justify-center text-[10px] font-bold text-on-primary-container">
+                                    JD
+                                </div>
+<div>
+<span class="font-body-sm text-body-sm text-on-surface block leading-none">John Driver</span>
+<span class="font-body-sm text-[10px] text-primary block mt-0.5">Arriving at vendor</span>
+</div>
+</div>
+<button class="text-primary hover:bg-primary-container/20 p-1 rounded transition-colors">
+<span class="material-symbols-outlined text-[20px]">more_vert</span>
+</button>
+</div>
+</div>
+<!-- Normal Order Card (Ready) -->
+<div class="bg-surface p-sm rounded-lg border border-outline-variant/40 shadow-sm flex flex-col gap-sm">
+<div class="flex justify-between items-start">
+<div>
+<div class="flex items-center gap-2">
+<span class="font-title-md text-body-lg font-bold">#ORD-8926</span>
+<span class="bg-primary text-on-primary font-label-bold text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider">Ready</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Green Bowl Salads</span>
+</div>
+<div class="text-right">
+<span class="font-body-lg text-body-lg font-bold text-on-surface">$18.75</span>
+<div class="font-body-sm text-[12px] text-on-surface-variant">18m elapsed</div>
+</div>
+</div>
+<div class="bg-surface-container-low p-2 rounded flex justify-between items-center border border-outline-variant/20">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded-full bg-primary-container flex items-center justify-center text-[10px] font-bold text-on-primary-container">
+                                    SM
+                                </div>
+<div>
+<span class="font-body-sm text-body-sm text-on-surface block leading-none">Sarah Miles</span>
+<span class="font-body-sm text-[10px] text-on-surface-variant block mt-0.5">En route to customer</span>
+</div>
+</div>
+<button class="text-primary hover:bg-primary-container/20 p-1 rounded transition-colors">
+<span class="material-symbols-outlined text-[20px]">more_vert</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- Mobile Bottom Nav (Generated from JSON, only shown on mobile as per rules) -->
+<nav class="md:hidden flex justify-around items-center h-20 pb-safe px-gutter-mobile bg-surface dark:bg-surface-container-lowest text-primary dark:text-primary-fixed shadow-lg shadow-[0px_-4px_12px_rgba(0,0,0,0.05)] fixed bottom-0 w-full z-50">
+<a class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-xl px-4 py-1" href="#">
+<span class="material-symbols-outlined">explore</span>
+<span class="font-label-bold text-label-bold mt-1">Explore</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-all px-4 py-1 rounded-xl" href="#">
+<span class="material-symbols-outlined">receipt_long</span>
+<span class="font-label-bold text-label-bold mt-1">Orders</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-all px-4 py-1 rounded-xl" href="#">
+<span class="material-symbols-outlined">local_offer</span>
+<span class="font-label-bold text-label-bold mt-1">Offers</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-all px-4 py-1 rounded-xl" href="#">
+<span class="material-symbols-outlined">person</span>
+<span class="font-label-bold text-label-bold mt-1">Profile</span>
+</a>
+</nav>
+</body></html>

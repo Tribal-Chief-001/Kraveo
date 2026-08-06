@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Admin Dashboard - Vendor &amp; Menu Management</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary-fixed": "#002203",
+                        "surface-container": "#f0eded",
+                        "on-secondary-fixed-variant": "#544600",
+                        "outline": "#717a6d",
+                        "error-container": "#ffdad6",
+                        "on-error-container": "#93000a",
+                        "on-primary": "#ffffff",
+                        "primary-fixed": "#acf4a4",
+                        "on-surface": "#1b1c1c",
+                        "primary-fixed-dim": "#91d78a",
+                        "on-primary-fixed-variant": "#0c5216",
+                        "surface-container-lowest": "#ffffff",
+                        "secondary-fixed": "#ffe170",
+                        "primary-container": "#1b5e20",
+                        "secondary-fixed-dim": "#e9c400",
+                        "on-tertiary": "#ffffff",
+                        "surface-dim": "#dcd9d9",
+                        "surface-bright": "#fcf9f8",
+                        "inverse-primary": "#91d78a",
+                        "secondary": "#705d00",
+                        "tertiary-fixed": "#e2e2e2",
+                        "inverse-surface": "#303030",
+                        "secondary-container": "#fdd400",
+                        "surface-container-highest": "#e5e2e1",
+                        "on-tertiary-fixed-variant": "#454747",
+                        "primary": "#00450d",
+                        "on-secondary-container": "#6f5c00",
+                        "on-secondary-fixed": "#221b00",
+                        "on-background": "#1b1c1c",
+                        "inverse-on-surface": "#f3f0ef",
+                        "on-secondary": "#ffffff",
+                        "on-error": "#ffffff",
+                        "surface-container-low": "#f6f3f2",
+                        "on-surface-variant": "#41493e",
+                        "surface-tint": "#2a6b2c",
+                        "on-tertiary-fixed": "#1a1c1c",
+                        "surface-variant": "#e5e2e1",
+                        "on-tertiary-container": "#c4c5c5",
+                        "on-primary-container": "#90d689",
+                        "error": "#ba1a1a",
+                        "background": "#fcf9f8",
+                        "tertiary": "#393b3b",
+                        "tertiary-container": "#505252",
+                        "surface-container-high": "#eae7e7",
+                        "outline-variant": "#c0c9bb",
+                        "surface": "#fcf9f8",
+                        "tertiary-fixed-dim": "#c6c6c7"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "gutter-mobile": "12px",
+                        "md": "24px",
+                        "xl": "48px",
+                        "lg": "32px",
+                        "margin-mobile": "16px",
+                        "sm": "16px",
+                        "xs": "8px",
+                        "base": "4px"
+                    },
+                    "fontFamily": {
+                        "body-sm": ["Plus Jakarta Sans"],
+                        "headline-lg": ["Plus Jakarta Sans"],
+                        "headline-lg-mobile": ["Plus Jakarta Sans"],
+                        "label-bold": ["Plus Jakarta Sans"],
+                        "body-lg": ["Plus Jakarta Sans"],
+                        "display-lg": ["Plus Jakarta Sans"],
+                        "title-md": ["Plus Jakarta Sans"]
+                    },
+                    "fontSize": {
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "700" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "700" }],
+                        "label-bold": ["12px", { "lineHeight": "16px", "fontWeight": "700" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "display-lg": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.02em", "fontWeight": "800" }],
+                        "title-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined[style*="FILL' 1"] {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body-lg min-h-screen flex flex-col md:flex-row antialiased">
+<!-- Navigation Drawer (Desktop) -->
+<nav class="hidden md:flex flex-col py-lg space-y-2 h-screen w-64 fixed left-0 top-0 bg-surface-container-low border-r border-outline-variant z-40">
+<div class="font-display-lg text-display-lg text-primary p-md mb-8">
+            ADMIN CORE
+        </div>
+<a class="flex items-center px-6 py-4 text-on-surface-variant hover:bg-surface-variant rounded-r-full mr-4 hover:bg-surface-container-high transition-colors duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined mr-4" data-icon="dashboard">dashboard</span>
+<span class="font-title-md text-title-md">Dashboard</span>
+</a>
+<a class="flex items-center px-6 py-4 text-on-surface-variant hover:bg-surface-variant rounded-r-full mr-4 hover:bg-surface-container-high transition-colors duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined mr-4" data-icon="map">map</span>
+<span class="font-title-md text-title-md">Live Map</span>
+</a>
+<a class="flex items-center px-6 py-4 bg-primary text-on-primary rounded-r-full mr-4 font-bold hover:bg-surface-container-high transition-colors duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined mr-4" data-icon="storefront" style="font-variation-settings: 'FILL' 1;">storefront</span>
+<span class="font-title-md text-title-md">Vendors</span>
+</a>
+<a class="flex items-center px-6 py-4 text-on-surface-variant hover:bg-surface-variant rounded-r-full mr-4 hover:bg-surface-container-high transition-colors duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined mr-4" data-icon="group">group</span>
+<span class="font-title-md text-title-md">Students</span>
+</a>
+<a class="flex items-center px-6 py-4 text-on-surface-variant hover:bg-surface-variant rounded-r-full mr-4 hover:bg-surface-container-high transition-colors duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined mr-4" data-icon="analytics">analytics</span>
+<span class="font-title-md text-title-md">Analytics</span>
+</a>
+</nav>
+<!-- Top App Bar (Mobile) -->
+<header class="md:hidden fixed top-0 w-full z-50 bg-primary border-b-2 border-secondary flex flex-col justify-end px-md py-md w-full min-h-[120px]">
+<div class="flex justify-between items-center w-full">
+<button class="text-on-primary p-2 -ml-2 rounded-full tap-highlight-transparent hover:bg-primary-fixed hover:text-on-primary-fixed">
+<span class="material-symbols-outlined text-[28px]" data-icon="menu">menu</span>
+</button>
+<h1 class="text-on-primary font-black uppercase tracking-wider font-headline-lg-mobile text-headline-lg-mobile">Orders Management</h1>
+<button class="text-on-primary p-2 -mr-2 rounded-full tap-highlight-transparent hover:bg-primary-fixed hover:text-on-primary-fixed">
+<span class="material-symbols-outlined text-[28px]" data-icon="notifications_active">notifications_active</span>
+</button>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="flex-1 md:ml-64 mt-[120px] md:mt-0 p-margin-mobile md:p-lg lg:p-xl max-w-[1200px] w-full mx-auto">
+<!-- Header Section -->
+<div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-lg gap-4">
+<div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface hidden md:block">Vendor Management</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant mt-2 hidden md:block">Manage registered dhabas, menus, and monitor sales performance.</p>
+</div>
+<button class="flex items-center gap-2 bg-primary text-on-primary px-6 py-3 rounded-full font-label-bold text-label-bold hover:bg-primary-container transition-colors shadow-md w-full md:w-auto justify-center">
+<span class="material-symbols-outlined text-lg" data-icon="add">add</span>
+                Add New Vendor
+            </button>
+</div>
+<!-- Vendor Table Card -->
+<div class="bg-surface-container-lowest rounded-xl border border-outline-variant overflow-hidden">
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container-low border-b border-outline-variant">
+<th class="py-4 px-6 font-label-bold text-label-bold text-on-surface-variant uppercase tracking-wider">Vendor Info</th>
+<th class="py-4 px-6 font-label-bold text-label-bold text-on-surface-variant uppercase tracking-wider hidden sm:table-cell">Contact</th>
+<th class="py-4 px-6 font-label-bold text-label-bold text-on-surface-variant uppercase tracking-wider hidden md:table-cell">Total Sales</th>
+<th class="py-4 px-6 font-label-bold text-label-bold text-on-surface-variant uppercase tracking-wider hidden lg:table-cell">Status</th>
+<th class="py-4 px-6 font-label-bold text-label-bold text-on-surface-variant uppercase tracking-wider text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant">
+<!-- Row 1 -->
+<tr class="hover:bg-surface-container-lowest transition-colors">
+<td class="py-4 px-6">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-lg overflow-hidden shrink-0 border border-outline-variant hidden sm:block">
+<img alt="Sharma's Dhaba" class="w-full h-full object-cover" data-alt="A brightly lit, high-contrast photograph of a modern campus food stall, clean stainless steel counters, fresh vibrant ingredients visible. The lighting is crisp and optimistic, conveying a dependable and energetic food service environment. Colors feature deep forest greens and bright sun-yellow accents against clean white backgrounds." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCF0Ow6GWWv1I0L0_-VzRyq1r8QtAUbbw9rcitShbkBBifXaDXfgzzLtxKNiajTAMUSC23hwLUKv5-zMiOo40Xb6ZYxygmCmx3jiXKcKGMKRdyrwfcsSx8cISAI8sW6armwIw-zXC2u00-Gg2R1aY19XcsiBBuGA7uEdp5p2MzGT8Lvm7zYoiS1g8EqSoR2RCvUdEsDv-K_jlI-wvpSw3y3q6qV7HZ91gNtyTdlY_NxTWVOe6tfYdBP"/>
+</div>
+<div>
+<div class="font-title-md text-title-md text-on-surface">Sharma's Dhaba</div>
+<div class="font-body-sm text-body-sm text-on-surface-variant mt-1">North Indian, Thalis</div>
+</div>
+</div>
+</td>
+<td class="py-4 px-6 hidden sm:table-cell">
+<div class="font-body-lg text-body-lg text-on-surface">Rakesh Sharma</div>
+<div class="font-body-sm text-body-sm text-on-surface-variant">+91 98765 43210</div>
+</td>
+<td class="py-4 px-6 hidden md:table-cell">
+<div class="font-title-md text-title-md text-on-surface">₹ 1,45,200</div>
+<div class="font-body-sm text-body-sm text-primary flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]" data-icon="trending_up">trending_up</span> 12% this week
+                                </div>
+</td>
+<td class="py-4 px-6 hidden lg:table-cell">
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-container text-on-primary-container">
+                                    Active
+                                </span>
+</td>
+<td class="py-4 px-6 text-right">
+<button class="inline-flex items-center gap-1 bg-secondary text-on-secondary px-4 py-2 rounded-lg font-label-bold text-label-bold hover:bg-secondary-container hover:text-on-secondary-container transition-colors" onclick="openMenuModal()">
+<span class="material-symbols-outlined text-[18px]" data-icon="edit_document">edit_document</span>
+                                    Edit Menu
+                                </button>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="hover:bg-surface-container-lowest transition-colors">
+<td class="py-4 px-6">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-lg overflow-hidden shrink-0 border border-outline-variant hidden sm:block">
+<img alt="Rolls King" class="w-full h-full object-cover" data-alt="A brightly lit, high-contrast photograph of a modern campus fast food stall focusing on wraps and rolls. Clean stainless steel counters. The lighting is crisp and optimistic, conveying a dependable and energetic food service environment. Colors feature deep forest greens and bright sun-yellow accents against clean white backgrounds." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCA_w9dsr73oWJnl6pHwz04iMyJ_xv9QRQmU9nNWgicb5dJ5XfFaq6v8njD3JpmKDus7_Mtvc9_b960gLc1ADmKkROBpIG-psWbbYP3eMvzDMfZDMetSg67s9a0xuGHm3xsgpVM62R6UvGEAVJZLei15UPIMgAXEf1c3KC7t1FjpygIsUwUOrX13xorqZatP3JqQLY7kkGZT8mxVREFqd2tmq4Un3NRjKWJ3wHaWHDB5DA9j23TT83B"/>
+</div>
+<div>
+<div class="font-title-md text-title-md text-on-surface">Campus Bites</div>
+<div class="font-body-sm text-body-sm text-on-surface-variant">Fast Food, Snacks</div>
+</div>
+</div>
+</td>
+<td class="py-4 px-6 hidden sm:table-cell">
+<div class="font-body-lg text-body-lg text-on-surface">Amit Singh</div>
+<div class="font-body-sm text-body-sm text-on-surface-variant">+91 91234 56789</div>
+</td>
+<td class="py-4 px-6 hidden md:table-cell">
+<div class="font-title-md text-title-md text-on-surface">₹ 89,500</div>
+<div class="font-body-sm text-body-sm text-error flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]" data-icon="trending_down">trending_down</span> 3% this week
+                                </div>
+</td>
+<td class="py-4 px-6 hidden lg:table-cell">
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-surface-variant text-on-surface-variant">
+                                    Closed
+                                </span>
+</td>
+<td class="py-4 px-6 text-right">
+<button class="inline-flex items-center gap-1 bg-secondary text-on-secondary px-4 py-2 rounded-lg font-label-bold text-label-bold hover:bg-secondary-container hover:text-on-secondary-container transition-colors" onclick="openMenuModal()">
+<span class="material-symbols-outlined text-[18px]" data-icon="edit_document">edit_document</span>
+                                    Edit Menu
+                                </button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Pagination (Simple) -->
+<div class="bg-surface-container-low border-t border-outline-variant px-6 py-3 flex items-center justify-between">
+<div class="font-body-sm text-body-sm text-on-surface-variant">
+                    Showing 1 to 2 of 15 entries
+                </div>
+<div class="flex gap-2">
+<button class="p-2 rounded-lg text-on-surface-variant hover:bg-surface-variant disabled:opacity-50" disabled="">
+<span class="material-symbols-outlined" data-icon="chevron_left">chevron_left</span>
+</button>
+<button class="p-2 rounded-lg text-on-surface-variant hover:bg-surface-variant">
+<span class="material-symbols-outlined" data-icon="chevron_right">chevron_right</span>
+</button>
+</div>
+</div>
+</div>
+</main>
+<!-- Bottom Nav Bar (Mobile) -->
+<nav class="md:hidden fixed bottom-0 w-full z-50 bg-surface-container-highest border-t border-outline-variant flex justify-evenly items-center h-20 w-full">
+<a class="flex flex-col items-center justify-center text-outline p-3 hover:bg-surface-variant vibrate-on-tap" href="#">
+<span class="material-symbols-outlined text-2xl mb-1" data-icon="task">task</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-primary-container text-on-primary-container rounded-xl p-3 hover:bg-surface-variant vibrate-on-tap" href="#">
+<span class="material-symbols-outlined text-2xl mb-1" data-icon="storefront" style="font-variation-settings: 'FILL' 1;">storefront</span>
+</a>
+<a class="flex flex-col items-center justify-center text-outline p-3 hover:bg-surface-variant vibrate-on-tap" href="#">
+<span class="material-symbols-outlined text-2xl mb-1" data-icon="history">history</span>
+</a>
+</nav>
+<!-- Modal Overlay & Container (Hidden by default) -->
+<div class="fixed inset-0 z-[100] hidden items-center justify-center p-4 sm:p-6" id="menuModal">
+<!-- Backdrop -->
+<div class="absolute inset-0 bg-on-surface/40 backdrop-blur-sm" onclick="closeMenuModal()"></div>
+<!-- Modal Content -->
+<div class="relative bg-surface-container-lowest w-full max-w-4xl rounded-2xl shadow-xl flex flex-col max-h-[90vh] overflow-hidden">
+<!-- Modal Header -->
+<div class="px-6 py-4 border-b border-outline-variant flex justify-between items-center bg-surface-container-low">
+<div>
+<h3 class="font-title-md text-title-md text-on-surface">Edit Menu: Sharma's Dhaba</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-1">Manage categories and items.</p>
+</div>
+<button class="p-2 text-on-surface-variant hover:bg-surface-variant rounded-full transition-colors" onclick="closeMenuModal()">
+<span class="material-symbols-outlined" data-icon="close">close</span>
+</button>
+</div>
+<!-- Modal Body (Scrollable) -->
+<div class="p-6 overflow-y-auto flex-1 bg-surface flex flex-col lg:flex-row gap-6">
+<!-- Left Column: Categories -->
+<div class="w-full lg:w-1/3 flex flex-col gap-4">
+<div class="flex justify-between items-center mb-2">
+<h4 class="font-title-md text-title-md text-on-surface">Categories</h4>
+<button class="text-primary hover:text-primary-container p-1 rounded-full hover:bg-surface-variant">
+<span class="material-symbols-outlined text-xl" data-icon="add_circle">add_circle</span>
+</button>
+</div>
+<ul class="flex flex-col gap-2">
+<li class="bg-primary-container text-on-primary-container px-4 py-3 rounded-lg flex justify-between items-center cursor-pointer font-label-bold text-label-bold">
+<span>Main Course</span>
+<span class="material-symbols-outlined text-[18px]" data-icon="drag_indicator">drag_indicator</span>
+</li>
+<li class="bg-surface-container text-on-surface px-4 py-3 rounded-lg flex justify-between items-center cursor-pointer hover:bg-surface-variant border border-outline-variant transition-colors font-label-bold text-label-bold">
+<span>Starters</span>
+<span class="material-symbols-outlined text-[18px]" data-icon="drag_indicator">drag_indicator</span>
+</li>
+<li class="bg-surface-container text-on-surface px-4 py-3 rounded-lg flex justify-between items-center cursor-pointer hover:bg-surface-variant border border-outline-variant transition-colors font-label-bold text-label-bold">
+<span>Beverages</span>
+<span class="material-symbols-outlined text-[18px]" data-icon="drag_indicator">drag_indicator</span>
+</li>
+</ul>
+</div>
+<!-- Right Column: Items in Category -->
+<div class="w-full lg:w-2/3 flex flex-col">
+<div class="flex justify-between items-center mb-6">
+<h4 class="font-title-md text-title-md text-on-surface">Main Course Items</h4>
+<button class="flex items-center gap-2 bg-secondary text-on-secondary px-4 py-2 rounded-full font-label-bold text-label-bold hover:bg-secondary-container hover:text-on-secondary-container transition-colors">
+<span class="material-symbols-outlined text-sm" data-icon="add">add</span>
+                            Add Item
+                        </button>
+</div>
+<!-- Item Form (Bento Style Card) -->
+<div class="bg-surface-container-lowest p-5 rounded-xl border border-outline-variant shadow-sm mb-6 flex flex-col md:flex-row gap-6 relative">
+<!-- Image Upload Area -->
+<div class="w-full md:w-32 h-32 bg-surface-container rounded-lg border-2 border-dashed border-outline-variant flex flex-col items-center justify-center text-on-surface-variant cursor-pointer hover:bg-surface-variant transition-colors shrink-0">
+<span class="material-symbols-outlined mb-2" data-icon="add_photo_alternate">add_photo_alternate</span>
+<span class="font-label-bold text-label-bold text-xs text-center">Upload<br/>Image</span>
+</div>
+<!-- Form Fields -->
+<div class="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+<div class="md:col-span-2">
+<label class="block font-label-bold text-label-bold text-on-surface-variant mb-1">Item Name</label>
+<input class="w-full h-12 px-4 rounded-lg border border-outline bg-surface-container-lowest text-on-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-colors" placeholder="e.g., Paneer Butter Masala" type="text"/>
+</div>
+<div>
+<label class="block font-label-bold text-label-bold text-on-surface-variant mb-1">Price (₹)</label>
+<input class="w-full h-12 px-4 rounded-lg border border-outline bg-surface-container-lowest text-on-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-colors" placeholder="0.00" type="number"/>
+</div>
+<div class="flex flex-col justify-end pb-2">
+<label class="flex items-center gap-3 cursor-pointer">
+<div class="relative">
+<input checked="" class="sr-only peer" type="checkbox"/>
+<div class="w-11 h-6 bg-outline-variant rounded-full peer peer-checked:bg-primary transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-on-primary after:border-outline after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-primary"></div>
+</div>
+<span class="font-label-bold text-label-bold text-on-surface">Available in Stock</span>
+</label>
+</div>
+<div class="md:col-span-2 flex gap-4 mt-2">
+<label class="flex items-center gap-2 cursor-pointer p-2 rounded-lg border border-outline-variant hover:bg-surface-container transition-colors flex-1 justify-center bg-surface-container-low">
+<input checked="" class="text-primary focus:ring-primary" name="diet" type="radio" value="veg"/>
+<span class="font-label-bold text-label-bold text-on-surface flex items-center gap-1">
+<span class="material-symbols-outlined text-green-600 text-sm" data-icon="lens" style="font-variation-settings: 'FILL' 1;">lens</span> Veg
+                                    </span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer p-2 rounded-lg border border-outline-variant hover:bg-surface-container transition-colors flex-1 justify-center">
+<input class="text-error focus:ring-error" name="diet" type="radio" value="nonveg"/>
+<span class="font-label-bold text-label-bold text-on-surface flex items-center gap-1">
+<span class="material-symbols-outlined text-red-600 text-sm" data-icon="change_history" style="font-variation-settings: 'FILL' 1;">change_history</span> Non-Veg
+                                    </span>
+</label>
+</div>
+</div>
+<div class="absolute top-4 right-4 flex gap-2">
+<button class="text-primary hover:text-primary-container p-1 rounded-full hover:bg-surface-variant transition-colors">
+<span class="material-symbols-outlined text-xl" data-icon="save">save</span>
+</button>
+<button class="text-error hover:text-on-error-container p-1 rounded-full hover:bg-error-container transition-colors">
+<span class="material-symbols-outlined text-xl" data-icon="delete">delete</span>
+</button>
+</div>
+</div>
+<!-- Existing Items List (Condensed) -->
+<div class="flex flex-col gap-3">
+<div class="bg-surface-container-lowest p-3 rounded-lg border border-outline-variant flex items-center gap-4 hover:bg-surface-container-low transition-colors cursor-pointer opacity-80">
+<div class="w-12 h-12 rounded bg-surface-container shrink-0 border border-outline-variant overflow-hidden">
+<img alt="Item Image" class="w-full h-full object-cover" data-alt="A brightly lit close up photograph of a delicious serving of Dal Makhani in a black bowl. The lighting is crisp and optimistic, conveying high-quality food. Colors feature deep forest greens in garnish and bright earthy tones against clean white backgrounds." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCFLqOyBUunqf4Xw_O5OGnTDjRPg1TAEhGc1lUuFFJG6BCh70pcGjtJnQ1W0SyjaiYxITF4unWoGz5SxHQMuEONCJcbYEejC1LN0RPe4UbemKmoTCgbtUppWFCvoLkDEWxWvM73VNwFDQs8go4NMy9WXfa_NVBpoJND4f2S_F5ptZHorXiKvKTlPb76Euz6o3ImyFiVqax1to8KeEAbhePPZQ5i7QAn9h1WzMJhzrz19zYq84M7nd9a"/>
+</div>
+<div class="flex-1">
+<div class="font-title-md text-title-md text-on-surface flex items-center gap-2">
+                                    Dal Makhani
+                                     <span class="material-symbols-outlined text-green-600 text-[12px]" data-icon="lens" style="font-variation-settings: 'FILL' 1;">lens</span>
+</div>
+<div class="font-body-sm text-body-sm text-on-surface-variant">₹ 120.00</div>
+</div>
+<div class="text-primary-container font-label-bold text-label-bold px-3 py-1 bg-primary-fixed rounded-full text-xs">
+                                In Stock
+                            </div>
+<button class="text-on-surface-variant hover:text-on-surface p-2 rounded-full hover:bg-surface-variant">
+<span class="material-symbols-outlined" data-icon="edit">edit</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Modal Footer -->
+<div class="px-6 py-4 border-t border-outline-variant bg-surface-container-low flex justify-end gap-4">
+<button class="px-6 py-2 rounded-full font-label-bold text-label-bold text-on-surface border border-outline hover:bg-surface-variant transition-colors" onclick="closeMenuModal()">
+                    Cancel
+                </button>
+<button class="px-6 py-2 rounded-full font-label-bold text-label-bold bg-primary text-on-primary hover:bg-primary-container transition-colors shadow-sm">
+                    Save Changes
+                </button>
+</div>
+</div>
+</div>
+<script>
+        function openMenuModal() {
+            const modal = document.getElementById('menuModal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            document.body.style.overflow = 'hidden'; // Prevent background scrolling
+        }
+
+        function closeMenuModal() {
+            const modal = document.getElementById('menuModal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+            document.body.style.overflow = '';
+        }
+    </script>
+</body></html>

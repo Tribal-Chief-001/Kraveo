@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Customer App - Home Feed</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "on-primary-fixed": "#002203",
+                      "surface-container": "#f0eded",
+                      "on-secondary-fixed-variant": "#544600",
+                      "outline": "#717a6d",
+                      "error-container": "#ffdad6",
+                      "on-error-container": "#93000a",
+                      "on-primary": "#ffffff",
+                      "primary-fixed": "#acf4a4",
+                      "on-surface": "#1b1c1c",
+                      "primary-fixed-dim": "#91d78a",
+                      "on-primary-fixed-variant": "#0c5216",
+                      "surface-container-lowest": "#ffffff",
+                      "secondary-fixed": "#ffe170",
+                      "primary-container": "#1b5e20",
+                      "secondary-fixed-dim": "#e9c400",
+                      "on-tertiary": "#ffffff",
+                      "surface-dim": "#dcd9d9",
+                      "surface-bright": "#fcf9f8",
+                      "inverse-primary": "#91d78a",
+                      "secondary": "#705d00",
+                      "tertiary-fixed": "#e2e2e2",
+                      "inverse-surface": "#303030",
+                      "secondary-container": "#fdd400",
+                      "surface-container-highest": "#e5e2e1",
+                      "on-tertiary-fixed-variant": "#454747",
+                      "primary": "#00450d",
+                      "on-secondary-container": "#6f5c00",
+                      "on-secondary-fixed": "#221b00",
+                      "on-background": "#1b1c1c",
+                      "inverse-on-surface": "#f3f0ef",
+                      "on-secondary": "#ffffff",
+                      "on-error": "#ffffff",
+                      "surface-container-low": "#f6f3f2",
+                      "on-surface-variant": "#41493e",
+                      "surface-tint": "#2a6b2c",
+                      "on-tertiary-fixed": "#1a1c1c",
+                      "surface-variant": "#e5e2e1",
+                      "on-tertiary-container": "#c4c5c5",
+                      "on-primary-container": "#90d689",
+                      "error": "#ba1a1a",
+                      "background": "#fcf9f8",
+                      "tertiary": "#393b3b",
+                      "tertiary-container": "#505252",
+                      "surface-container-high": "#eae7e7",
+                      "outline-variant": "#c0c9bb",
+                      "surface": "#fcf9f8",
+                      "tertiary-fixed-dim": "#c6c6c7"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "gutter-mobile": "12px",
+                      "md": "24px",
+                      "xl": "48px",
+                      "lg": "32px",
+                      "margin-mobile": "16px",
+                      "sm": "16px",
+                      "xs": "8px",
+                      "base": "4px"
+              },
+              "fontFamily": {
+                      "body-sm": [
+                              "Plus Jakarta Sans"
+                      ],
+                      "headline-lg": [
+                              "Plus Jakarta Sans"
+                      ],
+                      "headline-lg-mobile": [
+                              "Plus Jakarta Sans"
+                      ],
+                      "label-bold": [
+                              "Plus Jakarta Sans"
+                      ],
+                      "body-lg": [
+                              "Plus Jakarta Sans"
+                      ],
+                      "display-lg": [
+                              "Plus Jakarta Sans"
+                      ],
+                      "title-md": [
+                              "Plus Jakarta Sans"
+                      ]
+              },
+              "fontSize": {
+                      "body-sm": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-lg": [
+                              "32px",
+                              {
+                                      "lineHeight": "40px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "headline-lg-mobile": [
+                              "24px",
+                              {
+                                      "lineHeight": "32px",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "label-bold": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "body-lg": [
+                              "16px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "display-lg": [
+                              "40px",
+                              {
+                                      "lineHeight": "48px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "800"
+                              }
+                      ],
+                      "title-md": [
+                              "20px",
+                              {
+                                      "lineHeight": "28px",
+                                      "fontWeight": "600"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+    </script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-background text-on-background antialiased pb-24 md:pb-0">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 bg-surface dark:bg-surface-dim flat no shadows flex justify-between items-center px-margin-mobile py-xs transition-colors duration-200 shadow-sm md:hidden">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-2xl" data-icon="location_on">location_on</span>
+<div class="flex flex-col">
+<span class="font-label-bold text-label-bold text-on-surface-variant flex items-center gap-1">
+                    Delivering to <span class="material-symbols-outlined text-[16px]" data-icon="arrow_drop_down">arrow_drop_down</span>
+</span>
+<span class="font-title-md text-title-md text-on-surface truncate max-w-[150px]">Block 1</span>
+</div>
+</div>
+<div class="w-10 h-10 rounded-full bg-surface-variant overflow-hidden flex-shrink-0 border border-outline-variant">
+<img alt="Student Profile" class="w-full h-full object-cover" data-alt="A small circular avatar showing a generic student profile picture with a bright, solid color background and a smiling face, in a clean modern illustration style matching a food delivery app." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAR0g5yWs4voMWJKiFUoPOJ1oCIPCkEsQybI3TZYg2iCuwOJXEZpb5nO2xUH7h2e4TA5bJQlmXm0_-6u8QGHmy297xDPSmHQaJzQgjzAZs8OpBv6AOPQXOTukEedqKoIc2lPFXV-GGgVVlG6SEaqMSjfH0LcNbkKMRwXCg-1Fo9NN7ndc5UMr68ucbwU3uBPyGIulL05xt0ZTIqT6MSLc2mg5XOvJQ_304qDAjRExCyus1zWS35InNg"/>
+</div>
+</header>
+<!-- Desktop TopAppBar (Hidden on Mobile) -->
+<header class="hidden md:flex fixed top-0 w-full z-50 bg-surface dark:bg-surface-dim flat no shadows justify-between items-center px-lg py-sm transition-colors duration-200 border-b border-surface-variant">
+<div class="flex items-center gap-xl w-full max-w-[1200px] mx-auto">
+<div class="font-headline-lg text-headline-lg font-bold text-primary dark:text-primary-fixed-dim whitespace-nowrap">
+                VIT Eats
+            </div>
+<div class="flex-grow max-w-2xl hidden md:block">
+<div class="relative w-full">
+<span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant" data-icon="search">search</span>
+<input class="w-full bg-surface-container-highest rounded-full py-3 pl-12 pr-4 text-body-lg text-on-surface focus:outline-none focus:ring-2 focus:ring-primary border-none" placeholder="Search parathas, thalis..." type="text"/>
+</div>
+</div>
+<nav class="flex items-center gap-md">
+<a class="text-primary font-bold flex items-center gap-1 hover:bg-surface-container-low px-4 py-2 rounded-full transition-colors" href="#"><span class="material-symbols-outlined text-[20px]">explore</span> Explore</a>
+<a class="text-on-surface-variant flex items-center gap-1 hover:bg-surface-container-low px-4 py-2 rounded-full transition-colors" href="#"><span class="material-symbols-outlined text-[20px]">receipt_long</span> Orders</a>
+<a class="text-on-surface-variant flex items-center gap-1 hover:bg-surface-container-low px-4 py-2 rounded-full transition-colors" href="#"><span class="material-symbols-outlined text-[20px]">local_offer</span> Offers</a>
+<div class="flex items-center gap-2 ml-4 pl-4 border-l border-outline-variant cursor-pointer">
+<div class="w-10 h-10 rounded-full bg-surface-variant overflow-hidden border border-outline-variant">
+<img alt="Student Profile" class="w-full h-full object-cover" data-alt="A small circular avatar showing a generic student profile picture with a bright, solid color background and a smiling face, in a clean modern illustration style matching a food delivery app." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCCThggrqoYsIoQ3cSPI1cPgJLJtwj2CD0JwsX7sMtmeUBDhcbcU0aAbEGZfALKoohhEXB1fH_th0qA3kx9Jptp9CMFyl5HihF2-gnZ_xCyd0TVJzWfBXnqUMsGzoh2qQBDEOG9wHQiuSBLtH9xsnsoIeFcssHE0y4ROn3-HFolb0D2HNNVj2GIIzFpgn-z0U5K2kDNFM1y1VDfespSJgK7d8f-JKe6l6qibTlVtB-NGcYpuVe_1drx"/>
+</div>
+</div>
+</nav>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="pt-20 md:pt-28 px-margin-mobile md:px-lg max-w-[1200px] mx-auto grid grid-cols-4 md:grid-cols-12 gap-gutter-mobile md:gap-md">
+<!-- Mobile Search Bar -->
+<div class="col-span-4 md:hidden mt-2 mb-4">
+<div class="relative w-full shadow-sm rounded-xl">
+<span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant" data-icon="search">search</span>
+<input class="w-full bg-surface-container-highest rounded-xl py-4 pl-12 pr-4 font-body-lg text-body-lg text-on-surface focus:outline-none focus:ring-2 focus:ring-primary border-none transition-shadow h-12" placeholder="Search parathas, thalis..." type="text"/>
+</div>
+</div>
+<!-- Categories (Horizontal Scroll) -->
+<div class="col-span-4 md:col-span-12 mb-6 -mx-margin-mobile md:mx-0">
+<div class="flex overflow-x-auto hide-scrollbar gap-3 px-margin-mobile md:px-0 py-2">
+<button class="bg-primary text-on-primary font-label-bold text-label-bold px-6 py-2.5 rounded-full whitespace-nowrap shadow-sm hover:bg-primary-container transition-colors">
+                    All
+                </button>
+<button class="bg-surface-container-highest text-on-surface font-label-bold text-label-bold px-6 py-2.5 rounded-full whitespace-nowrap shadow-sm hover:bg-surface-variant transition-colors border border-outline-variant">
+                    Night Mess
+                </button>
+<button class="bg-surface-container-highest text-on-surface font-label-bold text-label-bold px-6 py-2.5 rounded-full whitespace-nowrap shadow-sm hover:bg-surface-variant transition-colors border border-outline-variant">
+                    Thalis
+                </button>
+<button class="bg-surface-container-highest text-on-surface font-label-bold text-label-bold px-6 py-2.5 rounded-full whitespace-nowrap shadow-sm hover:bg-surface-variant transition-colors border border-outline-variant">
+                    Fast Food
+                </button>
+<button class="bg-surface-container-highest text-on-surface font-label-bold text-label-bold px-6 py-2.5 rounded-full whitespace-nowrap shadow-sm hover:bg-surface-variant transition-colors border border-outline-variant">
+                    Beverages
+                </button>
+</div>
+</div>
+<!-- Restaurant List Header -->
+<div class="col-span-4 md:col-span-12 mb-4">
+<h2 class="font-title-md text-title-md text-on-background">Popular near you</h2>
+</div>
+<!-- Restaurant Cards Grid -->
+<div class="col-span-4 md:col-span-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+<!-- Card 1 -->
+<div class="bg-surface-container-lowest rounded-xl overflow-hidden border border-surface-variant group cursor-pointer hover:shadow-md transition-shadow relative">
+<div class="relative h-48 w-full">
+<img alt="Restaurant Image" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" data-alt="A vibrant, high-quality, top-down photograph of a steaming, delicious North Indian Thali featuring assorted curries, parathas, and rice, set on a dark rustic wooden table, beautifully lit to emphasize texture and color, capturing an energetic and appetizing mood." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA_vy3LlvFiOdfYKDdvtMvBv05btL0P4C6Mhi4EQI2P6zqjn84J4YRXb1CWtuFAf3EYqBI3CNhrQhxiEl1dlwDMAorht98h4M0iQeRxy_PA_XdSv3UtoNhBUuuE6xJNBr_oiKb39YzjMoxgZgP9eLUCLbAxPBbPvHxJt6cwgopGw3A-0cPTNlzrEpg6Lkak0O3Cmfad6Zvm2kL3oip-IYh23PMp3EvOb5-eXwV9ZZBIVtAowmBc1QLm"/>
+<div class="absolute top-3 left-3 bg-white/90 backdrop-blur-sm rounded-full px-2 py-1 flex items-center gap-1 shadow-sm">
+<span class="material-symbols-outlined text-secondary-container text-[14px]" data-icon="star" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="font-label-bold text-label-bold text-on-surface">4.5</span>
+</div>
+<div class="absolute bottom-3 right-3 bg-surface-container-lowest/90 backdrop-blur-sm rounded-lg px-2 py-1 shadow-sm">
+<span class="font-label-bold text-label-bold text-on-surface">25-30 min</span>
+</div>
+</div>
+<div class="p-4 relative">
+<h3 class="font-title-md text-title-md text-on-surface mb-1">FC Night Mess</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant mb-3 line-clamp-1">North Indian, Thalis, Parathas</p>
+<div class="flex justify-between items-center">
+<span class="font-label-bold text-label-bold text-outline">₹150 for one</span>
+<button class="bg-secondary-container text-on-secondary-container font-label-bold text-label-bold px-4 py-2 rounded-full hover:bg-secondary-fixed transition-colors flex items-center gap-1">
+                            Order <span class="material-symbols-outlined text-[16px]" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Card 2 -->
+<div class="bg-surface-container-lowest rounded-xl overflow-hidden border border-surface-variant group cursor-pointer hover:shadow-md transition-shadow relative">
+<div class="relative h-48 w-full">
+<img alt="Restaurant Image" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" data-alt="A mouth-watering, close-up photograph of a fresh, hot paneer roll wrapped in flaky paratha, served on a modern white plate with a side of green chutney, soft warm lighting highlighting the filling, bright and energetic aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAo4l9TFpKwRVar8r-ACZFnspsY6EihxoSC5VHYKydUnxobwTjUFoIcqskH1RzmSLgeF33h6znbRSn23hWwPQ2MCAL2_9c_CVUzfDppi_y_-JAGDcht7Fg1zOjqAUfZ6TMBLLbC4TxrTDICs2KVFQZQo7yJpQMfeu0nqFAIqjjS-zX_gZViOME9IdURneI5SVPnX8sZAu81xxOihUcHzEolpomeNt4CJOrgFS0sGv5ZKTm-mYUKc_Tj"/>
+<div class="absolute top-3 left-3 bg-white/90 backdrop-blur-sm rounded-full px-2 py-1 flex items-center gap-1 shadow-sm">
+<span class="material-symbols-outlined text-secondary-container text-[14px]" data-icon="star" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="font-label-bold text-label-bold text-on-surface">4.2</span>
+</div>
+<div class="absolute bottom-3 right-3 bg-surface-container-lowest/90 backdrop-blur-sm rounded-lg px-2 py-1 shadow-sm">
+<span class="font-label-bold text-label-bold text-on-surface">15-20 min</span>
+</div>
+</div>
+<div class="p-4 relative">
+<h3 class="font-title-md text-title-md text-on-surface mb-1">Rolls King</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant mb-3 line-clamp-1">Fast Food, Rolls, Beverages</p>
+<div class="flex justify-between items-center">
+<span class="font-label-bold text-label-bold text-outline">₹80 for one</span>
+<button class="bg-secondary-container text-on-secondary-container font-label-bold text-label-bold px-4 py-2 rounded-full hover:bg-secondary-fixed transition-colors flex items-center gap-1">
+                            Order <span class="material-symbols-outlined text-[16px]" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Card 3 -->
+<div class="bg-surface-container-lowest rounded-xl overflow-hidden border border-surface-variant group cursor-pointer hover:shadow-md transition-shadow relative">
+<div class="relative h-48 w-full">
+<img alt="Restaurant Image" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" data-alt="A bright, appetizing photograph of a large, loaded cheese pizza cut into slices, steaming slightly, presented on a wooden peel against a clean, modern kitchen background with bright, optimistic lighting, matching a premium fast food app aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCeJ_iEcpZ80HRHowDj8uHav73M6VuyE3O_xG-xJNW8Q9YgibImEyv3jut9Hvx5UF-NYk8P2l6drz_qRkhvoA8CQapZFbxrOQ-ZtXI_iEMoz8yIwOFu8CQ9JAUYkNmocIk-5w5OAv2rH5mu3Jz3rvCiJtGqWvOCCAXJ6_L1BGNaLO4_i3mJYWTCnqz_QCpN0bjNYRbFz9lipyvP3GhMsIdMQdgoPRTNWxRwYnp6rIunGMSIewzYJGHv"/>
+<div class="absolute top-3 left-3 bg-white/90 backdrop-blur-sm rounded-full px-2 py-1 flex items-center gap-1 shadow-sm">
+<span class="material-symbols-outlined text-secondary-container text-[14px]" data-icon="star" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="font-label-bold text-label-bold text-on-surface">4.0</span>
+</div>
+<div class="absolute bottom-3 right-3 bg-surface-container-lowest/90 backdrop-blur-sm rounded-lg px-2 py-1 shadow-sm">
+<span class="font-label-bold text-label-bold text-on-surface">35-40 min</span>
+</div>
+</div>
+<div class="p-4 relative">
+<h3 class="font-title-md text-title-md text-on-surface mb-1">Late Night Pizzeria</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant mb-3 line-clamp-1">Pizza, Italian, Fast Food</p>
+<div class="flex justify-between items-center">
+<span class="font-label-bold text-label-bold text-outline">₹250 for one</span>
+<button class="bg-secondary-container text-on-secondary-container font-label-bold text-label-bold px-4 py-2 rounded-full hover:bg-secondary-fixed transition-colors flex items-center gap-1">
+                            Order <span class="material-symbols-outlined text-[16px]" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="md:hidden fixed bottom-0 w-full z-50 bg-surface dark:bg-surface-container-lowest rounded-t-xl shadow-[0px_-4px_12px_rgba(0,0,0,0.05)] flex justify-around items-center h-16">
+<a class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-full px-4 py-1 scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="explore">explore</span>
+<span class="font-label-bold text-label-bold mt-1">Explore</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:opacity-80 scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="receipt_long">receipt_long</span>
+<span class="font-label-bold text-label-bold mt-1">Orders</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:opacity-80 scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="local_offer">local_offer</span>
+<span class="font-label-bold text-label-bold mt-1">Offers</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:opacity-80 scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+<span class="font-label-bold text-label-bold mt-1">Profile</span>
+</a>
+</nav>
+</body></html>
