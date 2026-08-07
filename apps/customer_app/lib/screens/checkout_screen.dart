@@ -25,7 +25,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   bool _isProcessingPayment = false;
 
   final List<Map<String, dynamic>> _paymentOptions = [
-    {'name': 'PhonePe UPI', 'icon': Icons.account_balance_wallet, 'sub': 'Fastest 1-tap checkout'},
+    {'name': 'PhonePe UPI', 'icon': Icons.account_balance_wallet, 'sub': 'Instant Demo UPI Checkout'},
     {'name': 'Google Pay UPI', 'icon': Icons.g_mobiledata, 'sub': 'Direct bank transfer'},
     {'name': 'Paytm UPI', 'icon': Icons.payment, 'sub': 'Pay via Paytm wallet / UPI'},
     {'name': 'CRED UPI', 'icon': Icons.credit_card, 'sub': 'Earn CRED coins'},
@@ -48,42 +48,70 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   void _handlePlaceOrder(CartProvider cart, OrderProvider orderProvider) async {
     setState(() => _isProcessingPayment = true);
 
-    // Simulated UPI Payment processing sheet/delay
-    await showDialog(
+    // Show sleek Instant Payment Success Sheet
+    showModalBottomSheet(
       context: context,
-      barrierDismissible: false,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
       builder: (context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          content: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const CircularProgressIndicator(color: AppTheme.primaryEmerald),
-                const SizedBox(height: 20),
-                const Text(
-                  'Connecting to UPI Gateway...',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        return Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 72,
+                height: 72,
+                decoration: const BoxDecoration(
+                  color: AppTheme.accentGreen,
+                  shape: BoxShape.circle,
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  'Authorizing ₹${cart.grandTotal.toInt()} via $_selectedPaymentMethod',
-                  style: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
-                  textAlign: TextAlign.center,
+                child: const Icon(Icons.check_circle_outline, color: Colors.white, size: 48),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'UPI Payment Successful! 🎉',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.textDark),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Authorized ₹${cart.grandTotal.toInt()} via $_selectedPaymentMethod',
+                style: const TextStyle(fontSize: 13, color: AppTheme.textMuted),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context); // Close sheet
+                    _completeOrderPlacement(cart, orderProvider);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primaryEmerald,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  child: const Text(
+                    'VIEW LIVE TRACKING & GATE OTP',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         );
       },
     );
+  }
 
-    // Wait short delay to simulate completion
-    await Future.delayed(const Duration(seconds: 1));
-    if (!mounted) return;
-    Navigator.pop(context); // Close dialog
-
+  void _completeOrderPlacement(CartProvider cart, OrderProvider orderProvider) {
     // Place Order in OrderProvider
     final newOrder = orderProvider.placeOrder(
       cart: cart,
