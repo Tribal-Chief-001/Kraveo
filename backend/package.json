@@ -9,6 +9,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-ec2": "^3.1106.0",
     "@prisma/client": "^5.14.0",
     "axios": "^1.6.8",
     "cors": "^2.8.5",

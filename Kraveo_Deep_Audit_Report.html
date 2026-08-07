@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Kraveo Deep Audit Report</title>
+  <style>
+    @page { size: A4; margin: 18mm 16mm 18mm 16mm; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #172016; line-height: 1.45; font-size: 10.2pt; }
+    h1 { color: #00450D; font-size: 27pt; margin: 0 0 4px; }
+    h2 { color: #00450D; font-size: 17pt; border-bottom: 2px solid #FDD400; padding-bottom: 4px; margin-top: 24px; }
+    h3 { color: #173B21; font-size: 12.5pt; margin: 17px 0 5px; }
+    .subtitle { color: #556055; font-size: 12pt; margin: 0 0 20px; }
+    .callout { background: #fff8cf; border-left: 5px solid #FDD400; padding: 12px 14px; margin: 15px 0; }
+    .danger { background: #fff0ee; border-left: 5px solid #c62828; padding: 12px 14px; margin: 15px 0; }
+    .meta { color: #5a6659; font-size: 9pt; margin: 0 0 18px; }
+    table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; font-size: 9pt; }
+    th { background: #00450D; color: white; text-align: left; padding: 7px; }
+    td { border: 1px solid #d6ddd4; vertical-align: top; padding: 7px; }
+    tr:nth-child(even) { background: #f7faf6; }
+    .critical { color: #b71c1c; font-weight: bold; }
+    .high { color: #ad6400; font-weight: bold; }
+    .score { font-weight: bold; color: #00450D; }
+    ul, ol { margin-top: 5px; padding-left: 22px; }
+    li { margin: 4px 0; }
+    code { font-family: "Courier New", monospace; font-size: 8.8pt; background: #f1f3f1; padding: 1px 3px; }
+    .page-break { page-break-before: always; }
+    .footer { margin-top: 25px; font-size: 8.5pt; color: #667266; border-top: 1px solid #d6ddd4; padding-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Kraveo Deep Audit Report</h1>
+  <p class="subtitle">Implementation, security, platform, product and launch-readiness audit for the VIT Bhopal food-delivery platform</p>
+  <p class="meta">Prepared 6 August 2026 · Read-only audit · No source files changed</p>
+
+  <div class="danger"><strong>Executive verdict.</strong> Kraveo is a compelling and unusually thoughtful campus-delivery prototype, but it is not safe or functional as a live food-delivery marketplace. Do not accept real money, collect real GPS, or onboard external users until the critical launch blockers in this report are resolved and independently tested.</div>
+
+  <h2>1. Executive scorecard</h2>
+  <table>
+    <tr><th>Dimension</th><th>Score</th><th>Assessment</th></tr>
+    <tr><td>Product concept and campus fit</td><td class="score">9.0 / 10</td><td>Excellent VIT Bhopal-specific insight: gate handoffs, dhaba workflows and late-night runner constraints are real differentiators.</td></tr>
+    <tr><td>Prototype and interaction design</td><td class="score">8.2 / 10</td><td>Strong persona-driven UI across customer, vendor, driver and admin surfaces.</td></tr>
+    <tr><td>Engineering MVP</td><td class="score">5.5 / 10</td><td>Compiles and presents well, but critical workflows are local simulations rather than a connected product.</td></tr>
+    <tr><td>Backend production readiness</td><td class="score">2.5 / 10</td><td>Unsafe identity, data access, payment, persistence and WebSocket behavior block real launch.</td></tr>
+    <tr><td>Safe public-pilot readiness</td><td class="score">1.5 / 10</td><td>Requires the commerce, security, mobile integration and operating foundations outlined below.</td></tr>
+  </table>
+
+  <h2>2. Audit method and verified checks</h2>
+  <p>Three specialist audits covered backend/security, Flutter/mobile platform, and web/product/operations. The following checks were verified:</p>
+  <ul>
+    <li>Backend TypeScript build passes; admin web production build passes.</li>
+    <li>Existing Flutter tests pass: customer 14, vendor 4, driver 3.</li>
+    <li>Current production Node dependency audits show no known vulnerabilities.</li>
+    <li>Flutter analysis reports 49 informational issues total: customer 28, vendor 17, driver 4.</li>
+    <li>There are no backend API tests, web tests, end-to-end tests, CI workflows, deployment infrastructure or Prisma migrations.</li>
+    <li>The running API uses in-memory stores; Prisma schema exists but Prisma is not instantiated or used.</li>
+  </ul>
+
+  <h2>3. Capability truth matrix</h2>
+  <table>
+    <tr><th>Area</th><th>Current state</th><th>Launch implication</th></tr>
+    <tr><td>Customer app</td><td>Polished local catalog/cart simulation; checkout is blocked.</td><td>Cannot place a real order.</td></tr>
+    <tr><td>Vendor app</td><td>Strong KDS/stock UI with seeded local orders.</td><td>No real incoming order, alert or acknowledgement path.</td></tr>
+    <tr><td>Driver app</td><td>Scripted delivery demo with local OTP.</td><td>No dispatch, GPS, navigation or delivery proof.</td></tr>
+    <tr><td>Admin dashboard</td><td>Attractive mock command centre; many local-only mutations.</td><td>Operators can see actions succeed when they have not.</td></tr>
+    <tr><td>Backend and database</td><td>Express/Socket.IO prototype with in-memory state; Prisma schema only.</td><td>Data loss on restart and no safe multi-user operation.</td></tr>
+    <tr><td>Payments and notifications</td><td>Razorpay/FCM-shaped code with simulation fallbacks.</td><td>Not suitable for commerce or reliable alerting.</td></tr>
+  </table>
+
+  <h2>4. Critical launch blockers</h2>
+  <table>
+    <tr><th>Severity</th><th>Finding and evidence</th><th>Required directive</th></tr>
+    <tr><td class="critical">Critical</td><td><strong>Privilege escalation.</strong> <code>backend/src/routes/api.ts</code> accepts a role from unauthenticated login input; a caller can receive an ADMIN JWT.</td><td>Use verified phone-OTP authentication. Public registration creates students only. Provision vendor, driver and admin roles through audited back-office workflows.</td></tr>
+    <tr><td class="critical">Critical</td><td><strong>Orders and PII are exposed.</strong> Order list/detail routes do not require authentication and return customer, hostel, driver and drop-off data.</td><td>Require authentication and central ownership policy on every query. Return role-specific, privacy-minimised DTOs.</td></tr>
+    <tr><td class="critical">Critical</td><td><strong>Any authenticated role can update any order.</strong> Generic status mutation has no actor or resource check.</td><td>Replace generic status updates with actor-bound commands: vendor accept/prepare, driver pickup/arrive, server OTP delivery confirmation.</td></tr>
+    <tr><td class="critical">Critical</td><td><strong>Payment integrity is broken.</strong> Orders are marked PAID before verification; arbitrary amount/order input is trusted; live gateway errors become simulated success.</td><td>Use payment-pending orders, integer paise, server-calculated amount, verified provider webhooks, idempotency, refunds and daily reconciliation.</td></tr>
+    <tr><td class="critical">Critical</td><td><strong>Customer checkout cannot finish.</strong> It awaits a non-dismissible dialog and subsequent completion code is unreachable.</td><td>Replace with cancellable payment/loading state and test an end-to-end successful checkout path.</td></tr>
+    <tr><td class="critical">Critical</td><td><strong>Mobile apps are disconnected local demos.</strong> API config exists but no real HTTP, socket, auth or repository integration is present.</td><td>Build typed API client, sessions, repository/state layer, sockets, retries, error states and durable local cache.</td></tr>
+    <tr><td class="critical">Critical</td><td><strong>Delivery OTP is bypassable.</strong> Driver code accepts universal fallback codes and customer OTP is locally generated.</td><td>Generate, hash, expire and verify OTP server-side for the assigned driver/order with rate-limit and attempt lockout.</td></tr>
+    <tr><td class="critical">Critical</td><td><strong>Socket.IO is unauthenticated.</strong> Any origin can connect, join arbitrary rooms and emit global driver/order events.</td><td>Authenticate handshakes, derive rooms server-side, remove client-authoritative events and publish privacy-safe role DTOs only.</td></tr>
+    <tr><td class="critical">Critical</td><td><strong>Release Android manifests have no INTERNET permission.</strong> Permission appears only in debug/profile manifests.</td><td>Move required permission to main manifests and check merged release manifests in CI.</td></tr>
+    <tr><td class="critical">Critical</td><td><strong>All backend state is volatile.</strong> Runtime uses mutable arrays/maps.</td><td>Implement PostgreSQL persistence, transactions, optimistic concurrency and transactional outbox before a pilot.</td></tr>
+  </table>
+
+  <h2>5. High-priority platform findings</h2>
+  <h3>Mobile and release</h3>
+  <ul>
+    <li>No push notification, app-killed alert, background job, map, GPS, navigation, payment SDK or offline synchronization implementation exists.</li>
+    <li>Vendor alarm depends on a remote audio URL; fallback only logs console text.</li>
+    <li>All Android apps use generic <code>com.example.*</code> IDs, generic branding and debug signing for release.</li>
+    <li>No iOS projects exist despite documentation presenting customer and driver iOS support.</li>
+    <li>Accessibility work is incomplete: no semantic labels, no TalkBack/font-scale test evidence and color-dependent status signals.</li>
+  </ul>
+
+  <h3>Admin and operations</h3>
+  <ul>
+    <li>Admin has no login, session expiry, MFA, role model, audit trail or staff approval workflow.</li>
+    <li>Status actions update UI optimistically but ignore rejected backend responses; vendor onboarding, toggle and driver reassignment are largely local-only.</li>
+    <li>The live map is visual only: driver latitude/longitude is not used for geographic positioning.</li>
+    <li>Analytics/KPIs are static data rather than defined operational metrics.</li>
+    <li>There is no observability stack: structured logs, traces, metrics, error reporting, alerting, backup restore test or incident runbook.</li>
+  </ul>
+
+  <h2>6. Documentation and governance</h2>
+  <div class="callout"><strong>Documentation strength:</strong> the architecture, UX and rollout documents are comprehensive. However, the README and several documents present planned/simulated capabilities as currently operational. Introduce an IMPLEMENTED / SIMULATED / PLANNED capability matrix immediately.</div>
+  <ul>
+    <li>Remove “production-ready” wording until launch gates are satisfied.</li>
+    <li>Add an OpenAPI reference, architecture decision records, threat model, data inventory, retention policy, support/refund/cancellation runbooks and incident/disaster-recovery plan.</li>
+    <li>Before launch, obtain appropriate professional review for vendor food-safety obligations, university/gate permission, privacy/data protection, consumer terms/refunds, runner safety/insurance, tax/settlement and payment compliance.</li>
+  </ul>
+
+  <div class="page-break"></div>
+  <h2>7. Recommended target architecture</h2>
+  <p>Use a well-tested <strong>modular monolith</strong> first. Do not add microservices before the core order lifecycle is reliable.</p>
+  <table>
+    <tr><th>Layer</th><th>Target responsibility</th></tr>
+    <tr><td>Flutter apps</td><td>Typed authenticated client, encrypted session storage, durable local cache/outbox, role-specific UX and reliable error/reconnect states.</td></tr>
+    <tr><td>API backend</td><td>Identity, catalog, order, dispatch, payment, notification, admin/support modules with a central authorization policy.</td></tr>
+    <tr><td>PostgreSQL</td><td>Source of truth for users, memberships, vendors, menus, orders, payments, payouts, OTP attempts and immutable audit/order events.</td></tr>
+    <tr><td>Redis and worker queue</td><td>Socket adapter, cache, presence, delayed tasks, notification retries and dead-letter processing—not the source of truth.</td></tr>
+    <tr><td>Integrations</td><td>Verified Razorpay webhooks, Firebase Admin/FCM, media object storage/CDN and maps/routing provider.</td></tr>
+    <tr><td>Operations</td><td>OpenTelemetry, error reporting, health/readiness, metrics, alerts, backups, reconciliation jobs and runbooks.</td></tr>
+  </table>
+  <p><strong>Core rules:</strong> integer paise for money; UUID/ULID identifiers; transactional commands; idempotency keys; immutable event/audit history; transactional outbox; authenticated server-authorized sockets; OpenAPI contracts; privacy-minimised response DTOs.</p>
+
+  <h2>8. Required order lifecycle</h2>
+  <p><code>Cart → Quote calculated → Payment pending → Payment verified → Vendor notified → Vendor accepted/rejected/timed out → Preparing → Ready for pickup → Driver offered → Driver assigned → Picked up → Arrived at gate → OTP verified → Delivered</code></p>
+  <p>At valid stages, separately model cancellation, payment failure, refunds, support disputes, driver reassignment, vendor timeout and safety incidents. Every command must record actor, timestamp, reason, policy check, idempotency key and audit event.</p>
+
+  <h2>9. Execution roadmap</h2>
+  <h3>Phase 0 — Stop-the-line fixes: 1–2 weeks</h3>
+  <ol>
+    <li>Remove tracked environment files from Git history and rotate every potentially exposed secret.</li>
+    <li>Fix checkout and release network permissions.</li>
+    <li>Delete universal OTP bypasses, demo progression controls, payment-success fallbacks and development-admin token fallback.</li>
+    <li>Publish a truthful capability matrix and revise production-ready claims.</li>
+    <li>Set up protected main branch, reviews, environment separation, secret handling and baseline CI.</li>
+  </ol>
+  <p><strong>Exit gate:</strong> no privilege escalation, no fake paid order path, clean release manifest, truthful documentation and automated build/analyze/test checks.</p>
+
+  <h3>Phase 1 — Trusted commerce core: 3–6 weeks</h3>
+  <ol>
+    <li>Implement PostgreSQL, Prisma migrations, repositories, transactions and seed data validation.</li>
+    <li>Build phone OTP identity, server-managed roles and vendor operator memberships.</li>
+    <li>Make server authoritative for catalog, quote, price, coupons, fees, order, delivery OTP and payment records.</li>
+    <li>Implement verified Razorpay webhook lifecycle, refunds and reconciliation ledger.</li>
+    <li>Add authorization tests, API integration tests, payment tests, migration tests, rate limiting, security headers and structured logs.</li>
+  </ol>
+  <p><strong>Exit gate:</strong> no cross-user access, all payment events reconcile, and restarts preserve all business data.</p>
+
+  <h3>Phase 2 — Real fulfilment: 4–8 weeks</h3>
+  <ol>
+    <li>Connect mobile apps to authenticated API and Socket.IO clients.</li>
+    <li>Build FCM vendor alerts with bundled alarm assets, retry and acknowledgement behavior.</li>
+    <li>Build driver availability, offer/accept/expiry, assignment locking, earnings ledger and delivery proof.</li>
+    <li>Add consented location, map/routing, geofences, freshness detection and privacy retention controls.</li>
+    <li>Convert admin into a role-based, server-authoritative, auditable operations console.</li>
+  </ol>
+  <p><strong>Exit gate:</strong> a real order can travel from customer through verified payment, vendor, driver and OTP delivery, including recoverable connectivity failure.</p>
+
+  <h3>Phase 3 — Controlled campus pilot: 3–4 weeks</h3>
+  <ol>
+    <li>Begin with one small service zone, limited hours, small vendor set and manual-dispatch fallback.</li>
+    <li>Obtain campus/gate approval, vendor compliance evidence, packaging process, runner vetting and safety escalation plan.</li>
+    <li>Establish cancellation/refund, support, food complaint, outage and rider incident runbooks.</li>
+    <li>Use staging with test payments, push, maps, seed data, monitored dashboards and a verified backup restore drill.</li>
+  </ol>
+
+  <h3>Phase 4 — State-of-the-art optimisation</h3>
+  <ul>
+    <li>ETA and prep-time prediction; capacity-aware dispatch and batching.</li>
+    <li>Geofenced service zones, demand-aware delivery fees and vendor SLA management.</li>
+    <li>Runner utilization, safety-aware dispatch and fair earnings systems.</li>
+    <li>Personalization and experiments only after reliable fulfilment.</li>
+    <li>Operational analytics: fill rate, acceptance, prep SLA, dispatch lag, ETA error, delivery success, cancellation, refund, contribution margin and repeat rate.</li>
+  </ul>
+
+  <h2>10. Final directive</h2>
+  <div class="danger"><strong>Do not spend the next month adding more screens.</strong> Preserve the excellent UX already built and focus on: persistent data, secure identity/ownership, verified payments, real mobile connectivity, reliable dispatch/location/notifications, and tested pilot operations. That is the path from convincing demo to defensible food-delivery business.</div>
+
+  <p class="footer">Kraveo Deep Audit Report · Prepared from direct repository inspection and specialist read-only audits · 6 August 2026</p>
+</body>
+</html>
