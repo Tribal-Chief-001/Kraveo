@@ -7,14 +7,23 @@ import { apiRouter } from './routes/api';
 
 dotenv.config();
 
+// Global Process Crash Protection
+process.on('uncaughtException', (err) => {
+  console.error('🔥 [Fatal Error Guarded] Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ [Unhandled Promise Rejection Guarded]:', reason);
+});
+
 const app = express();
 const server = http.createServer(app);
 
 const io = new SocketIOServer(server, {
   cors: {
     origin: '*',
-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE']
-  }
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+  },
 });
 
 const PORT = process.env.PORT || 5000;
@@ -33,7 +42,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'online',
     service: 'Kraveo Campus Delivery Backend Engine',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
