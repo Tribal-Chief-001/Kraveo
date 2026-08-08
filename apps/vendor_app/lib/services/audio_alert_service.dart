@@ -16,9 +16,11 @@ class AudioAlertService {
     try {
       final player = AudioPlayer();
       _player = player;
-      await player.setVolume(1.0).timeout(const Duration(milliseconds: 200));
-      await player.setReleaseMode(ReleaseMode.loop).timeout(const Duration(milliseconds: 200));
-      await player.play(UrlSource('https://actions.google.com/sounds/v1/alarms/digital_watch_alarm.ogg')).timeout(const Duration(milliseconds: 200));
+      await player.setVolume(1.0);
+      await player.setReleaseMode(ReleaseMode.loop);
+      await player
+          .play(UrlSource('https://actions.google.com/sounds/v1/alarms/digital_watch_alarm.ogg'))
+          .timeout(const Duration(seconds: 5));
     } catch (e) {
       print('⚠️ [Audio Engine Fallback] Hardware audio play error ($e), falling back to high frequency timer chime.');
     }
@@ -26,7 +28,7 @@ class AudioAlertService {
     // Periodic secondary console beep pulse to guarantee continuous feedback
     _alarmTimer?.cancel();
     _alarmTimer = Timer.periodic(const Duration(milliseconds: 1200), (timer) {
-      print('🔔 BEEP! BEEP! NEW INCOMING ORDER FOR SHARMA DHABA! [VEND-ALERT-LIVE]');
+      print('🔔 BEEP! BEEP! NEW INCOMING ORDER ARRIVED AT DHABA KITCHEN!');
     });
   }
 

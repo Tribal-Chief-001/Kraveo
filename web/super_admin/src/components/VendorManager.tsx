@@ -5,14 +5,14 @@ import { Store, Star, ToggleLeft, ToggleRight, MapPin, Plus, X } from 'lucide-re
 interface VendorManagerProps {
   vendors: Vendor[];
   onToggleVendor: (vendorId: string) => void;
+  onAddVendor?: (vendor: Vendor) => void;
 }
 
-export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleVendor }) => {
+export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleVendor, onAddVendor }) => {
   const [showModal, setShowModal] = useState(false);
   const [dhabaName, setDhabaName] = useState('');
   const [category, setCategory] = useState('North Indian • Parathas');
   const [address, setAddress] = useState('Ashta Highway, km 2.0');
-  const [dhabaList, setDhabaList] = useState<Vendor[]>(vendors);
 
   const handleCreateDhaba = (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,14 +21,16 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
     const newVendor: Vendor = {
       id: `ven-${Date.now()}`,
       name: dhabaName,
-      category,
+      category: category || 'North Indian',
       rating: 4.8,
       isAcceptingOrders: true,
       activeOrdersCount: 0,
-      address,
+      address: address || 'Ashta Highway',
     };
 
-    setDhabaList([newVendor, ...dhabaList]);
+    if (onAddVendor) {
+      onAddVendor(newVendor);
+    }
     setShowModal(false);
     setDhabaName('');
   };
@@ -51,7 +53,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {dhabaList.map((v) => (
+        {vendors.map((v) => (
           <div key={v.id} className="stitch-card rounded-2xl p-5 border border-[#242f46] space-y-4">
             <div className="flex items-start justify-between">
               <div>

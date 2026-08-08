@@ -207,14 +207,28 @@ apiRouter.post('/orders', requireAuth, (req: AuthenticatedRequest, res: Response
   });
 });
 
-// Update Order Status (Enforces State Machine Transitions)
+// Update Order Status (Enforces State Machine Transitions & Role Auth)
 apiRouter.patch('/orders/:id/status', requireAuth, (req: AuthenticatedRequest, res: Response) => {
   const { status } = req.body as { status: OrderStatus };
+  const user = req.user;
   const order = orders.find((o) => o.id === req.params.id);
 
   if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
 
   if (!status) return res.status(400).json({ success: false, message: 'status field is required.' });
+
+  // Role-based status transition restrictions
+  if (user?.role === 'STUDENT' && status !== 'CANCELLED') {
+    return res.status(403).json({ success: false, message: 'Students can only cancel orders.' });
+  }
+
+  if (user?.role === 'VENDOR' && !['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP'].includes(status)) {
+    return res.status(403).json({ success: false, message: 'Vendors can only update kitchen preparation status.' });
+  }
+
+  if (user?.role === 'DRIVER' && !['PICKED_UP', 'ARRIVED_AT_GATE', 'DELIVERED'].includes(status)) {
+    return res.status(403).json({ success: false, message: 'Runners can only update delivery status.' });
+  }
 
   // Enforce Order State Machine transition validity
   if (!isValidStateTransition(order.status, status)) {
