@@ -1,6 +1,6 @@
 import React from 'react';
 import { TabType } from '../types';
-import { MapPin, ShoppingBag, Store, TrendingUp, Cpu, Utensils } from 'lucide-react';
+import { MapPin, ShoppingBag, Store, TrendingUp, Cpu, Utensils, Bike } from 'lucide-react';
 
 interface SidebarProps {
   activeTab: TabType;
@@ -12,6 +12,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     { id: 'map', label: 'Live Map Console', icon: MapPin },
     { id: 'orders', label: 'Order Command Matrix', icon: ShoppingBag },
     { id: 'vendors', label: 'Dhabas & Menus', icon: Store },
+    { id: 'drivers', label: 'Driver Partners', icon: Bike },
     { id: 'analytics', label: 'Campus Analytics', icon: TrendingUp },
   ];
 

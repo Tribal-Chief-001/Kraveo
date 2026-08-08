@@ -1,4 +1,4 @@
-export type TabType = 'map' | 'orders' | 'vendors' | 'analytics';
+export type TabType = 'map' | 'orders' | 'vendors' | 'drivers' | 'analytics';
 
 export type OrderStatus = 
   | 'PLACED'
@@ -41,4 +41,24 @@ export interface DriverPin {
   heading: number;
   status: 'IDLE' | 'EN_ROUTE_DHABA' | 'DELIVERING_GATE';
   currentOrderId?: string;
+}
+
+export interface DriverPartner {
+  id: string;
+  name: string;
+  phone: string;
+  studentRegNo: string;
+  runnerCode: string;
+  avatarUrl: string;
+  vehicleType: string;
+  vehicleRegNo: string;
+  emergencyPhone: string;
+  dutyStatus: 'ONLINE' | 'OFFLINE' | 'IN_TRANSIT';
+  ordersToday: number;
+  totalEarningsToday: number;
+  avgCompletionTimeMinutes: number;
+  onTimeRatePercent: number;
+  rating: number;
+  upiId: string;
+  createdAt: string;
 }
