@@ -1,11 +1,24 @@
 import { Router, Request, Response } from 'express';
-import { vendors, menuItems, orders, driverLocations, users } from '../store';
+import { vendors, menuItems, orders, driverLocations, users, driverPartners } from '../store';
 import { Order, OrderStatus } from '../types';
 import { generateToken, requireAuth, requireRole, AuthenticatedRequest } from '../middleware/auth';
 import { isValidStateTransition, getNextAllowedStates } from '../utils/stateMachine';
 import { validateAndCalculateOrder } from '../utils/validation';
 
 export const apiRouter = Router();
+
+// ----------------------------------------------------
+// DRIVER PARTNER MANAGEMENT ENDPOINTS
+// ----------------------------------------------------
+apiRouter.get('/drivers', (req: Request, res: Response) => {
+  return res.json({ success: true, count: driverPartners.length, data: driverPartners });
+});
+
+apiRouter.get('/drivers/:id', (req: Request, res: Response) => {
+  const driver = driverPartners.find((d) => d.id === req.params.id);
+  if (!driver) return res.status(404).json({ success: false, message: 'Driver partner not found.' });
+  return res.json({ success: true, data: driver });
+});
 
 // ----------------------------------------------------
 // AUTH & SMS OTP ENDPOINTS

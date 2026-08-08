@@ -80,3 +80,23 @@ export interface DriverLocation {
   heading: number;
   lastUpdated: string;
 }
+
+export interface DriverPartner {
+  id: string;
+  name: string;
+  phone: string;
+  studentRegNo: string;
+  runnerCode: string;
+  avatarUrl: string;
+  vehicleType: string;
+  vehicleRegNo: string;
+  emergencyPhone: string;
+  dutyStatus: 'ONLINE' | 'OFFLINE' | 'IN_TRANSIT';
+  ordersToday: number;
+  totalEarningsToday: number;
+  avgCompletionTimeMinutes: number;
+  onTimeRatePercent: number;
+  rating: number;
+  upiId: string;
+  createdAt: string;
+}

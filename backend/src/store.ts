@@ -1,4 +1,4 @@
-import { Vendor, MenuItem, Order, DriverLocation, User } from './types';
+import { Vendor, MenuItem, Order, DriverLocation, User, DriverPartner } from './types';
 
 // Initial Mock Users
 export const users: User[] = [
@@ -49,6 +49,67 @@ export const vendors: Vendor[] = [
     lat: 23.0750,
     lng: 76.8500,
     address: 'Kothri Bypass Road'
+  }
+];
+
+// Initial Driver Partners
+export const driverPartners: DriverPartner[] = [
+  {
+    id: 'usr-4',
+    name: 'Vikram Singh',
+    phone: '+91 9876543213',
+    studentRegNo: '21BCG10045',
+    runnerCode: 'RUN-8042',
+    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
+    vehicleType: 'TVS Jupiter Scooty',
+    vehicleRegNo: 'MP 04 AB 1234',
+    emergencyPhone: '+91 98989 12345',
+    dutyStatus: 'IN_TRANSIT',
+    ordersToday: 8,
+    totalEarningsToday: 320,
+    avgCompletionTimeMinutes: 18.5,
+    onTimeRatePercent: 98.2,
+    rating: 4.9,
+    upiId: 'vikram@upi',
+    createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'usr-8',
+    name: 'Rohan Mehta',
+    phone: '+91 9123456780',
+    studentRegNo: '22BCE10192',
+    runnerCode: 'RUN-8043',
+    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80',
+    vehicleType: 'Hero Splendor Bike',
+    vehicleRegNo: 'MP 04 CD 5678',
+    emergencyPhone: '+91 97777 54321',
+    dutyStatus: 'ONLINE',
+    ordersToday: 5,
+    totalEarningsToday: 200,
+    avgCompletionTimeMinutes: 16.0,
+    onTimeRatePercent: 99.0,
+    rating: 4.8,
+    upiId: 'rohanm@upi',
+    createdAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'usr-9',
+    name: 'Aman Deep',
+    phone: '+91 9112233445',
+    studentRegNo: '23BCE10884',
+    runnerCode: 'RUN-8044',
+    avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80',
+    vehicleType: 'Bicycle (Campus)',
+    vehicleRegNo: 'CYCLE-B3',
+    emergencyPhone: '+91 96666 11223',
+    dutyStatus: 'OFFLINE',
+    ordersToday: 0,
+    totalEarningsToday: 0,
+    avgCompletionTimeMinutes: 22.0,
+    onTimeRatePercent: 95.5,
+    rating: 4.7,
+    upiId: 'amand@upi',
+    createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString()
   }
 ];
 
