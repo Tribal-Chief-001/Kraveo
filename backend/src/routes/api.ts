@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { vendors, menuItems, orders, driverLocations, users, driverPartners } from '../store';
+import { vendors, menuItems, orders, driverLocations, users, driverPartners, reviews } from '../store';
 import { Order, OrderStatus } from '../types';
 import { generateToken, requireAuth, requireRole, AuthenticatedRequest } from '../middleware/auth';
 import { isValidStateTransition, getNextAllowedStates } from '../utils/stateMachine';
@@ -421,4 +421,130 @@ apiRouter.post('/drivers/location', requireAuth, requireRole('DRIVER', 'ADMIN'),
   }
 
   return res.json({ success: true, data: loc });
+});
+
+// ----------------------------------------------------
+// REVIEWS & KUVERA COIN LOYALTY REWARDS ENDPOINTS
+// ----------------------------------------------------
+
+// Submit Order & Dish Review (Earns +10 Kuvera Coins & Updates Dhaba Rating)
+apiRouter.post('/reviews', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  const { orderId, driverRating, driverTags, driverNotes, dishReviews, dhabaNotes } = req.body;
+
+  if (!orderId) {
+    return res.status(400).json({ success: false, message: 'orderId is required.' });
+  }
+
+  const order = orders.find((o) => o.id === orderId);
+  if (!order) return res.status(404).json({ success: false, message: 'Order not found.' });
+
+  const user = users.find((u) => u.id === req.user?.id || u.id === order.customerId);
+  if (!user) return res.status(404).json({ success: false, message: 'User profile not found.' });
+
+  // Update User's Kuvera Coins (+10 per review)
+  user.kuveraCoins = (user.kuveraCoins || 0) + 10;
+  order.isReviewed = true;
+
+  // Process Dish Ratings & Update Menu Item Rating Metrics
+  if (Array.isArray(dishReviews)) {
+    dishReviews.forEach((dr: { dishId: string; rating: number }) => {
+      const item = menuItems.find((m) => m.id === dr.dishId);
+      if (item && typeof dr.rating === 'number') {
+        const currRating = item.rating || 4.5;
+        const currCount = item.ratingCount || 10;
+        const newCount = currCount + 1;
+        item.rating = parseFloat(((currRating * currCount + dr.rating) / newCount).toFixed(2));
+        item.ratingCount = newCount;
+      }
+    });
+  }
+
+  // Update Vendor Rating using Bayesian Aggregation Algorithm
+  const vendor = vendors.find((v) => v.id === order.vendorId);
+  if (vendor) {
+    const C = 10; // Prior weight constant
+    const m = 4.5; // Campus baseline rating
+    const currentTotalCount = vendor.totalRatingsCount || 50;
+    const newTotalCount = currentTotalCount + 1;
+    const newRatingSum = (vendor.rating * currentTotalCount) + (driverRating || 4.5);
+    
+    // Bayesian Weighted Average Formula
+    const bayesianRating = ((C * m) + newRatingSum) / (C + newTotalCount);
+    vendor.rating = parseFloat(bayesianRating.toFixed(2));
+    vendor.totalRatingsCount = newTotalCount;
+  }
+
+  // Update Driver Partner Rating if driver is assigned
+  if (order.driverId && typeof driverRating === 'number') {
+    const driver = driverPartners.find((d) => d.id === order.driverId);
+    if (driver) {
+      driver.rating = parseFloat(((driver.rating * 20 + driverRating) / 21).toFixed(2));
+    }
+  }
+
+  // Save Review Record
+  const newReview = {
+    id: `rev-${Date.now()}`,
+    orderId,
+    customerId: user.id,
+    vendorId: order.vendorId,
+    driverId: order.driverId,
+    driverRating: driverRating || 5,
+    driverTags: driverTags || [],
+    driverNotes: driverNotes || '',
+    dishReviews: dishReviews || [],
+    dhabaNotes: dhabaNotes || '',
+    coinsEarned: 10,
+    createdAt: new Date().toISOString()
+  };
+
+  reviews.push(newReview);
+
+  console.log(`🪙 [Kuvera Coins Loyalty] User ${user.name} (+91 ${user.phone}) earned +10 Kuvera Coins! Total Balance: ${user.kuveraCoins}`);
+
+  return res.json({
+    success: true,
+    message: '🎉 Review submitted successfully! You earned +10 Kuvera Coins!',
+    coinsEarned: 10,
+    totalCoins: user.kuveraCoins,
+    newVendorRating: vendor?.rating,
+    review: newReview
+  });
+});
+
+// Redeem 50 Kuvera Coins for Flat ₹20 OFF Coupon
+apiRouter.post('/coupons/redeem-coins', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  const user = users.find((u) => u.id === req.user?.id);
+  if (!user) return res.status(404).json({ success: false, message: 'User profile not found.' });
+
+  const currentCoins = user.kuveraCoins || 0;
+  if (currentCoins < 50) {
+    return res.status(400).json({
+      success: false,
+      message: `Insufficient Kuvera Coins. You have ${currentCoins} coins, but need 50 coins to redeem ₹20 OFF.`
+    });
+  }
+
+  // Deduct 50 coins
+  user.kuveraCoins = currentCoins - 50;
+
+  return res.json({
+    success: true,
+    message: '🎉 Redeemed 50 Kuvera Coins for Flat ₹20 OFF!',
+    couponCode: 'KUVERA20',
+    discountAmount: 20,
+    remainingCoins: user.kuveraCoins
+  });
+});
+
+// Fetch Dhaba Reviews
+apiRouter.get('/reviews/vendor/:vendorId', (req: Request, res: Response) => {
+  const vendorReviews = reviews.filter((r) => r.vendorId === req.params.vendorId);
+  return res.json({ success: true, count: vendorReviews.length, data: vendorReviews });
+});
+
+// Fetch Driver Reviews
+apiRouter.get('/reviews/driver/:driverId', (req: Request, res: Response) => {
+  const driverReviews = reviews.filter((r) => r.driverId === req.params.driverId);
+  return res.json({ success: true, count: driverReviews.length, data: driverReviews });
 });

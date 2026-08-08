@@ -1,9 +1,9 @@
-import { Vendor, MenuItem, Order, DriverLocation, User, DriverPartner } from './types';
+import { Vendor, MenuItem, Order, DriverLocation, User, DriverPartner, ReviewRecord } from './types';
 
-// Initial Mock Users
+// Initial Mock Users (with Kuvera Coins balances)
 export const users: User[] = [
-  { id: 'usr-1', name: 'Rahul Sharma', phone: '+91 9876543210', role: 'STUDENT', hostelBlock: 'Boys Hostel Block 3', createdAt: new Date().toISOString() },
-  { id: 'usr-2', name: 'Ananya Verma', phone: '+91 9876543211', role: 'STUDENT', hostelBlock: 'Girls Hostel Gate 1', createdAt: new Date().toISOString() },
+  { id: 'usr-1', name: 'Rahul Sharma', phone: '+91 9876543210', role: 'STUDENT', hostelBlock: 'Boys Hostel Block 3', kuveraCoins: 30, createdAt: new Date().toISOString() },
+  { id: 'usr-2', name: 'Ananya Verma', phone: '+91 9876543211', role: 'STUDENT', hostelBlock: 'Girls Hostel Gate 1', kuveraCoins: 40, createdAt: new Date().toISOString() },
   { id: 'usr-3', name: 'Ram Singh (Sharma Dhaba)', phone: '+91 9876543212', role: 'VENDOR', createdAt: new Date().toISOString() },
   { id: 'usr-4', name: 'Vikram Singh (Runner)', phone: '+91 9876543213', role: 'DRIVER', createdAt: new Date().toISOString() },
   { id: 'usr-5', name: 'Super Admin', phone: '+91 9876543214', role: 'ADMIN', createdAt: new Date().toISOString() },
@@ -17,6 +17,7 @@ export const vendors: Vendor[] = [
     name: 'Sharma Highway Dhaba',
     category: 'North Indian • Thalis • Parathas',
     rating: 4.8,
+    totalRatingsCount: 124,
     eta: '25-35 mins',
     bannerImage: 'https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=600&auto=format&fit=crop&q=80',
     isAcceptingOrders: true,
@@ -30,6 +31,7 @@ export const vendors: Vendor[] = [
     name: 'Campus Night Canteen',
     category: 'Fast Food • Maggi • Beverages',
     rating: 4.6,
+    totalRatingsCount: 88,
     eta: '15-20 mins',
     bannerImage: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600&auto=format&fit=crop&q=80',
     isAcceptingOrders: true,
@@ -41,8 +43,9 @@ export const vendors: Vendor[] = [
     id: 'ven-3',
     userId: 'usr-7',
     name: 'Singh Punjabi Kitchen',
-    category: 'Butter Chicken • Paneer • Naan',
+    category: 'Butter Chicken • Naan',
     rating: 4.9,
+    totalRatingsCount: 156,
     eta: '30-40 mins',
     bannerImage: 'https://images.unsplash.com/photo-1603894584373-5ac82b2ae398?w=600&auto=format&fit=crop&q=80',
     isAcceptingOrders: true,
@@ -116,17 +119,17 @@ export const driverPartners: DriverPartner[] = [
 // Initial Mock Menu Items
 export const menuItems: MenuItem[] = [
   // Sharma Dhaba
-  { id: 'item-1', vendorId: 'ven-1', name: 'Special Shahi Paneer Thali', price: 180, category: 'Thalis', description: 'Paneer, Dal Makhani, 4 Butter Rotis, Rice & Gulab Jamun', imageUrl: 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400', isAvailable: true },
-  { id: 'item-2', vendorId: 'ven-1', name: 'Aloo Pyaz Paratha (2 pcs)', price: 90, category: 'Parathas', description: 'Served with fresh curd & white butter', imageUrl: 'https://images.unsplash.com/photo-1626777552726-4a6b54c97e46?w=400', isAvailable: true },
-  { id: 'item-3', vendorId: 'ven-1', name: 'Kulhad Sweet Lassi', price: 50, category: 'Beverages', description: 'Chilled thick creamy lassi in authentic earthen kulhad', imageUrl: 'https://images.unsplash.com/photo-1571006682855-3bc67776510d?w=400', isAvailable: true },
+  { id: 'item-1', vendorId: 'ven-1', name: 'Special Shahi Paneer Thali', price: 180, category: 'Thalis', description: 'Paneer, Dal Makhani, 4 Butter Rotis, Rice & Gulab Jamun', imageUrl: 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400', isAvailable: true, rating: 4.9, ratingCount: 42 },
+  { id: 'item-2', vendorId: 'ven-1', name: 'Aloo Pyaz Paratha (2 pcs)', price: 90, category: 'Parathas', description: 'Served with fresh curd & white butter', imageUrl: 'https://images.unsplash.com/photo-1626777552726-4a6b54c97e46?w=400', isAvailable: true, rating: 4.7, ratingCount: 28 },
+  { id: 'item-3', vendorId: 'ven-1', name: 'Kulhad Sweet Lassi', price: 50, category: 'Beverages', description: 'Chilled thick creamy lassi in authentic earthen kulhad', imageUrl: 'https://images.unsplash.com/photo-1571006682855-3bc67776510d?w=400', isAvailable: true, rating: 4.9, ratingCount: 65 },
 
   // Campus Night Canteen
-  { id: 'item-4', vendorId: 'ven-2', name: 'Cheese Butter Cheese Maggi', price: 70, category: 'Fast Food', description: 'Double cheese load with crispy onions and butter', imageUrl: 'https://images.unsplash.com/photo-1612929633738-8fe44f7ec841?w=400', isAvailable: true },
-  { id: 'item-5', vendorId: 'ven-2', name: 'Paneer Loaded Sandwich', price: 85, category: 'Fast Food', description: 'Grilled sandwich with spiced cottage cheese filling', imageUrl: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af?w=400', isAvailable: true },
+  { id: 'item-4', vendorId: 'ven-2', name: 'Cheese Butter Cheese Maggi', price: 70, category: 'Fast Food', description: 'Double cheese load with crispy onions and butter', imageUrl: 'https://images.unsplash.com/photo-1612929633738-8fe44f7ec841?w=400', isAvailable: true, rating: 4.8, ratingCount: 50 },
+  { id: 'item-5', vendorId: 'ven-2', name: 'Paneer Loaded Sandwich', price: 85, category: 'Fast Food', description: 'Grilled sandwich with spiced cottage cheese filling', imageUrl: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af?w=400', isAvailable: true, rating: 4.5, ratingCount: 30 },
 
   // Singh Punjabi Kitchen
-  { id: 'item-6', vendorId: 'ven-3', name: 'Butter Chicken (Half)', price: 260, category: 'Main Course', description: 'Rich tomato cream gravy with tender grilled chicken', imageUrl: 'https://images.unsplash.com/photo-1603894584373-5ac82b2ae398?w=400', isAvailable: true },
-  { id: 'item-7', vendorId: 'ven-3', name: 'Garlic Butter Naan (2 pcs)', price: 60, category: 'Breads', description: 'Crispy tandoori naan brushed with garlic & butter', imageUrl: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400', isAvailable: true }
+  { id: 'item-6', vendorId: 'ven-3', name: 'Butter Chicken (Half)', price: 260, category: 'Main Course', description: 'Rich tomato cream gravy with tender grilled chicken', imageUrl: 'https://images.unsplash.com/photo-1603894584373-5ac82b2ae398?w=400', isAvailable: true, rating: 4.95, ratingCount: 80 },
+  { id: 'item-7', vendorId: 'ven-3', name: 'Garlic Butter Naan (2 pcs)', price: 60, category: 'Breads', description: 'Crispy tandoori naan brushed with garlic & butter', imageUrl: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400', isAvailable: true, rating: 4.85, ratingCount: 75 }
 ];
 
 // Initial Active Orders
@@ -175,6 +178,9 @@ export const orders: Order[] = [
     updatedAt: new Date().toISOString()
   }
 ];
+
+// Reviews Repository Store
+export const reviews: ReviewRecord[] = [];
 
 // Driver Locations (Simulated continuous GPS feed near VIT Bhopal)
 export const driverLocations: Map<string, DriverLocation> = new Map([
