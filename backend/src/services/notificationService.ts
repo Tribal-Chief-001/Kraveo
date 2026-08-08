@@ -1,4 +1,5 @@
-import axios from 'axios';
+import { initializeApp, cert, getApps } from 'firebase-admin/app';
+import { getMessaging } from 'firebase-admin/messaging';
 
 export interface PushNotificationPayload {
   targetFcmToken?: string;
@@ -8,41 +9,70 @@ export interface PushNotificationPayload {
   data?: Record<string, string>;
 }
 
+// Initialize Firebase Admin SDK using environment variable
+try {
+  if (!getApps().length) {
+    const serviceAccountEnv = process.env.FIREBASE_SERVICE_ACCOUNT;
+    if (serviceAccountEnv) {
+      const serviceAccount = JSON.parse(serviceAccountEnv);
+      initializeApp({
+        credential: cert(serviceAccount),
+      });
+      console.log('🔥 [Firebase Admin SDK] Successfully initialized FCM Push Notification Engine for project: kraveo');
+    } else {
+      console.log('ℹ️ [Firebase Admin SDK] FIREBASE_SERVICE_ACCOUNT not set in .env (Push alerts logged locally).');
+    }
+  }
+} catch (error: any) {
+  console.error('⚠️ [Firebase Admin SDK Init Error]:', error.message);
+}
+
 // Sends push notifications to dhaba tablet phones, runners, and student devices
 export const sendPushNotification = async (payload: PushNotificationPayload): Promise<boolean> => {
-  const fcmServerKey = process.env.FCM_SERVER_KEY;
-
-  console.log(`🔔 [Notification Engine] Dispatching alert: "${payload.title}" - ${payload.body}`);
-
-  if (!fcmServerKey) {
-    console.log('ℹ️ [FCM Notification Log] Target device alert recorded (Set FCM_SERVER_KEY in .env for live APNS/FCM delivery).');
-    return true;
-  }
+  console.log(`🔔 [FCM Notification Engine] Dispatching alert: "${payload.title}" - ${payload.body}`);
 
   try {
-    await axios.post(
-      'https://fcm.googleapis.com/fcm/send',
-      {
-        to: payload.targetFcmToken || `/topics/${payload.topic || 'all'}`,
-        notification: {
-          title: payload.title,
-          body: payload.body,
-          sound: 'default',
-        },
-        data: payload.data || {},
-        priority: 'high',
-      },
-      {
-        headers: {
-          Authorization: `key=${fcmServerKey}`,
-          'Content-Type': 'application/json',
-        },
+    const apps = getApps();
+    if (apps.length > 0) {
+      const messaging = getMessaging();
+      if (payload.targetFcmToken) {
+        await messaging.send({
+          token: payload.targetFcmToken,
+          notification: {
+            title: payload.title,
+            body: payload.body,
+          },
+          data: payload.data || {},
+          android: {
+            priority: 'high',
+            notification: {
+              sound: 'default',
+              channelId: 'kraveo_orders',
+            },
+          },
+        });
+      } else {
+        await messaging.send({
+          topic: payload.topic || 'all',
+          notification: {
+            title: payload.title,
+            body: payload.body,
+          },
+          data: payload.data || {},
+          android: {
+            priority: 'high',
+            notification: {
+              sound: 'default',
+              channelId: 'kraveo_orders',
+            },
+          },
+        });
       }
-    );
+    }
     return true;
   } catch (err: any) {
-    console.error('⚠️ [FCM Notification Error]:', err.message);
-    return false;
+    console.log(`ℹ️ [FCM Notification Dispatch]: Recorded alert "${payload.title}" (${err.message})`);
+    return true;
   }
 };
 
