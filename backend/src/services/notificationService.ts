@@ -1,5 +1,7 @@
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface PushNotificationPayload {
   targetFcmToken?: string;
@@ -9,18 +11,18 @@ export interface PushNotificationPayload {
   data?: Record<string, string>;
 }
 
-// Initialize Firebase Admin SDK using environment variable
+// Initialize Firebase Admin SDK using service account key file
 try {
   if (!getApps().length) {
-    const serviceAccountEnv = process.env.FIREBASE_SERVICE_ACCOUNT;
-    if (serviceAccountEnv) {
-      const serviceAccount = JSON.parse(serviceAccountEnv);
+    const keyPath = process.env.FIREBASE_KEY_PATH || path.join(__dirname, '../../firebase-key.json');
+    if (fs.existsSync(keyPath)) {
+      const serviceAccount = JSON.parse(fs.readFileSync(keyPath, 'utf8'));
       initializeApp({
         credential: cert(serviceAccount),
       });
-      console.log('🔥 [Firebase Admin SDK] Successfully initialized FCM Push Notification Engine for project: kraveo');
+      console.log(`🔥 [Firebase Admin SDK] Successfully initialized FCM Push Notification Engine for project: ${serviceAccount.project_id || 'kraveo'}`);
     } else {
-      console.log('ℹ️ [Firebase Admin SDK] FIREBASE_SERVICE_ACCOUNT not set in .env (Push alerts logged locally).');
+      console.log('ℹ️ [Firebase Admin SDK] firebase-key.json not found (Push alerts logged locally).');
     }
   }
 } catch (error: any) {
