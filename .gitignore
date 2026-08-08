@@ -8,13 +8,20 @@ build/
 .dart_tool/
 .pub-cache/
 .pub/
+*.apk
+*.aab
 
-# Environment files
+# Environment & Secrets
 .env
-.env.local
+.env.*
+firebase-key.json
+*firebase-adminsdk*.json
+*.pem
+*.key
 
 # IDE & OS
 .DS_Store
 .idea/
 *.iml
 *.log
+*.tmp
