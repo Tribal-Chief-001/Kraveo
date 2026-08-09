@@ -1,4 +1,13 @@
-enum OrderStatus { pending, preparing, ready, completed, cancelled }
+enum OrderStatus {
+  placed,
+  accepted,
+  preparing,
+  readyForPickup,
+  pickedUp,
+  arrivedAtGate,
+  delivered,
+  cancelled
+}
 
 class OrderItem {
   final String name;

@@ -1,57 +1,58 @@
 import 'package:flutter/material.dart';
-import '../services/audio_alert_service.dart';
 import '../models/order_model.dart';
+import '../services/audio_alert_service.dart';
 
 class IncomingOrderDialog extends StatefulWidget {
-  final OrderModel? orderPayload;
-  final Function(OrderModel acceptedOrder)? onAccept;
-  final VoidCallback? onDecline;
+  final OrderModel? order;
+  final Function(OrderModel acceptedOrder) onAccept;
+  final VoidCallback onDecline;
 
   const IncomingOrderDialog({
     super.key,
-    this.orderPayload,
-    this.onAccept,
-    this.onDecline,
+    this.order,
+    required this.onAccept,
+    required this.onDecline,
   });
 
   @override
   State<IncomingOrderDialog> createState() => _IncomingOrderDialogState();
 }
 
-class _IncomingOrderDialogState extends State<IncomingOrderDialog>
-    with SingleTickerProviderStateMixin {
+class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
-  late Animation<double> _pulseAnimation;
+  late Animation<double> _scaleAnimation;
+
   int _selectedPrepTimeMinutes = 15;
   late OrderModel _order;
 
   @override
   void initState() {
     super.initState();
+
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
     )..repeat(reverse: true);
 
-    _pulseAnimation = Tween<double>(begin: 0.97, end: 1.03).animate(
+    _scaleAnimation = Tween<double>(begin: 0.98, end: 1.02).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    _order = widget.orderPayload ??
-        OrderModel(
-          id: '#ord-${8490 + (DateTime.now().second % 10)}',
-          studentName: 'Rahul Sharma',
-          studentLocation: 'Block A, Room 302',
-          items: [
-            OrderItem(name: 'Paneer Butter Masala', quantity: 1, unitPrice: 180),
-            OrderItem(name: 'Tandoori Roti', quantity: 4, unitPrice: 15),
-            OrderItem(name: 'Mango Lassi', quantity: 2, unitPrice: 60),
-          ],
-          totalAmount: 360,
-          prepTimeMinutes: 15,
-          createdAt: DateTime.now(),
-          customerNote: 'Make it extra spicy please! No onions in lassi.',
-        );
+    // Initialize order data or use mock fallback with unique timestamp ID
+    _order = widget.order ?? OrderModel(
+      id: '#ord-${(DateTime.now().millisecondsSinceEpoch % 10000).toString().padLeft(4, '0')}',
+      studentName: 'Aarav Sharma',
+      studentLocation: 'Hostel Block A, R-304',
+      items: [
+        OrderItem(name: 'Special Shahi Paneer Thali', quantity: 2, unitPrice: 180),
+        OrderItem(name: 'Kulhad Sweet Lassi', quantity: 2, unitPrice: 50),
+      ],
+      totalAmount: 460,
+      prepTimeMinutes: 15,
+      createdAt: DateTime.now(),
+      customerNote: 'Make it extra spicy with extra curd please!',
+      status: OrderStatus.placed,
+    );
   }
 
   @override
@@ -63,287 +64,272 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog>
   void _handleAccept() {
     AudioAlertService.stopAlarm();
     _order.prepTimeMinutes = _selectedPrepTimeMinutes;
-    if (widget.onAccept != null) {
-      widget.onAccept!(_order);
-    }
-    Navigator.of(context).pop(true);
+    _order.status = OrderStatus.preparing;
+    widget.onAccept(_order);
+    Navigator.of(context).pop();
   }
 
   void _handleDecline() {
     AudioAlertService.stopAlarm();
-    if (widget.onDecline != null) {
-      widget.onDecline!();
-    }
-    Navigator.of(context).pop(false);
+    widget.onDecline();
+    Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Dialog.fullscreen(
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       child: AnimatedBuilder(
-        animation: _pulseAnimation,
+        animation: _scaleAnimation,
         builder: (context, child) {
-          return Container(
-            color: const Color(0xFFFDD400), // Stitch Gold
-            child: SafeArea(
-              child: Column(
-                children: [
-                  // Header Alert Bar with Pulsing Scale Effect
-                  Transform.scale(
-                    scale: _pulseAnimation.value,
-                    child: Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.all(12),
-                      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF00450D), // Stitch Emerald
-                        borderRadius: BorderRadius.circular(24),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.25),
-                            blurRadius: 12,
-                            offset: const Offset(0, 6),
+          return Transform.scale(
+            scale: _scaleAnimation.value,
+            child: child,
+          );
+        },
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: const Color(0xFFFDD400), width: 4),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFFDD400).withValues(alpha: 0.4),
+                blurRadius: 24,
+                spreadRadius: 4,
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Emergency Header Alert Banner
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFDD400),
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(24),
+                    topRight: Radius.circular(24),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: const [
+                        Icon(Icons.notifications_active, color: Color(0xFF1B1C1C), size: 28),
+                        SizedBox(width: 10),
+                        Text(
+                          'NEW ORDER / नया ऑर्डर',
+                          style: TextStyle(
+                            color: Color(0xFF1B1C1C),
+                            fontWeight: FontWeight.w900,
+                            fontSize: 18,
+                            letterSpacing: 0.5,
                           ),
-                        ],
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: const [
-                              Icon(Icons.notifications_active, color: Color(0xFFFDD400), size: 32),
-                              SizedBox(width: 10),
-                              Text(
-                                'NEW ORDER ARRIVED!',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: 1.5,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            '${_order.id} • ${_order.studentName} (${_order.studentLocation})',
-                            style: const TextStyle(color: Color(0xFFFDD400), fontSize: 15, fontWeight: FontWeight.w700),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
+                        ),
+                      ],
+                    ),
+                    Text(
+                      _order.id,
+                      style: const TextStyle(
+                        color: Color(0xFF1B1C1C),
+                        fontWeight: FontWeight.w900,
+                        fontSize: 16,
                       ),
                     ),
-                  ),
+                  ],
+                ),
+              ),
 
-                  // Middle Content Card
-                  Expanded(
-                    child: Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: const Color(0xFF00450D), width: 3),
-                        boxShadow: const [
-                          BoxShadow(color: Colors.black12, blurRadius: 16, offset: Offset(0, 8)),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Student Dropoff Location
+                    Row(
+                      children: [
+                        const Icon(Icons.location_on, color: Color(0xFF00450D), size: 22),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text(
-                                'Item Checklist:',
-                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF1B1C1C)),
+                              Text(
+                                _order.studentName,
+                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Color(0xFF1B1C1C)),
                               ),
                               Text(
-                                'Total: ₹${_order.totalAmount.toStringAsFixed(0)}',
-                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF00450D)),
+                                _order.studentLocation,
+                                style: const TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold),
                               ),
                             ],
                           ),
-                          const Divider(height: 20, color: Color(0xFFE5E2E1), thickness: 1.5),
+                        ),
+                        Text(
+                          '₹${_order.totalAmount.toStringAsFixed(0)}',
+                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFF00450D)),
+                        ),
+                      ],
+                    ),
 
-                          // Items List
-                          Expanded(
-                            child: ListView.builder(
-                              itemCount: _order.items.length,
-                              itemBuilder: (context, idx) {
-                                final item = _order.items[idx];
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 10),
-                                  padding: const EdgeInsets.all(12),
+                    const SizedBox(height: 14),
+                    const Divider(),
+
+                    // Order Items Checklist List
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 180),
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: _order.items.length,
+                        itemBuilder: (context, index) {
+                          final item = _order.items[index];
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4.0),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFFFCF9F8),
-                                    borderRadius: BorderRadius.circular(14),
-                                    border: Border.all(color: const Color(0xFFE5E2E1)),
+                                    color: const Color(0xFF00450D),
+                                    borderRadius: BorderRadius.circular(8),
                                   ),
-                                  child: Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF00450D),
-                                          borderRadius: BorderRadius.circular(10),
-                                        ),
-                                        child: Text(
-                                          '${item.quantity}x',
-                                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 14),
-                                      Expanded(
-                                        child: Text(
-                                          item.name,
-                                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1B1C1C)),
-                                        ),
-                                      ),
-                                      Text(
-                                        '₹${(item.quantity * item.unitPrice).toStringAsFixed(0)}',
-                                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.grey),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-
-                          // Customer Spice / Special Notes Box
-                          if (_order.customerNote != null && _order.customerNote!.isNotEmpty) ...[
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFFDAD6),
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: const Color(0xFFBA1A1A), width: 2),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: const [
-                                      Icon(Icons.warning_amber_rounded, color: Color(0xFFBA1A1A), size: 20),
-                                      SizedBox(width: 6),
-                                      Text(
-                                        'CUSTOMER SPICE & SPECIAL NOTE:',
-                                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFFBA1A1A)),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    '"${_order.customerNote}"',
-                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Color(0xFF93000A)),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 14),
-                          ],
-
-                          // Preparation Time Selector (10 / 15 / 20 mins)
-                          const Text(
-                            'Select Preparation Time ETA:',
-                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Color(0xFF1B1C1C)),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [10, 15, 20].map((timeOption) {
-                              final isSelected = _selectedPrepTimeMinutes == timeOption;
-                              return Expanded(
-                                child: Container(
-                                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                                  child: ChoiceChip(
-                                    showCheckmark: false,
-                                    label: Padding(
-                                      padding: const EdgeInsets.symmetric(vertical: 6),
-                                      child: Text(
-                                        '$timeOption mins',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w900,
-                                          fontSize: 15,
-                                          color: isSelected ? Colors.white : const Color(0xFF00450D),
-                                        ),
-                                      ),
-                                    ),
-                                    selected: isSelected,
-                                    selectedColor: const Color(0xFF00450D),
-                                    backgroundColor: const Color(0xFFFCF9F8),
-                                    side: BorderSide(
-                                      color: isSelected ? const Color(0xFF00450D) : const Color(0xFFE5E2E1),
-                                      width: 2,
-                                    ),
-                                    onSelected: (selected) {
-                                      if (selected) {
-                                        setState(() => _selectedPrepTimeMinutes = timeOption);
-                                      }
-                                    },
+                                  child: Text(
+                                    '${item.quantity}x',
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 14),
                                   ),
                                 ),
-                              );
-                            }).toList(),
-                          ),
-                        ],
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    item.name,
+                                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF1B1C1C)),
+                                  ),
+                                ),
+                                Text(
+                                  '₹${(item.quantity * item.unitPrice).toStringAsFixed(0)}',
+                                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
                       ),
                     ),
-                  ),
 
-                  // Bottom Giant 64px CTA Action Buttons
-                  Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Row(
+                    // Customer Special Request Note
+                    if (_order.customerNote != null && _order.customerNote!.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFDAD6),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFBA1A1A)),
+                        ),
+                        child: Text(
+                          'Note: "${_order.customerNote}"',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF93000A)),
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 16),
+
+                    // Select Preparation Time ETA
+                    const Text(
+                      'Select Prep Time / समय चुनें:',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Color(0xFF1B1C1C)),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [10, 15, 20, 30].map((timeOption) {
+                        final isSelected = _selectedPrepTimeMinutes == timeOption;
+                        return Expanded(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _selectedPrepTimeMinutes = timeOption),
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(horizontal: 3),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              decoration: BoxDecoration(
+                                color: isSelected ? const Color(0xFF00450D) : const Color(0xFFFCF9F8),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: isSelected ? const Color(0xFF00450D) : const Color(0xFFE5E2E1),
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: Text(
+                                '$timeOption Mins',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 12,
+                                  color: isSelected ? Colors.white : const Color(0xFF1B1C1C),
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+
+                    const SizedBox(height: 20),
+
+                    // Giant 64px Touch Target Buttons (DECLINE / ACCEPT)
+                    Row(
                       children: [
                         Expanded(
+                          flex: 1,
                           child: SizedBox(
-                            height: 64,
-                            child: ElevatedButton.icon(
+                            height: 64, // 64px Standard Touch Target
+                            child: OutlinedButton(
                               onPressed: _handleDecline,
-                              icon: const Icon(Icons.cancel_outlined, color: Colors.white, size: 28),
-                              label: const Text(
-                                'DECLINE',
-                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18, letterSpacing: 1),
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: Color(0xFFBA1A1A), width: 2),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                               ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFBA1A1A), // Crimson Red
-                                elevation: 6,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                              child: const Text(
+                                'DECLINE\nअस्वीकार',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Color(0xFFBA1A1A), fontWeight: FontWeight.w900, fontSize: 13),
                               ),
                             ),
                           ),
                         ),
-                        const SizedBox(width: 14),
+                        const SizedBox(width: 12),
                         Expanded(
-                          flex: 1,
+                          flex: 2,
                           child: SizedBox(
-                            height: 64,
+                            height: 64, // 64px Standard Touch Target
                             child: ElevatedButton.icon(
                               onPressed: _handleAccept,
-                              icon: const Icon(Icons.check_circle_outline, color: Colors.white, size: 28),
-                              label: Text(
-                                'ACCEPT (${_selectedPrepTimeMinutes}M)',
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 17, letterSpacing: 0.5),
+                              icon: const Icon(Icons.check_circle, color: Colors.white, size: 26),
+                              label: const Text(
+                                'ACCEPT ORDER\nस्वीकार करें',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15),
                               ),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF00450D), // Emerald
-                                elevation: 6,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                backgroundColor: const Color(0xFF00450D),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                               ),
                             ),
                           ),
                         ),
                       ],
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            ],
+          ),
+        ),
       ),
     );
   }

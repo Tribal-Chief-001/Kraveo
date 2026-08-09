@@ -46,7 +46,7 @@ class StockCard extends StatelessWidget {
               ),
               onPressed: () {
                 final double? parsed = double.tryParse(textController.text);
-                if (parsed != null && parsed >= 0) {
+                if (parsed != null && parsed > 0) {
                   onUpdatePrice(parsed);
                 }
                 Navigator.pop(context);
@@ -99,9 +99,7 @@ class StockCard extends StatelessWidget {
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.edit_note_rounded, size: 22, color: Color(0xFF00450D)),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
+                  icon: const Icon(Icons.edit_note_rounded, size: 24, color: Color(0xFF00450D)),
                   onPressed: () => _showPriceEditDialog(context),
                   tooltip: 'Edit Price',
                 ),
@@ -123,20 +121,22 @@ class StockCard extends StatelessWidget {
             ),
             const Spacer(),
 
-            // Price & 1-Tap Greasy-Hands Steppers (+10 / -10)
+            // Price & Large 48x48px Touch Stepper Buttons (+10 / -10)
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                IconButton(
-                  onPressed: () {
-                    if (dish.price >= 10) {
-                      onUpdatePrice(dish.price - 10);
-                    }
-                  },
-                  icon: const Icon(Icons.remove_circle_outline, color: Color(0xFFBA1A1A), size: 22),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  tooltip: '-10 Price',
+                SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: IconButton(
+                    onPressed: () {
+                      if (dish.price >= 10) {
+                        onUpdatePrice(dish.price - 10);
+                      }
+                    },
+                    icon: const Icon(Icons.remove_circle_outline, color: Color(0xFFBA1A1A), size: 28),
+                    tooltip: '-10 Price',
+                  ),
                 ),
                 InkWell(
                   onTap: () => _showPriceEditDialog(context),
@@ -153,41 +153,45 @@ class StockCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                IconButton(
-                  onPressed: () {
-                    onUpdatePrice(dish.price + 10);
-                  },
-                  icon: const Icon(Icons.add_circle_outline, color: Color(0xFF00450D), size: 22),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  tooltip: '+10 Price',
+                SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: IconButton(
+                    onPressed: () {
+                      onUpdatePrice(dish.price + 10);
+                    },
+                    icon: const Icon(Icons.add_circle_outline, color: Color(0xFF00450D), size: 28),
+                    tooltip: '+10 Price',
+                  ),
                 ),
               ],
             ),
             const SizedBox(height: 10),
 
-            // Instant IN STOCK / SOLD OUT Toggle Button
-            ElevatedButton.icon(
-              onPressed: onToggleStock,
-              icon: Icon(
-                dish.inStock ? Icons.check_circle : Icons.block,
-                color: Colors.white,
-                size: 18,
-              ),
-              label: Text(
-                dish.inStock ? 'IN STOCK' : 'SOLD OUT',
-                style: const TextStyle(
+            // Instant IN STOCK / SOLD OUT Toggle Button with 56px height & bilingual text
+            SizedBox(
+              height: 54,
+              child: ElevatedButton.icon(
+                onPressed: onToggleStock,
+                icon: Icon(
+                  dish.inStock ? Icons.check_circle : Icons.block,
                   color: Colors.white,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 13,
-                  letterSpacing: 0.5,
+                  size: 20,
                 ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: dish.inStock ? const Color(0xFF00450D) : const Color(0xFFBA1A1A),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                elevation: 2,
+                label: Text(
+                  dish.inStock ? 'IN STOCK / उपलब्ध' : 'SOLD OUT / खत्म',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 12,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: dish.inStock ? const Color(0xFF00450D) : const Color(0xFFBA1A1A),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  elevation: 2,
+                ),
               ),
             ),
           ],

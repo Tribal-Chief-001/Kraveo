@@ -362,6 +362,37 @@ apiRouter.patch('/orders/:id/status', requireAuth, (req: AuthenticatedRequest, r
   return res.json({ success: true, data: order });
 });
 
+// Toggle Vendor Store Open/Closed Status
+apiRouter.patch('/vendors/:id/status', (req: Request, res: Response) => {
+  const { isAcceptingOrders } = req.body;
+  const vendor = vendors.find((v) => v.id === req.params.id);
+
+  if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+
+  if (typeof isAcceptingOrders === 'boolean') {
+    vendor.isAcceptingOrders = isAcceptingOrders;
+  }
+
+  console.log(`🏪 [Vendor Status] Dhaba '${vendor.name}' (${vendor.id}) isAcceptingOrders updated to ${vendor.isAcceptingOrders}`);
+
+  return res.json({ success: true, message: `Store status updated to ${vendor.isAcceptingOrders ? 'OPEN' : 'CLOSED'}`, vendor });
+});
+
+// Update Menu Item Stock Availability & Price
+apiRouter.patch('/vendors/items/:itemId', (req: Request, res: Response) => {
+  const { isAvailable, price } = req.body;
+  const item = menuItems.find((m) => m.id === req.params.itemId);
+
+  if (!item) return res.status(404).json({ success: false, message: 'Menu item not found' });
+
+  if (typeof isAvailable === 'boolean') item.isAvailable = isAvailable;
+  if (typeof price === 'number' && price > 0) item.price = price;
+
+  console.log(`📦 [Inventory Update] Item '${item.name}' (${item.id}) isAvailable=${item.isAvailable}, price=₹${item.price}`);
+
+  return res.json({ success: true, message: 'Menu item updated successfully.', item });
+});
+
 // Accept Driver Assignment
 apiRouter.post('/orders/:id/accept-driver', requireAuth, requireRole('DRIVER', 'ADMIN'), (req: AuthenticatedRequest, res: Response) => {
   const order = orders.find((o) => o.id === req.params.id);

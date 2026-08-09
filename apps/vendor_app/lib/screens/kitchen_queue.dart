@@ -23,8 +23,8 @@ class _KitchenQueueScreenState extends State<KitchenQueueScreen> {
   @override
   Widget build(BuildContext context) {
     // Filter orders
-    final activeOrders = widget.orders.where((o) => o.status == OrderStatus.preparing || o.status == OrderStatus.ready).toList();
-    final completedOrders = widget.orders.where((o) => o.status == OrderStatus.completed || o.status == OrderStatus.cancelled).toList();
+    final activeOrders = widget.orders.where((o) => o.status == OrderStatus.preparing || o.status == OrderStatus.readyForPickup).toList();
+    final completedOrders = widget.orders.where((o) => o.status == OrderStatus.pickedUp || o.status == OrderStatus.delivered || o.status == OrderStatus.cancelled).toList();
 
     final currentList = _selectedTab == 0 ? activeOrders : completedOrders;
 
@@ -37,7 +37,7 @@ class _KitchenQueueScreenState extends State<KitchenQueueScreen> {
     }).toList();
 
     final preparingCount = activeOrders.where((o) => o.status == OrderStatus.preparing).length;
-    final readyCount = activeOrders.where((o) => o.status == OrderStatus.ready).length;
+    final readyCount = activeOrders.where((o) => o.status == OrderStatus.readyForPickup).length;
 
     return Scaffold(
       backgroundColor: const Color(0xFFFCF9F8),

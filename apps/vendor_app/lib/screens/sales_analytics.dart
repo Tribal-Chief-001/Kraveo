@@ -9,7 +9,7 @@ class SalesAnalyticsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Calculate live analytics metrics
-    final completedOrders = orders.where((o) => o.status == OrderStatus.completed).toList();
+    final completedOrders = orders.where((o) => o.status == OrderStatus.delivered || o.status == OrderStatus.pickedUp).toList();
     final totalSales = orders.fold<double>(0, (sum, o) => sum + o.totalAmount);
     final totalCompletedSales = completedOrders.fold<double>(0, (sum, o) => sum + o.totalAmount);
     final totalOrdersCount = orders.length;

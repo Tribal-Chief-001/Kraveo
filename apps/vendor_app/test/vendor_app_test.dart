@@ -47,10 +47,11 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: IncomingOrderDialog(
-              orderPayload: testOrder,
+              order: testOrder,
               onAccept: (order) {
                 accepted = true;
               },
+              onDecline: () {},
             ),
           ),
         ),
@@ -58,12 +59,12 @@ void main() {
 
       await tester.pump(const Duration(milliseconds: 100));
 
-      expect(find.text('NEW ORDER ARRIVED!'), findsOneWidget);
-      expect(find.text('DECLINE'), findsOneWidget);
-      expect(find.textContaining('ACCEPT'), findsOneWidget);
+      expect(find.textContaining('NEW ORDER'), findsOneWidget);
+      expect(find.textContaining('DECLINE'), findsOneWidget);
+      expect(find.textContaining('ACCEPT ORDER'), findsOneWidget);
 
       // Verify button height is 64px
-      final acceptBtnFinder = find.widgetWithText(ElevatedButton, 'ACCEPT (15M)');
+      final acceptBtnFinder = find.widgetWithText(ElevatedButton, 'ACCEPT ORDER\nस्वीकार करें');
       final Size btnSize = tester.getSize(acceptBtnFinder);
       expect(btnSize.height, equals(64.0));
 
@@ -114,7 +115,7 @@ void main() {
       );
 
       expect(find.text('₹180'), findsOneWidget);
-      expect(find.text('IN STOCK'), findsOneWidget);
+      expect(find.textContaining('IN STOCK'), findsOneWidget);
 
       // Tap +10 price stepper icon
       await tester.tap(find.byTooltip('+10 Price'));
@@ -129,10 +130,10 @@ void main() {
       expect(find.text('₹180'), findsOneWidget);
 
       // Tap IN STOCK toggle
-      await tester.tap(find.text('IN STOCK'));
+      await tester.tap(find.textContaining('IN STOCK'));
       await tester.pump();
       expect(inStock, isFalse);
-      expect(find.text('SOLD OUT'), findsOneWidget);
+      expect(find.textContaining('SOLD OUT'), findsOneWidget);
     });
   });
 }

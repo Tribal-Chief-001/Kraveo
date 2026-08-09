@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../services/audio_alert_service.dart';
 import '../services/permission_service.dart';
-import '../widgets/incoming_order_dialog.dart';
+import '../services/vendor_api_service.dart';
+import '../services/order_queue_service.dart';
 import '../models/order_model.dart';
 import '../models/dish_model.dart';
 import 'kitchen_queue.dart';
@@ -18,7 +19,6 @@ class VendorHomeScreen extends StatefulWidget {
 class _VendorHomeScreenState extends State<VendorHomeScreen> {
   int _currentIndex = 0;
   bool isStoreOpen = true;
-  bool isAutoAcceptEnabled = false;
 
   // Master State for Kitchen Orders
   late List<OrderModel> _orders;
@@ -75,7 +75,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
         totalAmount: 480,
         prepTimeMinutes: 20,
         createdAt: DateTime.now().subtract(const Duration(minutes: 18)),
-        status: OrderStatus.ready,
+        status: OrderStatus.readyForPickup,
       ),
     ];
 
@@ -91,33 +91,97 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
   }
 
   void _triggerIncomingOrderAlert() {
-    AudioAlertService.startLoudAlarm();
+    if (!isStoreOpen) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🔴 Store is CLOSED. Open store to accept incoming orders.'),
+          backgroundColor: Color(0xFFBA1A1A),
+        ),
+      );
+      return;
+    }
 
+    final newOrder = OrderModel(
+      id: '#ord-${(DateTime.now().millisecondsSinceEpoch % 10000).toString().padLeft(4, '0')}',
+      studentName: 'Siddharth Roy',
+      studentLocation: 'Hostel Block C, R-210',
+      items: [
+        OrderItem(name: 'Paneer Butter Masala', quantity: 1, unitPrice: 180),
+        OrderItem(name: 'Tandoori Roti', quantity: 4, unitPrice: 15),
+      ],
+      totalAmount: 240,
+      prepTimeMinutes: 15,
+      createdAt: DateTime.now(),
+      status: OrderStatus.placed,
+    );
+
+    OrderQueueService.enqueueIncomingOrder(
+      context,
+      newOrder,
+      (acceptedOrder) {
+        setState(() {
+          _orders.insert(0, acceptedOrder);
+          _currentIndex = 0; // Switch to Kitchen Queue tab
+        });
+
+        // Sync order status to backend API
+        VendorApiService.updateOrderStatus(acceptedOrder.id.replaceAll('#', ''), 'PREPARING');
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Order ${acceptedOrder.id} Accepted! Added to Kitchen Queue.'),
+            backgroundColor: const Color(0xFF00450D),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      },
+    );
+  }
+
+  void _toggleStoreStatusWithConfirmation(bool newValue) {
     showDialog(
       context: context,
-      barrierDismissible: false,
-      builder: (context) => IncomingOrderDialog(
-        onAccept: (acceptedOrder) {
-          setState(() {
-            _orders.insert(0, acceptedOrder);
-            _currentIndex = 0; // Switch to Kitchen Queue tab
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Order ${acceptedOrder.id} Accepted! Added to Kitchen Queue.'),
-              backgroundColor: const Color(0xFF00450D),
-              duration: const Duration(seconds: 4),
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          newValue ? 'Open Store? / दुकान चालू करें?' : 'Close Store? / दुकान बंद करें?',
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        ),
+        content: Text(
+          newValue
+              ? 'Are you sure you want to open Sharma Dhaba for new campus orders?'
+              : 'Are you sure you want to pause incoming orders for Sharma Dhaba?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('CANCEL', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: newValue ? const Color(0xFF00450D) : const Color(0xFFBA1A1A),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-          );
-        },
-        onDecline: () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Incoming Order Declined.'),
-              backgroundColor: Color(0xFFBA1A1A),
+            onPressed: () {
+              Navigator.pop(dialogCtx);
+              setState(() => isStoreOpen = newValue);
+
+              // Sync status to backend
+              VendorApiService.toggleStoreStatus('ven-1', isStoreOpen);
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(isStoreOpen ? '🟢 Store is now OPEN for orders' : '🔴 Store is now CLOSED'),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
+            child: Text(
+              newValue ? 'CONFIRM OPEN' : 'CONFIRM CLOSE',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
             ),
-          );
-        },
+          ),
+        ],
       ),
     );
   }
@@ -140,7 +204,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final activeCount = _orders.where((o) => o.status == OrderStatus.preparing || o.status == OrderStatus.ready).length;
+    final activeCount = _orders.where((o) => o.status == OrderStatus.preparing || o.status == OrderStatus.readyForPickup).length;
 
     return Scaffold(
       backgroundColor: const Color(0xFFFCF9F8),
@@ -175,21 +239,13 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
               ),
             ),
 
-            // Master Store OPEN / CLOSED Switch
+            // Master Store OPEN / CLOSED Switch with Confirmation Guard
             Row(
               children: [
                 Switch(
                   value: isStoreOpen,
                   activeThumbColor: const Color(0xFF00450D),
-                  onChanged: (val) {
-                    setState(() => isStoreOpen = val);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(isStoreOpen ? '🟢 Dhaba is now OPEN for orders' : '🔴 Dhaba is now CLOSED'),
-                        duration: const Duration(seconds: 2),
-                      ),
-                    );
-                  },
+                  onChanged: _toggleStoreStatusWithConfirmation,
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -201,7 +257,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
                     ),
                   ),
                   child: Text(
-                    isStoreOpen ? 'OPEN' : 'CLOSED',
+                    isStoreOpen ? 'OPEN / चालू' : 'CLOSED / बंद',
                     style: TextStyle(
                       color: isStoreOpen ? const Color(0xFF00450D) : const Color(0xFFBA1A1A),
                       fontWeight: FontWeight.w900,
