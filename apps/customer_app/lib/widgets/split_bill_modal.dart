@@ -23,7 +23,7 @@ class _SplitBillModalState extends State<SplitBillModal> {
     buffer.writeln('🏢 Dropoff: ${widget.order.hostel}');
     buffer.writeln('--------------------------------');
     for (final item in widget.order.items) {
-      buffer.writeln('• ${item.quantity}x ${item.item.name} - ₹${(item.quantity * item.item.price).toInt()}');
+      buffer.writeln('• ${item.quantity}x ${item.item.name} - ₹${item.totalPrice.toInt()}');
     }
     buffer.writeln('--------------------------------');
     buffer.writeln('💰 Total Bill: ₹${widget.order.totalAmount.toInt()}');

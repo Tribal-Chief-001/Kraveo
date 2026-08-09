@@ -5,6 +5,7 @@ import '../models/order.dart';
 import '../providers/order_provider.dart';
 import '../providers/cart_provider.dart';
 import '../providers/dhaba_provider.dart';
+import '../widgets/review_modal.dart';
 
 class OrderHistoryScreen extends StatelessWidget {
   const OrderHistoryScreen({super.key});
@@ -144,23 +145,53 @@ class OrderHistoryScreen extends StatelessWidget {
                     ),
                   ],
                 ),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    orderProvider.reorder(order, cart, dhabaProvider);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Items from ${order.dhabaName} added to cart!'),
-                        backgroundColor: AppTheme.primaryEmerald,
+                Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        showModalBottomSheet(
+                          context: context,
+                          isScrollControlled: true,
+                          backgroundColor: Colors.transparent,
+                          builder: (context) => ReviewModal(
+                            orderId: order.id,
+                            dhabaName: order.dhabaName,
+                            driverName: 'Vikram Singh',
+                            dishNames: order.items.map((i) => i.item.name).toList(),
+                            onReviewSubmitted: (coins) {
+                              cart.addKuveraCoins(coins);
+                            },
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.star, size: 16, color: Color(0xFF6F5C00)),
+                      label: const Text('RATE (+10 COINS)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Color(0xFF6F5C00))),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: AppTheme.secondaryGold, width: 1.5),
+                        backgroundColor: AppTheme.secondaryGold.withValues(alpha: 0.2),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
-                    );
-                  },
-                  icon: const Icon(Icons.replay, size: 16),
-                  label: const Text('REORDER', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.secondaryGold,
-                    foregroundColor: AppTheme.secondaryTextGold,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        orderProvider.reorder(order, cart, dhabaProvider);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Items from ${order.dhabaName} added to cart!'),
+                            backgroundColor: AppTheme.primaryEmerald,
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.replay, size: 16),
+                      label: const Text('REORDER', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.secondaryGold,
+                        foregroundColor: AppTheme.secondaryTextGold,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),

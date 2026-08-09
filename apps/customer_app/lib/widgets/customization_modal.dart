@@ -321,6 +321,21 @@ class _CustomizationModalState extends State<CustomizationModal> {
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed: () {
+                    for (final group in widget.item.customizationGroups) {
+                      if (group.isRequired) {
+                        final hasSingle = _singleSelections.containsKey(group.id);
+                        final hasMulti = (_multiSelections[group.id] ?? {}).isNotEmpty;
+                        if (!hasSingle && !hasMulti) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Please select required options for "${group.title}"'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                          return;
+                        }
+                      }
+                    }
                     final notes = _notesController.text.trim();
                     widget.onAddToCart(allSelectedOptions, notes.isEmpty ? null : notes);
                     Navigator.pop(context);

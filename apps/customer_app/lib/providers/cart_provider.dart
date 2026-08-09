@@ -7,29 +7,38 @@ class CartProvider with ChangeNotifier {
   String? _dhabaId;
   String? _dhabaName;
   final List<CartItem> _items = [];
-  
+
   String? _appliedCouponCode;
   double _couponDiscountAmount = 0.0;
   String? _couponError;
+
+  // Kuvera Coins Rewards State
+  int _userKuveraCoins = 80; // Default student coin balance
+  bool _isKuveraCoinsRedeemed = false;
+  double _kuveraCoinsDiscountAmount = 0.0;
 
   // Getters
   String? get dhabaId => _dhabaId;
   String? get dhabaName => _dhabaName;
   List<CartItem> get items => List.unmodifiable(_items);
   int get itemCount => _items.fold(0, (sum, item) => sum + item.quantity);
-  
+
   String? get appliedCouponCode => _appliedCouponCode;
   double get couponDiscountAmount => _couponDiscountAmount;
   String? get couponError => _couponError;
 
+  int get userKuveraCoins => _userKuveraCoins;
+  bool get isKuveraCoinsRedeemed => _isKuveraCoinsRedeemed;
+  double get kuveraCoinsDiscountAmount => _kuveraCoinsDiscountAmount;
+
   double get subtotal => _items.fold(0.0, (sum, item) => sum + item.totalPrice);
-  
+
   double get deliveryFee => _items.isEmpty ? 0.0 : 25.0;
   double get taxAndPackaging => _items.isEmpty ? 0.0 : 15.0;
-  
+
   double get grandTotal {
     if (_items.isEmpty) return 0.0;
-    final total = subtotal + deliveryFee + taxAndPackaging - _couponDiscountAmount;
+    final total = subtotal + deliveryFee + taxAndPackaging - _couponDiscountAmount - _kuveraCoinsDiscountAmount;
     return total < 0 ? 0.0 : total;
   }
 
@@ -40,17 +49,18 @@ class CartProvider with ChangeNotifier {
     List<CustomizationOption> selectedOptions = const [],
     String? specialInstructions,
   }) {
-    // If cart is from another dhaba, prompt to reset or clear
+    // If cart is from another dhaba, reset to new dhaba
     if (_dhabaId != null && _dhabaId != dhabaId) {
       clearCart();
     }
     _dhabaId = dhabaId;
     _dhabaName = dhabaName;
 
-    // Check if identical item with exact same options exists
+    // Check if identical item with exact same options & instructions exists
     final optionIds = selectedOptions.map((o) => o.id).toSet();
     final existingIndex = _items.indexWhere((ci) {
       if (ci.item.id != item.id) return false;
+      if (ci.specialInstructions != specialInstructions) return false;
       final existingOptIds = ci.selectedOptions.map((o) => o.id).toSet();
       return optionIds.length == existingOptIds.length &&
           optionIds.containsAll(existingOptIds);
@@ -114,7 +124,7 @@ class CartProvider with ChangeNotifier {
   bool applyCoupon(String code) {
     _couponError = null;
     final cleanCode = code.trim().toUpperCase();
-    
+
     if (cleanCode.isEmpty) {
       _appliedCouponCode = null;
       _couponDiscountAmount = 0.0;
@@ -136,6 +146,18 @@ class CartProvider with ChangeNotifier {
       _couponDiscountAmount = (subtotal * 0.20).clamp(0.0, 50.0);
       notifyListeners();
       return true;
+    } else if (cleanCode == 'KUVERA20') {
+      if (subtotal < 80) {
+        _appliedCouponCode = null;
+        _couponDiscountAmount = 0.0;
+        _couponError = 'Minimum subtotal of ₹80 required for KUVERA20';
+        notifyListeners();
+        return false;
+      }
+      _appliedCouponCode = 'KUVERA20';
+      _couponDiscountAmount = 20.0;
+      notifyListeners();
+      return true;
     } else if (cleanCode == 'KRAVEO50') {
       if (subtotal < 150) {
         _appliedCouponCode = null;
@@ -151,10 +173,31 @@ class CartProvider with ChangeNotifier {
     } else {
       _appliedCouponCode = null;
       _couponDiscountAmount = 0.0;
-      _couponError = 'Invalid code. Try "VITFIRST" for 20% OFF!';
+      _couponError = 'Invalid code. Try "VITFIRST" or "KUVERA20" for OFF!';
       notifyListeners();
       return false;
     }
+  }
+
+  void toggleKuveraCoinsRedemption() {
+    if (_isKuveraCoinsRedeemed) {
+      _isKuveraCoinsRedeemed = false;
+      _kuveraCoinsDiscountAmount = 0.0;
+    } else {
+      if (_userKuveraCoins < 50) {
+        _couponError = 'Need 50 Kuvera Coins to redeem Flat ₹20 OFF';
+        notifyListeners();
+        return;
+      }
+      _isKuveraCoinsRedeemed = true;
+      _kuveraCoinsDiscountAmount = 20.0;
+    }
+    notifyListeners();
+  }
+
+  void addKuveraCoins(int coins) {
+    _userKuveraCoins += coins;
+    notifyListeners();
   }
 
   void removeCoupon() {
@@ -176,6 +219,8 @@ class CartProvider with ChangeNotifier {
     _items.clear();
     _appliedCouponCode = null;
     _couponDiscountAmount = 0.0;
+    _kuveraCoinsDiscountAmount = 0.0;
+    _isKuveraCoinsRedeemed = false;
     _couponError = null;
     notifyListeners();
   }

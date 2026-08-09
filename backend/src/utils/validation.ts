@@ -11,15 +11,19 @@ export interface OrderValidationResult {
 }
 
 // Recalculates total price on server side to prevent client pricing tampering
-export const validateAndCalculateOrder = (vendorId: string, items: { itemId: string; quantity: number }[]): OrderValidationResult => {
+export const validateAndCalculateOrder = (
+  vendorId: string, 
+  items: { itemId: string; quantity: number }[],
+  couponCode?: string
+): OrderValidationResult => {
   if (!items || items.length === 0) {
     return {
       isValid: false,
       errorMessage: 'Cart cannot be empty.',
       verifiedItems: [],
       calculatedSubtotal: 0,
-      calculatedDeliveryFee: 30,
-      calculatedTotalAmount: 30
+      calculatedDeliveryFee: 25,
+      calculatedTotalAmount: 25
     };
   }
 
@@ -33,8 +37,8 @@ export const validateAndCalculateOrder = (vendorId: string, items: { itemId: str
         errorMessage: `Invalid quantity '${rawItem.quantity}' for item ${rawItem.itemId}.`,
         verifiedItems: [],
         calculatedSubtotal: 0,
-        calculatedDeliveryFee: 30,
-        calculatedTotalAmount: 30
+        calculatedDeliveryFee: 25,
+        calculatedTotalAmount: 25
       };
     }
 
@@ -46,8 +50,8 @@ export const validateAndCalculateOrder = (vendorId: string, items: { itemId: str
         errorMessage: `Item '${rawItem.itemId}' is not available at this dhaba.`,
         verifiedItems: [],
         calculatedSubtotal: 0,
-        calculatedDeliveryFee: 30,
-        calculatedTotalAmount: 30
+        calculatedDeliveryFee: 25,
+        calculatedTotalAmount: 25
       };
     }
 
@@ -57,8 +61,8 @@ export const validateAndCalculateOrder = (vendorId: string, items: { itemId: str
         errorMessage: `Item '${menuItem.name}' is currently SOLD OUT.`,
         verifiedItems: [],
         calculatedSubtotal: 0,
-        calculatedDeliveryFee: 30,
-        calculatedTotalAmount: 30
+        calculatedDeliveryFee: 25,
+        calculatedTotalAmount: 25
       };
     }
 
@@ -73,8 +77,22 @@ export const validateAndCalculateOrder = (vendorId: string, items: { itemId: str
     });
   }
 
-  const deliveryFee = 30; // ₹30 flat campus drop-off fee
-  const totalAmount = subtotal + deliveryFee;
+  const deliveryFee = 25; // ₹25 flat campus drop-off fee
+  const taxAndPackaging = 15; // ₹15 packaging & GST fee
+
+  let discount = 0;
+  if (couponCode) {
+    const code = couponCode.trim().toUpperCase();
+    if (code === 'VITFIRST' && subtotal >= 100) {
+      discount = Math.min(subtotal * 0.20, 50);
+    } else if (code === 'KUVERA20' && subtotal >= 80) {
+      discount = 20;
+    } else if (code === 'KRAVEO50' && subtotal >= 150) {
+      discount = 50;
+    }
+  }
+
+  const totalAmount = Math.max(0, subtotal + deliveryFee + taxAndPackaging - discount);
 
   return {
     isValid: true,

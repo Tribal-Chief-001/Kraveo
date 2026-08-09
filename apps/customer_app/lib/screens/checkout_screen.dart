@@ -4,6 +4,7 @@ import '../theme/app_theme.dart';
 import '../providers/cart_provider.dart';
 import '../providers/order_provider.dart';
 import '../widgets/coupon_box.dart';
+import '../widgets/hostel_dropdown.dart';
 import 'live_tracking_screen.dart';
 
 class CheckoutScreen extends StatefulWidget {
@@ -153,17 +154,43 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
-                      children: const [
-                        Icon(Icons.location_on, color: AppTheme.primaryEmerald, size: 20),
-                        SizedBox(width: 8),
-                        Text(
-                          'DELIVERY HOSTEL GATE',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            color: AppTheme.primaryEmerald,
-                            letterSpacing: 0.5,
-                          ),
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: const [
+                            Icon(Icons.location_on, color: AppTheme.primaryEmerald, size: 20),
+                            SizedBox(width: 8),
+                            Text(
+                              'DELIVERY HOSTEL GATE',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: AppTheme.primaryEmerald,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                        HostelDropdown(
+                          selectedHostel: _currentHostel,
+                          onChanged: (newHostel) {
+                            if (newHostel != null) {
+                              setState(() {
+                                _currentHostel = newHostel;
+                              });
+                            }
+                          },
+                          hostelBlocks: const [
+                            'Block 1',
+                            'Block 2',
+                            'Block 3',
+                            'Block 4',
+                            'Block 5',
+                            'Block 6',
+                            'Girls Gate 1',
+                            'Girls Gate 2',
+                            'VIT Main Gate',
+                          ],
                         ),
                       ],
                     ),
@@ -192,6 +219,53 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                           borderSide: BorderSide.none,
                         ),
                       ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Kuvera Coins Loyalty Rewards Card
+            Card(
+              color: const Color(0xFFFDD400).withValues(alpha: 0.15),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: Color(0xFFFDD400), width: 1.5),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(14.0),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFFDD400),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.monetization_on, color: Color(0xFF1B1C1C), size: 22),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Kuvera Coins (${cart.userKuveraCoins} Coins)',
+                            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppTheme.textDark),
+                          ),
+                          const SizedBox(height: 2),
+                          const Text(
+                            'Redeem 50 Coins for Flat ₹20 OFF',
+                            style: TextStyle(fontSize: 12, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: cart.isKuveraCoinsRedeemed,
+                      activeColor: AppTheme.primaryEmerald,
+                      onChanged: (val) => cart.toggleKuveraCoinsRedemption(),
                     ),
                   ],
                 ),
