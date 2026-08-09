@@ -13,7 +13,7 @@ class RunnerIdCardScreen extends StatelessWidget {
         title: const Text(
           'CAMPUS RUNNER PASS & ID',
           style: TextStyle(
-            fontWeight: FontWeight.extrabold,
+            fontWeight: FontWeight.w800,
             fontSize: 15,
             letterSpacing: 0.8,
             color: Colors.white,
@@ -62,7 +62,7 @@ class RunnerIdCardScreen extends StatelessWidget {
                               'OFFICIAL KRAVEO PASS',
                               style: TextStyle(
                                 color: Colors.white,
-                                fontWeight: FontWeight.extrabold,
+                                fontWeight: FontWeight.w800,
                                 fontSize: 13,
                                 letterSpacing: 0.5,
                               ),
@@ -129,7 +129,7 @@ class RunnerIdCardScreen extends StatelessWidget {
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 22,
-                            fontWeight: FontWeight.extrabold,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -155,7 +155,7 @@ class RunnerIdCardScreen extends StatelessWidget {
                               const SizedBox(height: 12),
                               _buildDetailRow(Icons.two_wheeler, 'Vehicle Info', 'TVS Jupiter (MP 04 AB 1234)'),
                               const SizedBox(height: 12),
-                              _buildDetailRow(Icons.phone_emergency, 'Emergency Contact', '+91 98989 12345'),
+                              _buildDetailRow(Icons.phone, 'Emergency Contact', '+91 98989 12345'),
                               const SizedBox(height: 12),
                               _buildDetailRow(Icons.location_on, 'Campus Gate Access', 'All Hostel Blocks (1-6 & Girls Gate)'),
                             ],

@@ -3,9 +3,11 @@ import '../widgets/duty_toggle.dart';
 import '../widgets/earnings_card.dart';
 import '../widgets/swipe_accept_card.dart';
 import '../widgets/pipeline_stepper.dart';
+import '../services/driver_api_service.dart';
 import 'active_delivery.dart';
 import 'earnings_history.dart';
 import 'trip_logs.dart';
+import 'runner_id_card_screen.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -28,6 +30,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       currentStep = 0;
       selectedTab = 1; // Switch to Active Delivery tab
     });
+
+    // Sync job acceptance to AWS EC2 backend
+    DriverApiService.acceptJob('ord-101');
+
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Job Accepted! Navigating to Active Delivery Console...'),
@@ -46,6 +52,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       selectedTab = 0; // Return to main dashboard
     });
 
+    // Sync delivery completion to backend
+    DriverApiService.updateDeliveryStatus('ord-101', 'DELIVERED', otpCode: '1234');
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -60,8 +69,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 color: Color(0xFF00450D),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.check_circle_outline,
-                  color: Color(0xFF91D78A), size: 48),
+              child: const Icon(Icons.check_circle_outline, color: Color(0xFF91D78A), size: 48),
             ),
             const SizedBox(height: 16),
             const Text(
@@ -85,21 +93,42 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             const SizedBox(height: 20),
             SizedBox(
               width: double.infinity,
+              height: 52,
               child: ElevatedButton(
                 onPressed: () => Navigator.pop(context),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFFDD400),
-                  foregroundColor: const Color(0xFF6F5C00),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16)),
+                  foregroundColor: const Color(0xFF1B1C1C),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
-                child: const Text('BACK TO DASHBOARD',
-                    style: TextStyle(fontWeight: FontWeight.w900)),
+                child: const Text('BACK TO DASHBOARD', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14)),
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  void _callCampusAdminSupport() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.phone_in_talk, color: Color(0xFFFDD400)),
+            SizedBox(width: 10),
+            Text('Calling Kraveo Campus Dispatch SOS Hotline: +91 98765 43214', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        backgroundColor: Color(0xFF00450D),
+        duration: Duration(seconds: 4),
+      ),
+    );
+  }
+
+  void _openRunnerPass() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => const RunnerIdCardScreen()),
     );
   }
 
@@ -129,16 +158,25 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           ],
         ),
         actions: [
+          // Runner Pass ID Button
+          IconButton(
+            icon: const Icon(Icons.badge, color: gold),
+            tooltip: 'View Runner Security Pass',
+            onPressed: _openRunnerPass,
+          ),
+          // Emergency SOS Call Button
+          IconButton(
+            icon: const Icon(Icons.sos, color: Colors.redAccent),
+            tooltip: 'Emergency Campus Support',
+            onPressed: _callCampusAdminSupport,
+          ),
           Padding(
-            padding: const EdgeInsets.only(right: 16.0),
+            padding: const EdgeInsets.only(right: 12.0),
             child: DutyToggle(
               isOnline: isOnline,
               onChanged: (val) {
                 setState(() {
                   isOnline = val;
-                  if (!val && hasActiveJob) {
-                    // Stay online if active job
-                  }
                 });
               },
             ),
@@ -248,8 +286,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.pause_circle_outline,
-                      color: Colors.redAccent, size: 28),
+                  const Icon(Icons.pause_circle_outline, color: Colors.redAccent, size: 28),
                   const SizedBox(width: 14),
                   Expanded(
                     child: Column(
@@ -266,8 +303,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                         const SizedBox(height: 2),
                         Text(
                           'Switch Duty Online in the top right to start receiving campus delivery requests.',
-                          style: TextStyle(
-                              color: Colors.grey.shade300, fontSize: 12),
+                          style: TextStyle(color: Colors.grey.shade300, fontSize: 12),
                         ),
                       ],
                     ),
@@ -346,7 +382,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   const SizedBox(height: 16),
                   SizedBox(
                     width: double.infinity,
-                    height: 50,
+                    height: 52,
                     child: ElevatedButton.icon(
                       onPressed: () {
                         setState(() {
@@ -423,13 +459,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFFDD400),
-                foregroundColor: const Color(0xFF6F5C00),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
+                foregroundColor: const Color(0xFF1B1C1C),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               ),
-              child: const Text('GO TO CONSOLE',
-                  style: TextStyle(fontWeight: FontWeight.w900)),
+              child: const Text('GO TO CONSOLE', style: TextStyle(fontWeight: FontWeight.w900)),
             ),
           ],
         ),

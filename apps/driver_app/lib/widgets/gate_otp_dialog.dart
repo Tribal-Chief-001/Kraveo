@@ -53,7 +53,7 @@ class _GateOtpDialogState extends State<GateOtpDialog> {
     });
 
     Future.delayed(const Duration(milliseconds: 600), () {
-      if (enteredOtp == widget.expectedOtp || enteredOtp == '1234' || enteredOtp == '4829') {
+      if (enteredOtp == widget.expectedOtp) {
         if (!mounted) return;
         Navigator.of(context).pop();
         widget.onVerified();

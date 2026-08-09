@@ -64,12 +64,12 @@ class _SwipeAcceptCardState extends State<SwipeAcceptCard> {
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.bolt, color: goldDark, size: 18),
+                      Icon(Icons.bolt, color: Color(0xFF1B1C1C), size: 18),
                       SizedBox(width: 4),
                       Text(
                         'EARN ₹40',
                         style: TextStyle(
-                          color: goldDark,
+                          color: Color(0xFF1B1C1C),
                           fontWeight: FontWeight.w900,
                           fontSize: 15,
                           letterSpacing: 0.5,

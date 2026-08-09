@@ -396,20 +396,22 @@ apiRouter.patch('/vendors/items/:itemId', (req: Request, res: Response) => {
 // Accept Driver Assignment
 apiRouter.post('/orders/:id/accept-driver', requireAuth, requireRole('DRIVER', 'ADMIN'), (req: AuthenticatedRequest, res: Response) => {
   const order = orders.find((o) => o.id === req.params.id);
-
   if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
 
-  if (order.driverId) {
+  if (order.driverId && order.driverId !== req.user?.id) {
     return res.status(400).json({ success: false, message: 'Order is already assigned to another runner.' });
   }
 
+  const fullUser = users.find((u) => u.id === req.user?.id);
   order.driverId = req.user?.id || 'usr-4';
-  order.driverName = 'Vikram Singh (Runner)';
-  order.driverPhone = req.user?.phone || '+91 9876543213';
+  order.driverName = fullUser?.name || 'Vikram Singh';
+  order.driverPhone = fullUser?.phone || req.user?.phone || '+91 9876543213';
   if (order.status === 'PLACED') {
     order.status = 'ACCEPTED';
   }
   order.updatedAt = new Date().toISOString();
+
+  console.log(`🛵 [Driver Assignment] Runner '${order.driverName}' (${order.driverId}) accepted Order #${order.id}`);
 
   const io = req.app.get('io');
   if (io) {
