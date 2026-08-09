@@ -14,7 +14,7 @@ export const App: React.FC = () => {
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(true);
 
   // Initial Driver Partners State
-  const [driverPartners] = useState<DriverPartner[]>([
+  const [driverPartners, setDriverPartners] = useState<DriverPartner[]>([
     {
       id: 'usr-4',
       name: 'Vikram Singh',
@@ -168,16 +168,35 @@ export const App: React.FC = () => {
   // Attempt real API fetch if server is running
   const fetchBackendData = async () => {
     try {
-      const res = await fetch('http://localhost:5000/api/orders');
-      if (res.ok) {
-        const json = await res.json();
+      const [ordersRes, vendorsRes, driversRes] = await Promise.all([
+        fetch('http://localhost:5000/api/orders'),
+        fetch('http://localhost:5000/api/vendors'),
+        fetch('http://localhost:5000/api/drivers'),
+      ]);
+
+      if (ordersRes.ok) {
+        const json = await ordersRes.json();
         if (json.data && json.data.length > 0) {
           setOrders(json.data);
           setIsLiveConnected(true);
         }
       }
+
+      if (vendorsRes.ok) {
+        const json = await vendorsRes.json();
+        if (json.data && json.data.length > 0) {
+          setVendors(json.data);
+        }
+      }
+
+      if (driversRes.ok) {
+        const json = await driversRes.json();
+        if (json.data && json.data.length > 0) {
+          setDriverPartners(json.data);
+        }
+      }
     } catch {
-      // Backend server running independently or offline fallback
+      // Offline fallback or standalone mode
     }
   };
 
@@ -237,7 +256,7 @@ export const App: React.FC = () => {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer mock-admin-token'
+          'Authorization': 'Bearer mock_jwt_token_usr-5'
         },
         body: JSON.stringify({ status })
       });
@@ -246,14 +265,31 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleToggleVendor = (vendorId: string) => {
+  const handleToggleVendor = async (vendorId: string) => {
+    const targetVendor = vendors.find((v) => v.id === vendorId);
+    if (!targetVendor) return;
+
+    const newStatus = !targetVendor.isAcceptingOrders;
+
     setVendors((prev) =>
-      prev.map((v) => (v.id === vendorId ? { ...v, isAcceptingOrders: !v.isAcceptingOrders } : v))
+      prev.map((v) => (v.id === vendorId ? { ...v, isAcceptingOrders: newStatus } : v))
     );
+
+    try {
+      await fetch(`http://localhost:5000/api/vendors/${vendorId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isAcceptingOrders: newStatus }),
+      });
+    } catch (e) {
+      console.log('Backend vendor status toggle fallback:', e);
+    }
   };
 
   const handleReassignDriver = (orderId: string) => {
-    alert(`Reassigning runner for Order ${orderId}... System broadcasting job to nearby available drivers.`);
+    setOrders((prev) =>
+      prev.map((o) => (o.id === orderId ? { ...o, driverName: 'Reassigning...', status: 'PLACED' } : o))
+    );
   };
 
   return (
@@ -287,6 +323,7 @@ export const App: React.FC = () => {
             <VendorManager 
               vendors={vendors} 
               onToggleVendor={handleToggleVendor} 
+              onAddVendor={(newVendor) => setVendors((prev) => [...prev, newVendor])}
             />
           )}
 

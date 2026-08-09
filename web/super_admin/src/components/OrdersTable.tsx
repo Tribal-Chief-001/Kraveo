@@ -12,11 +12,13 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, onStatusChange
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
   const filteredOrders = orders.filter((o) => {
+    const q = searchTerm.toLowerCase();
     const matchesSearch = 
-      o.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      o.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      o.vendorName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      o.dropoffHostel.toLowerCase().includes(searchTerm.toLowerCase());
+      (o.id && o.id.toLowerCase().includes(q)) ||
+      (o.customerName && o.customerName.toLowerCase().includes(q)) ||
+      (o.vendorName && o.vendorName.toLowerCase().includes(q)) ||
+      (o.dropoffHostel && o.dropoffHostel.toLowerCase().includes(q)) ||
+      (o.driverName && o.driverName.toLowerCase().includes(q));
     
     const matchesStatus = statusFilter === 'ALL' || o.status === statusFilter;
     return matchesSearch && matchesStatus;
@@ -27,6 +29,7 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, onStatusChange
       case 'PLACED': return 'bg-blue-500/10 text-blue-400 border-blue-500/30';
       case 'ACCEPTED': return 'bg-purple-500/10 text-purple-400 border-purple-500/30';
       case 'PREPARING': return 'bg-amber-500/10 text-amber-400 border-amber-500/30';
+      case 'READY_FOR_PICKUP': return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30';
       case 'PICKED_UP': return 'bg-orange-500/10 text-orange-400 border-orange-500/30';
       case 'ARRIVED_AT_GATE': return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 animate-pulse';
       case 'DELIVERED': return 'bg-green-500/10 text-green-400 border-green-500/30';
@@ -41,7 +44,7 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, onStatusChange
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <ShieldCheck className="w-5 h-5 text-orange-500" /> Kraveo Order Command Matrix
+            <ShieldCheck className="w-5 h-5 text-[#fdd400]" /> Kraveo Order Command Matrix
           </h2>
           <p className="text-xs text-gray-400">Manage real-time order states, driver dispatches, and gate deliveries</p>
         </div>
@@ -52,16 +55,16 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, onStatusChange
             <Search className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
             <input
               type="text"
-              placeholder="Search ID, Student, Dhaba, Hostel..."
+              placeholder="Search ID, Student, Dhaba, Driver..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="bg-[#0B0F19] border border-[#242F46] rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-orange-500 w-64"
+              className="bg-[#0B0F19] border border-[#242F46] rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-[#fdd400] w-64"
             />
           </div>
 
           {/* Status Filter */}
           <div className="flex items-center gap-2 bg-[#0B0F19] border border-[#242F46] rounded-xl px-3 py-2 text-xs text-gray-300">
-            <Filter className="w-4 h-4 text-orange-500" />
+            <Filter className="w-4 h-4 text-[#fdd400]" />
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
@@ -69,10 +72,13 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, onStatusChange
             >
               <option value="ALL">All Statuses</option>
               <option value="PLACED">Placed</option>
+              <option value="ACCEPTED">Accepted</option>
               <option value="PREPARING">Preparing</option>
+              <option value="READY_FOR_PICKUP">Ready for Pickup</option>
               <option value="PICKED_UP">Picked Up</option>
               <option value="ARRIVED_AT_GATE">Arrived at Gate</option>
               <option value="DELIVERED">Delivered</option>
+              <option value="CANCELLED">Cancelled</option>
             </select>
           </div>
         </div>
@@ -122,10 +128,12 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, onStatusChange
                   <select
                     value={ord.status}
                     onChange={(e) => onStatusChange(ord.id, e.target.value as OrderStatus)}
-                    className="bg-[#0B0F19] text-gray-200 border border-[#242F46] rounded-lg px-2 py-1 text-[11px] font-bold focus:border-orange-500 cursor-pointer"
+                    className="bg-[#0B0F19] text-gray-200 border border-[#242F46] rounded-lg px-2 py-1 text-[11px] font-bold focus:border-[#fdd400] cursor-pointer"
                   >
                     <option value="PLACED">Set PLACED</option>
+                    <option value="ACCEPTED">Set ACCEPTED</option>
                     <option value="PREPARING">Set PREPARING</option>
+                    <option value="READY_FOR_PICKUP">Set READY FOR PICKUP</option>
                     <option value="PICKED_UP">Set PICKED UP</option>
                     <option value="ARRIVED_AT_GATE">Set ARRIVED AT GATE</option>
                     <option value="DELIVERED">Set DELIVERED</option>
