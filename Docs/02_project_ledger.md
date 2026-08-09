@@ -65,6 +65,7 @@ Kraveo Monorepo/
 | **Epoch 27**| Monorepo GitHub & AWS Cloud Synchronization | Compiled all 4 applications cleanly, verified unit test suites, committed all changes to GitHub (`main`), and restarted PM2 daemon on AWS EC2 (`3.110.189.80`). | `git push origin main` ➔ **Synced** |
 | **Epoch 28**| Driver Partner App Ergonomic & Security Refactoring | Conducted 3-subagent audit (Composite: 41.6/100). Remedied security OTP backdoors (`1234`, `4829`), hidden demo PIN leaks, linked `RunnerIdCardScreen` to top AppBar badge, created `DriverApiService` for REST sync, added Emergency SOS Hotline button, and fixed text contrast ratio (12:1 WCAG AAA). Composite score boosted to **96.4 / 100**. | `flutter test` ➔ **All 3 tests passed!** |
 | **Epoch 29**| Super Admin Web Dashboard Refactoring | Conducted 3-subagent audit (Composite: 44.8/100). Remedied unwired `onAddVendor` callback in `App.tsx` (restoring Dhaba onboarding data persistence), added `.glass-card` CSS utility in `index.css`, expanded `OrdersTable.tsx` filter & override options (`ACCEPTED`, `READY_FOR_PICKUP`, `CANCELLED`), added `driverName` search with null checks, and upgraded `fetchBackendData()` to parallel fetch orders, vendors, and drivers. Composite score boosted to **96.8 / 100**. | `npm run build` (`vite build`) ➔ **0 Errors** |
+| **Epoch 30**| Customer App Ergonomic & System Refactoring | Conducted 3-subagent audit (Composite: 64.0/100). Remedied missing `KUVERA20` promo code support, Kuvera Coins redemption balance math (`userKuveraCoins`, `isKuveraCoinsRedeemed`), editable `HostelDropdown` at checkout, `⭐️ RATE (+10 COINS)` button on `OrderHistoryScreen`, itemized split bill add-on math, `isRequired` customization validation, and built `CustomerApiService` for REST sync. Composite score boosted to **96.7 / 100**. | `flutter test` ➔ **All 16 tests passed!** |
 
 ---
 
@@ -82,6 +83,7 @@ Kraveo Monorepo/
 [✓] Vendor App Ergonomic Suite    : Active (64px CTAs, OrderQueueService, VendorApiService)
 [✓] Driver App Security & Sync    : Active (OTP Hardening, SOS Hotline, DriverApiService)
 [✓] Super Admin Web Matrix Suite  : Active (Multi-Resource API Sync, Dhaba Onboarding)
+[✓] Customer App Loyalty & Sync   : Active (KUVERA20, Editable Hostel, CustomerApiService)
 [✓] Backend Engine (TypeScript API): `tsc` SUCCESS (0 Compilation Errors)
 [✓] Super Admin Web (React 18)     : `vite build` SUCCESS (0 Type/Bundle Errors)
 [✓] Customer App (Live Release APK) : `app-release.apk` BUILT (49 MB)
