@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/audio_alert_service.dart';
+import '../services/permission_service.dart';
 import '../widgets/incoming_order_dialog.dart';
 import '../models/order_model.dart';
 import '../models/dish_model.dart';
@@ -17,6 +18,7 @@ class VendorHomeScreen extends StatefulWidget {
 class _VendorHomeScreenState extends State<VendorHomeScreen> {
   int _currentIndex = 0;
   bool isStoreOpen = true;
+  bool isAutoAcceptEnabled = false;
 
   // Master State for Kitchen Orders
   late List<OrderModel> _orders;
@@ -28,6 +30,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
   void initState() {
     super.initState();
     _initSampleData();
+    PermissionService.requestVendorPermissions();
   }
 
   void _initSampleData() {
@@ -119,6 +122,22 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     );
   }
 
+  void _callCampusAdminSupport() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.phone_in_talk, color: Color(0xFFFDD400)),
+            SizedBox(width: 10),
+            Text('Calling Kraveo Campus Ops Helpline: +91 98765 43214', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        backgroundColor: Color(0xFF00450D),
+        duration: Duration(seconds: 4),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final activeCount = _orders.where((o) => o.status == OrderStatus.preparing || o.status == OrderStatus.ready).length;
@@ -145,7 +164,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
                 children: const [
                   Text(
                     'FC Night Mess',
-                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: Color(0xFF1B1C1C)),
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 17, color: Color(0xFF1B1C1C)),
                     overflow: TextOverflow.ellipsis,
                   ),
                   Text(
@@ -155,6 +174,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
                 ],
               ),
             ),
+
+            // Master Store OPEN / CLOSED Switch
             Row(
               children: [
                 Switch(
@@ -164,7 +185,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
                     setState(() => isStoreOpen = val);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text(isStoreOpen ? 'Store is now OPEN for orders' : 'Store is now CLOSED'),
+                        content: Text(isStoreOpen ? '🟢 Dhaba is now OPEN for orders' : '🔴 Dhaba is now CLOSED'),
                         duration: const Duration(seconds: 2),
                       ),
                     );
@@ -184,9 +205,14 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
                     style: TextStyle(
                       color: isStoreOpen ? const Color(0xFF00450D) : const Color(0xFFBA1A1A),
                       fontWeight: FontWeight.w900,
-                      fontSize: 11,
+                      fontSize: 10,
                     ),
                   ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.headset_mic_rounded, color: Color(0xFF00450D)),
+                  tooltip: 'Call Kraveo Campus Ops Support',
+                  onPressed: _callCampusAdminSupport,
                 ),
               ],
             ),
