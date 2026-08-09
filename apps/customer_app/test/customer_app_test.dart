@@ -109,22 +109,22 @@ void main() {
       expect(cart.couponDiscountAmount, equals(50.0)); // 20% of 360 = 72, capped at 50
     });
 
-    test('Promo Code KUVERA20 - Flat ₹20 OFF calculation', () {
+    test('Promo Code KRAVEO20 - Flat ₹20 OFF calculation', () {
       cart.addItem(item: dummyItem1, dhabaId: 'ven-1', dhabaName: 'Sharma Dhaba'); // ₹180 subtotal
-      final result = cart.applyCoupon('KUVERA20');
+      final result = cart.applyCoupon('KRAVEO20');
 
       expect(result, isTrue);
-      expect(cart.appliedCouponCode, equals('KUVERA20'));
+      expect(cart.appliedCouponCode, equals('KRAVEO20'));
       expect(cart.couponDiscountAmount, equals(20.0));
       expect(cart.grandTotal, equals(200.0)); // 180 + 25 + 15 - 20
     });
 
-    test('Kuvera Coins Redemption - Flat ₹20 OFF math', () {
+    test('Kraveo Coins Redemption - Flat ₹20 OFF math', () {
       cart.addItem(item: dummyItem1, dhabaId: 'ven-1', dhabaName: 'Sharma Dhaba'); // ₹180 subtotal
-      cart.toggleKuveraCoinsRedemption();
+      cart.toggleKraveoCoinsRedemption();
 
-      expect(cart.isKuveraCoinsRedeemed, isTrue);
-      expect(cart.kuveraCoinsDiscountAmount, equals(20.0));
+      expect(cart.isKraveoCoinsRedeemed, isTrue);
+      expect(cart.kraveoCoinsDiscountAmount, equals(20.0));
       expect(cart.grandTotal, equals(200.0)); // 180 + 25 + 15 - 20
     });
 

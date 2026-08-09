@@ -226,7 +226,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ),
             const SizedBox(height: 16),
 
-            // Kuvera Coins Loyalty Rewards Card
+            // Kraveo Coins Loyalty Rewards Card
             Card(
               color: const Color(0xFFFDD400).withValues(alpha: 0.15),
               shape: RoundedRectangleBorder(
@@ -251,7 +251,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Kuvera Coins (${cart.userKuveraCoins} Coins)',
+                            'Kraveo Coins (${cart.userKraveoCoins} Coins)',
                             style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppTheme.textDark),
                           ),
                           const SizedBox(height: 2),
@@ -263,9 +263,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       ),
                     ),
                     Switch(
-                      value: cart.isKuveraCoinsRedeemed,
+                      value: cart.isKraveoCoinsRedeemed,
                       activeColor: AppTheme.primaryEmerald,
-                      onChanged: (val) => cart.toggleKuveraCoinsRedemption(),
+                      onChanged: (val) => cart.toggleKraveoCoinsRedemption(),
                     ),
                   ],
                 ),

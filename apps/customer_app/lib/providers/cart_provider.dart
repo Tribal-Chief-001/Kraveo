@@ -12,10 +12,10 @@ class CartProvider with ChangeNotifier {
   double _couponDiscountAmount = 0.0;
   String? _couponError;
 
-  // Kuvera Coins Rewards State
-  int _userKuveraCoins = 80; // Default student coin balance
-  bool _isKuveraCoinsRedeemed = false;
-  double _kuveraCoinsDiscountAmount = 0.0;
+  // Kraveo Coins Rewards State
+  int _userKraveoCoins = 80; // Default student coin balance
+  bool _isKraveoCoinsRedeemed = false;
+  double _kraveoCoinsDiscountAmount = 0.0;
 
   // Getters
   String? get dhabaId => _dhabaId;
@@ -27,9 +27,9 @@ class CartProvider with ChangeNotifier {
   double get couponDiscountAmount => _couponDiscountAmount;
   String? get couponError => _couponError;
 
-  int get userKuveraCoins => _userKuveraCoins;
-  bool get isKuveraCoinsRedeemed => _isKuveraCoinsRedeemed;
-  double get kuveraCoinsDiscountAmount => _kuveraCoinsDiscountAmount;
+  int get userKraveoCoins => _userKraveoCoins;
+  bool get isKraveoCoinsRedeemed => _isKraveoCoinsRedeemed;
+  double get kraveoCoinsDiscountAmount => _kraveoCoinsDiscountAmount;
 
   double get subtotal => _items.fold(0.0, (sum, item) => sum + item.totalPrice);
 
@@ -38,7 +38,7 @@ class CartProvider with ChangeNotifier {
 
   double get grandTotal {
     if (_items.isEmpty) return 0.0;
-    final total = subtotal + deliveryFee + taxAndPackaging - _couponDiscountAmount - _kuveraCoinsDiscountAmount;
+    final total = subtotal + deliveryFee + taxAndPackaging - _couponDiscountAmount - _kraveoCoinsDiscountAmount;
     return total < 0 ? 0.0 : total;
   }
 
@@ -146,15 +146,15 @@ class CartProvider with ChangeNotifier {
       _couponDiscountAmount = (subtotal * 0.20).clamp(0.0, 50.0);
       notifyListeners();
       return true;
-    } else if (cleanCode == 'KUVERA20') {
+    } else if (cleanCode == 'KRAVEO20') {
       if (subtotal < 80) {
         _appliedCouponCode = null;
         _couponDiscountAmount = 0.0;
-        _couponError = 'Minimum subtotal of ₹80 required for KUVERA20';
+        _couponError = 'Minimum subtotal of ₹80 required for KRAVEO20';
         notifyListeners();
         return false;
       }
-      _appliedCouponCode = 'KUVERA20';
+      _appliedCouponCode = 'KRAVEO20';
       _couponDiscountAmount = 20.0;
       notifyListeners();
       return true;
@@ -173,30 +173,30 @@ class CartProvider with ChangeNotifier {
     } else {
       _appliedCouponCode = null;
       _couponDiscountAmount = 0.0;
-      _couponError = 'Invalid code. Try "VITFIRST" or "KUVERA20" for OFF!';
+      _couponError = 'Invalid code. Try "VITFIRST" or "KRAVEO20" for OFF!';
       notifyListeners();
       return false;
     }
   }
 
-  void toggleKuveraCoinsRedemption() {
-    if (_isKuveraCoinsRedeemed) {
-      _isKuveraCoinsRedeemed = false;
-      _kuveraCoinsDiscountAmount = 0.0;
+  void toggleKraveoCoinsRedemption() {
+    if (_isKraveoCoinsRedeemed) {
+      _isKraveoCoinsRedeemed = false;
+      _kraveoCoinsDiscountAmount = 0.0;
     } else {
-      if (_userKuveraCoins < 50) {
-        _couponError = 'Need 50 Kuvera Coins to redeem Flat ₹20 OFF';
+      if (_userKraveoCoins < 50) {
+        _couponError = 'Need 50 Kraveo Coins to redeem Flat ₹20 OFF';
         notifyListeners();
         return;
       }
-      _isKuveraCoinsRedeemed = true;
-      _kuveraCoinsDiscountAmount = 20.0;
+      _isKraveoCoinsRedeemed = true;
+      _kraveoCoinsDiscountAmount = 20.0;
     }
     notifyListeners();
   }
 
-  void addKuveraCoins(int coins) {
-    _userKuveraCoins += coins;
+  void addKraveoCoins(int coins) {
+    _userKraveoCoins += coins;
     notifyListeners();
   }
 
@@ -219,8 +219,8 @@ class CartProvider with ChangeNotifier {
     _items.clear();
     _appliedCouponCode = null;
     _couponDiscountAmount = 0.0;
-    _kuveraCoinsDiscountAmount = 0.0;
-    _isKuveraCoinsRedeemed = false;
+    _kraveoCoinsDiscountAmount = 0.0;
+    _isKraveoCoinsRedeemed = false;
     _couponError = null;
     notifyListeners();
   }

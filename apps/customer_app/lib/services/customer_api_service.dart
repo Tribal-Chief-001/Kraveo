@@ -68,7 +68,7 @@ class CustomerApiService {
     return false;
   }
 
-  /// Submits dish & runner review, awarding +10 Kuvera Coins
+  /// Submits dish & runner review, awarding +10 Kraveo Coins
   static Future<bool> submitReview({
     required String orderId,
     required double dhabaRating,
@@ -92,7 +92,7 @@ class CustomerApiService {
       ).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
-        print('⭐️ [Customer API] Review submitted! +10 Kuvera Coins awarded.');
+        print('⭐️ [Customer API] Review submitted! +10 Kraveo Coins awarded.');
         return true;
       }
     } catch (e) {

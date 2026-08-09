@@ -16,7 +16,7 @@ export interface User {
   phone: string;
   role: UserRole;
   hostelBlock?: string;
-  kuveraCoins?: number;
+  kraveoCoins?: number;
   createdAt: string;
 }
 

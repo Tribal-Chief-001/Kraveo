@@ -457,10 +457,10 @@ apiRouter.post('/drivers/location', requireAuth, requireRole('DRIVER', 'ADMIN'),
 });
 
 // ----------------------------------------------------
-// REVIEWS & KUVERA COIN LOYALTY REWARDS ENDPOINTS
+// REVIEWS & KRAVEO COIN LOYALTY REWARDS ENDPOINTS
 // ----------------------------------------------------
 
-// Submit Order & Dish Review (Earns +10 Kuvera Coins & Updates Dhaba Rating)
+// Submit Order & Dish Review (Earns +10 Kraveo Coins & Updates Dhaba Rating)
 apiRouter.post('/reviews', requireAuth, (req: AuthenticatedRequest, res: Response) => {
   const { orderId, driverRating, driverTags, driverNotes, dishReviews, dhabaNotes } = req.body;
 
@@ -474,8 +474,8 @@ apiRouter.post('/reviews', requireAuth, (req: AuthenticatedRequest, res: Respons
   const user = users.find((u) => u.id === req.user?.id || u.id === order.customerId);
   if (!user) return res.status(404).json({ success: false, message: 'User profile not found.' });
 
-  // Update User's Kuvera Coins (+10 per review)
-  user.kuveraCoins = (user.kuveraCoins || 0) + 10;
+  // Update User's Kraveo Coins (+10 per review)
+  user.kraveoCoins = (user.kraveoCoins || 0) + 10;
   order.isReviewed = true;
 
   // Process Dish Ratings & Update Menu Item Rating Metrics
@@ -533,40 +533,40 @@ apiRouter.post('/reviews', requireAuth, (req: AuthenticatedRequest, res: Respons
 
   reviews.push(newReview);
 
-  console.log(`🪙 [Kuvera Coins Loyalty] User ${user.name} (+91 ${user.phone}) earned +10 Kuvera Coins! Total Balance: ${user.kuveraCoins}`);
+  console.log(`🪙 [Kraveo Coins Loyalty] User ${user.name} (+91 ${user.phone}) earned +10 Kraveo Coins! Total Balance: ${user.kraveoCoins}`);
 
   return res.json({
     success: true,
-    message: '🎉 Review submitted successfully! You earned +10 Kuvera Coins!',
+    message: '🎉 Review submitted successfully! You earned +10 Kraveo Coins!',
     coinsEarned: 10,
-    totalCoins: user.kuveraCoins,
+    totalCoins: user.kraveoCoins,
     newVendorRating: vendor?.rating,
     review: newReview
   });
 });
 
-// Redeem 50 Kuvera Coins for Flat ₹20 OFF Coupon
+// Redeem 50 Kraveo Coins for Flat ₹20 OFF Coupon
 apiRouter.post('/coupons/redeem-coins', requireAuth, (req: AuthenticatedRequest, res: Response) => {
   const user = users.find((u) => u.id === req.user?.id);
   if (!user) return res.status(404).json({ success: false, message: 'User profile not found.' });
 
-  const currentCoins = user.kuveraCoins || 0;
+  const currentCoins = user.kraveoCoins || 0;
   if (currentCoins < 50) {
     return res.status(400).json({
       success: false,
-      message: `Insufficient Kuvera Coins. You have ${currentCoins} coins, but need 50 coins to redeem ₹20 OFF.`
+      message: `Insufficient Kraveo Coins. You have ${currentCoins} coins, but need 50 coins to redeem ₹20 OFF.`
     });
   }
 
   // Deduct 50 coins
-  user.kuveraCoins = currentCoins - 50;
+  user.kraveoCoins = currentCoins - 50;
 
   return res.json({
     success: true,
-    message: '🎉 Redeemed 50 Kuvera Coins for Flat ₹20 OFF!',
-    couponCode: 'KUVERA20',
+    message: '🎉 Redeemed 50 Kraveo Coins for Flat ₹20 OFF!',
+    couponCode: 'KRAVEO20',
     discountAmount: 20,
-    remainingCoins: user.kuveraCoins
+    remainingCoins: user.kraveoCoins
   });
 });
 

@@ -159,7 +159,7 @@ class OrderHistoryScreen extends StatelessWidget {
                             driverName: 'Vikram Singh',
                             dishNames: order.items.map((i) => i.item.name).toList(),
                             onReviewSubmitted: (coins) {
-                              cart.addKuveraCoins(coins);
+                              cart.addKraveoCoins(coins);
                             },
                           ),
                         );

@@ -78,7 +78,7 @@ class _ReviewModalState extends State<ReviewModal> {
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  '🎉 Review Submitted! +10 Kuvera Coins Added to Wallet!',
+                  '🎉 Review Submitted! +10 Kraveo Coins Added to Wallet!',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
@@ -330,7 +330,7 @@ class _ReviewModalState extends State<ReviewModal> {
                         children: const [
                           Icon(Icons.monetization_on, color: Color(0xFFFDD400)),
                           SizedBox(width: 8),
-                          Text('SUBMIT & CLAIM +10 KUVERA COINS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                          Text('SUBMIT & CLAIM +10 KRAVEO COINS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
                         ],
                       ),
               ),

@@ -85,7 +85,7 @@ export const validateAndCalculateOrder = (
     const code = couponCode.trim().toUpperCase();
     if (code === 'VITFIRST' && subtotal >= 100) {
       discount = Math.min(subtotal * 0.20, 50);
-    } else if (code === 'KUVERA20' && subtotal >= 80) {
+    } else if (code === 'KRAVEO20' && subtotal >= 80) {
       discount = 20;
     } else if (code === 'KRAVEO50' && subtotal >= 150) {
       discount = 50;
