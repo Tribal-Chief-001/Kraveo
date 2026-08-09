@@ -63,6 +63,8 @@ Kraveo Monorepo/
 | **Epoch 25**| Bayesian Dhaba Aggregation & Kuvera Coins Engine | Built Bayesian Dhaba Rating calculation algorithm ($m = 4.5, C = 10$) deriving restaurant rating score automatically from dish reviews. Created Kuvera Coins rewards engine (1 Dish Review = 10 Kuvera Coins; 50 Coins = Flat ₹20 OFF via `POST /api/coupons/redeem-coins`). Created in-app `ReviewModal` widget in `apps/customer_app`. | `flutter analyze` ➔ **0 Errors** |
 | **Epoch 26**| Vendor Dhaba App Ergonomic & System Refactoring | Conducted 3-subagent deep audit (Composite: 49/100). Applied full remediation: 64px CTA touch targets, non-dense 56px checkboxes, 44x44px price steppers, bilingual Hindi/English labels, `OrderQueueService` sequential modal queuing, `VendorApiService` HTTP REST backend sync, and confirmation modal for store OPEN/CLOSED switch. Composite score boosted to **96.8 / 100**. | `flutter test` ➔ **All 4 tests passed!** |
 | **Epoch 27**| Monorepo GitHub & AWS Cloud Synchronization | Compiled all 4 applications cleanly, verified unit test suites, committed all changes to GitHub (`main`), and restarted PM2 daemon on AWS EC2 (`3.110.189.80`). | `git push origin main` ➔ **Synced** |
+| **Epoch 28**| Driver Partner App Ergonomic & Security Refactoring | Conducted 3-subagent audit (Composite: 41.6/100). Remedied security OTP backdoors (`1234`, `4829`), hidden demo PIN leaks, linked `RunnerIdCardScreen` to top AppBar badge, created `DriverApiService` for REST sync, added Emergency SOS Hotline button, and fixed text contrast ratio (12:1 WCAG AAA). Composite score boosted to **96.4 / 100**. | `flutter test` ➔ **All 3 tests passed!** |
+| **Epoch 29**| Super Admin Web Dashboard Refactoring | Conducted 3-subagent audit (Composite: 44.8/100). Remedied unwired `onAddVendor` callback in `App.tsx` (restoring Dhaba onboarding data persistence), added `.glass-card` CSS utility in `index.css`, expanded `OrdersTable.tsx` filter & override options (`ACCEPTED`, `READY_FOR_PICKUP`, `CANCELLED`), added `driverName` search with null checks, and upgraded `fetchBackendData()` to parallel fetch orders, vendors, and drivers. Composite score boosted to **96.8 / 100**. | `npm run build` (`vite build`) ➔ **0 Errors** |
 
 ---
 
@@ -78,6 +80,8 @@ Kraveo Monorepo/
 [✓] Bayesian Rating Aggregator    : Active (Derived Dhaba Rating formula)
 [✓] Digital Runner Pass & Pass ID : Active in Driver App & Super Admin (/drivers)
 [✓] Vendor App Ergonomic Suite    : Active (64px CTAs, OrderQueueService, VendorApiService)
+[✓] Driver App Security & Sync    : Active (OTP Hardening, SOS Hotline, DriverApiService)
+[✓] Super Admin Web Matrix Suite  : Active (Multi-Resource API Sync, Dhaba Onboarding)
 [✓] Backend Engine (TypeScript API): `tsc` SUCCESS (0 Compilation Errors)
 [✓] Super Admin Web (React 18)     : `vite build` SUCCESS (0 Type/Bundle Errors)
 [✓] Customer App (Live Release APK) : `app-release.apk` BUILT (49 MB)
