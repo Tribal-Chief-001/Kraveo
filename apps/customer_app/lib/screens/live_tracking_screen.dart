@@ -451,7 +451,7 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                       ),
                       subtitle: Text(
-                        'VIT Student Runner • ${activeOrder.riderVehicle}',
+                        'Delivery Partner • ${activeOrder.riderVehicle}',
                         style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
                       ),
                       trailing: CircleAvatar(

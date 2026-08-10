@@ -116,7 +116,7 @@ apiRouter.post('/auth/verify-otp', async (req: Request, res: Response) => {
     if (!user) {
       user = await prisma.user.create({
         data: {
-          name: name || (role === 'VENDOR' ? 'Dhaba Owner' : role === 'DRIVER' ? 'Student Runner' : 'VIT Student'),
+          name: name || (role === 'VENDOR' ? 'Dhaba Owner' : role === 'DRIVER' ? 'Delivery Partner' : 'VIT Student'),
           phone,
           role: (role as Role) || Role.STUDENT,
           hostelBlock: hostelBlock || 'Boys Hostel Block 1',

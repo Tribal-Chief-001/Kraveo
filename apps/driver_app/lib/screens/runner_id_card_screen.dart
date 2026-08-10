@@ -134,7 +134,7 @@ class RunnerIdCardScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         const Text(
-                          'VIT Reg: 21BCG10045',
+                          'Govt ID: Aadhar Verified',
                           style: TextStyle(
                             color: Color(0xFFFDD400),
                             fontSize: 13,

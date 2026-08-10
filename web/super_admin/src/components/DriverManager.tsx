@@ -30,9 +30,9 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers }) => {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <Bike className="w-5 h-5 text-[#fdd400]" /> Student Runner Ops & Performance Dashboard
+            <Bike className="w-5 h-5 text-[#fdd400]" /> Delivery Partner & Runner Ops Dashboard
           </h2>
-          <p className="text-xs text-gray-400">Track student delivery partners, earnings, completion speeds, and campus gate clearance</p>
+          <p className="text-xs text-gray-400">Track registered delivery partners, earnings, completion speeds, and campus gate clearance</p>
         </div>
       </div>
 
