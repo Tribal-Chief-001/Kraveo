@@ -30,13 +30,6 @@ export const requireAuth = (req: AuthenticatedRequest, res: Response, next: Next
 
   const token = authHeader.split(' ')[1];
 
-  // Allow mock fallback tokens for initial developer client convenience if in development
-  if (process.env.NODE_ENV === 'development' && token.startsWith('mock_jwt_token_')) {
-    const userId = token.replace('mock_jwt_token_', '');
-    req.user = { id: userId, phone: '+91 9876543210', role: 'ADMIN' };
-    return next();
-  }
-
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as { id: string; phone: string; role: UserRole };
     req.user = decoded;
@@ -48,6 +41,8 @@ export const requireAuth = (req: AuthenticatedRequest, res: Response, next: Next
     });
   }
 };
+
+export const authenticateJwt = requireAuth;
 
 // Role-Based Access Control (RBAC) middleware
 export const requireRole = (...allowedRoles: UserRole[]) => {

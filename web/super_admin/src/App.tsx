@@ -8,6 +8,7 @@ import { VendorManager } from './components/VendorManager';
 import { DriverManager } from './components/DriverManager';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { TabType, Order, Vendor, DriverPin, OrderStatus, DriverPartner } from './types';
+import { apiService, SOCKET_URL } from './services/api';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('map');
@@ -168,32 +169,21 @@ export const App: React.FC = () => {
   // Attempt real API fetch if server is running
   const fetchBackendData = async () => {
     try {
-      const [ordersRes, vendorsRes, driversRes] = await Promise.all([
-        fetch('http://localhost:5000/api/orders'),
-        fetch('http://localhost:5000/api/vendors'),
-        fetch('http://localhost:5000/api/drivers'),
+      const [fetchedOrders, fetchedVendors, fetchedDrivers] = await Promise.allSettled([
+        apiService.fetchOrders(),
+        apiService.fetchVendors(),
+        apiService.fetchDrivers(),
       ]);
 
-      if (ordersRes.ok) {
-        const json = await ordersRes.json();
-        if (json.data && json.data.length > 0) {
-          setOrders(json.data);
-          setIsLiveConnected(true);
-        }
+      if (fetchedOrders.status === 'fulfilled' && fetchedOrders.value.length > 0) {
+        setOrders(fetchedOrders.value);
+        setIsLiveConnected(true);
       }
-
-      if (vendorsRes.ok) {
-        const json = await vendorsRes.json();
-        if (json.data && json.data.length > 0) {
-          setVendors(json.data);
-        }
+      if (fetchedVendors.status === 'fulfilled' && fetchedVendors.value.length > 0) {
+        setVendors(fetchedVendors.value);
       }
-
-      if (driversRes.ok) {
-        const json = await driversRes.json();
-        if (json.data && json.data.length > 0) {
-          setDriverPartners(json.data);
-        }
+      if (fetchedDrivers.status === 'fulfilled' && fetchedDrivers.value.length > 0) {
+        setDriverPartners(fetchedDrivers.value);
       }
     } catch {
       // Offline fallback or standalone mode
@@ -203,7 +193,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     fetchBackendData();
 
-    const socket = io('http://localhost:5000', {
+    const socket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
     });
@@ -252,14 +242,7 @@ export const App: React.FC = () => {
       prev.map((o) => (o.id === orderId ? { ...o, status } : o))
     );
     try {
-      await fetch(`http://localhost:5000/api/orders/${orderId}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer mock_jwt_token_usr-5'
-        },
-        body: JSON.stringify({ status })
-      });
+      await apiService.updateOrderStatus(orderId, status);
     } catch (e) {
       console.log('Backend status update fallback:', e);
     }
@@ -276,20 +259,30 @@ export const App: React.FC = () => {
     );
 
     try {
-      await fetch(`http://localhost:5000/api/vendors/${vendorId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isAcceptingOrders: newStatus }),
-      });
+      await apiService.toggleVendorStatus(vendorId, newStatus);
     } catch (e) {
       console.log('Backend vendor status toggle fallback:', e);
     }
   };
 
-  const handleReassignDriver = (orderId: string) => {
+  const handleAddVendor = async (newVendor: Vendor) => {
+    setVendors((prev) => [...prev, newVendor]);
+    try {
+      await apiService.createVendor(newVendor);
+    } catch (e) {
+      console.log('Backend dhaba onboarding fallback:', e);
+    }
+  };
+
+  const handleReassignDriver = async (orderId: string) => {
     setOrders((prev) =>
       prev.map((o) => (o.id === orderId ? { ...o, driverName: 'Reassigning...', status: 'PLACED' } : o))
     );
+    try {
+      await apiService.reassignOrderDriver(orderId);
+    } catch (e) {
+      console.log('Backend reassign driver fallback:', e);
+    }
   };
 
   return (
@@ -323,7 +316,7 @@ export const App: React.FC = () => {
             <VendorManager 
               vendors={vendors} 
               onToggleVendor={handleToggleVendor} 
-              onAddVendor={(newVendor) => setVendors((prev) => [...prev, newVendor])}
+              onAddVendor={handleAddVendor}
             />
           )}
 

@@ -34,49 +34,70 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum DutyStatus {
+  ONLINE
+  OFFLINE
+  IN_TRANSIT
+}
+
 model User {
   id          String   @id @default(uuid())
   phone       String   @unique
   name        String
   role        Role     @default(STUDENT)
   hostelBlock String?  @default("Boys Hostel Block 1")
+  kraveoCoins Int      @default(0)
+  upiId       String?
   fcmToken    String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  ordersPlaced  Order[] @relation("CustomerOrders")
-  ordersDriven  Order[] @relation("DriverOrders")
+  ordersPlaced    Order[]        @relation("CustomerOrders")
+  ordersDriven    Order[]        @relation("DriverOrders")
+  driverProfile   DriverPartner?
+  vendorsOwned    Vendor[]
+  reviewsGiven    ReviewRecord[] @relation("CustomerReviews")
+  reviewsReceived ReviewRecord[] @relation("DriverReviews")
 }
 
 model Vendor {
-  id                 String     @id @default(uuid())
-  name               String
-  category           String
-  rating             Float      @default(4.5)
-  eta                String     @default("20-25 min")
-  bannerUrl          String
-  address            String
-  isAcceptingOrders  Boolean    @default(true)
-  createdAt          DateTime   @default(now())
-  updatedAt          DateTime   @updatedAt
+  id                String   @id @default(uuid())
+  userId            String?
+  name              String
+  category          String
+  rating            Float    @default(4.5)
+  totalRatingsCount Int      @default(50)
+  eta               String   @default("20-25 min")
+  bannerImage       String
+  address           String
+  isAcceptingOrders Boolean  @default(true)
+  lat               Float    @default(23.0768)
+  lng               Float    @default(76.8524)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
+  user      User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
   menuItems MenuItem[]
   orders    Order[]
+  reviews   ReviewRecord[]
 }
 
 model MenuItem {
-  id           String   @id @default(uuid())
-  vendorId     String
-  name         String
-  price        Float
-  category     String
-  description  String
-  imageUrl     String
-  isAvailable  Boolean  @default(true)
-  isVeg        Boolean  @default(true)
-  createdAt    DateTime @default(now())
+  id          String   @id @default(uuid())
+  vendorId    String
+  name        String
+  price       Float
+  category    String
+  description String
+  imageUrl    String
+  isAvailable Boolean  @default(true)
+  isVeg       Boolean  @default(true)
+  rating      Float?   @default(4.5)
+  ratingCount Int?     @default(0)
+  createdAt   DateTime @default(now())
 
-  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  vendor     Vendor      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
 }
 
 model Order {
@@ -91,36 +112,84 @@ model Order {
   status        OrderStatus   @default(PLACED)
   paymentStatus PaymentStatus @default(PENDING)
   otpCode       String        @default("1234")
+  isReviewed    Boolean       @default(false)
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  customer User      @relation("CustomerOrders", fields: [customerId], references: [id])
-  vendor   Vendor    @relation(fields: [vendorId], references: [id])
-  driver   User?     @relation("DriverOrders", fields: [driverId], references: [id])
+  customer User          @relation("CustomerOrders", fields: [customerId], references: [id])
+  vendor   Vendor        @relation(fields: [vendorId], references: [id])
+  driver   User?         @relation("DriverOrders", fields: [driverId], references: [id])
   items    OrderItem[]
   payments Payment[]
+  review   ReviewRecord?
 }
 
 model OrderItem {
-  id       String @id @default(uuid())
-  orderId  String
-  name     String
-  quantity Int
-  price    Float
+  id         String  @id @default(uuid())
+  orderId    String
+  menuItemId String?
+  name       String
+  quantity   Int
+  price      Float
+
+  order    Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+}
+
+model Payment {
+  id                String        @id @default(uuid())
+  orderId           String
+  razorpayOrderId   String        @unique
+  razorpayPaymentId String?
+  amount            Float
+  status            PaymentStatus @default(PENDING)
+  createdAt         DateTime      @default(now())
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
 
-model Payment {
-  id               String        @id @default(uuid())
-  orderId          String
-  razorpayOrderId  String        @unique
-  razorpayPaymentId String?
-  amount           Float
-  status           PaymentStatus @default(PENDING)
-  createdAt        DateTime      @default(now())
+model DriverPartner {
+  id                       String     @id @default(uuid())
+  userId                   String?    @unique
+  name                     String
+  phone                    String
+  studentRegNo             String
+  runnerCode               String     @unique
+  avatarUrl                String
+  vehicleType              String
+  vehicleRegNo             String
+  emergencyPhone           String
+  dutyStatus               DutyStatus @default(OFFLINE)
+  ordersToday              Int        @default(0)
+  totalEarningsToday       Float      @default(0.0)
+  avgCompletionTimeMinutes Float      @default(0.0)
+  onTimeRatePercent        Float      @default(100.0)
+  rating                   Float      @default(5.0)
+  upiId                    String?
+  createdAt                DateTime   @default(now())
+  updatedAt                DateTime   @updatedAt
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model ReviewRecord {
+  id           String   @id @default(uuid())
+  orderId      String   @unique
+  customerId   String
+  vendorId     String
+  driverId     String?
+  driverRating Float    @default(5.0)
+  driverTags   String[]
+  driverNotes  String?
+  dishReviews  Json
+  dhabaNotes   String?
+  coinsEarned  Int      @default(10)
+  createdAt    DateTime @default(now())
+
+  order    Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer User    @relation("CustomerReviews", fields: [customerId], references: [id], onDelete: Cascade)
+  vendor   Vendor  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  driver   User?   @relation("DriverReviews", fields: [driverId], references: [id], onDelete: SetNull)
 }
 
 model DriverLocation {

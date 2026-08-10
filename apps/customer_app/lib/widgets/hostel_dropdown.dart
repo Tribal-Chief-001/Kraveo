@@ -15,13 +15,17 @@ class HostelDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final safeValue = hostelBlocks.contains(selectedHostel)
+        ? selectedHostel
+        : (hostelBlocks.isNotEmpty ? hostelBlocks.first : selectedHostel);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Row(
+        const Row(
           mainAxisSize: MainAxisSize.min,
-          children: const [
+          children: [
             Icon(Icons.location_on, color: AppTheme.primaryEmerald, size: 16),
             SizedBox(width: 4),
             Text(
@@ -37,7 +41,7 @@ class HostelDropdown extends StatelessWidget {
         ),
         DropdownButtonHideUnderline(
           child: DropdownButton<String>(
-            value: selectedHostel,
+            value: safeValue,
             isDense: true,
             icon: const Icon(Icons.keyboard_arrow_down, size: 18, color: AppTheme.textDark),
             style: const TextStyle(
@@ -65,3 +69,4 @@ class HostelDropdown extends StatelessWidget {
     );
   }
 }
+

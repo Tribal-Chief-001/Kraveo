@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/duty_toggle.dart';
 import '../widgets/earnings_card.dart';
 import '../widgets/swipe_accept_card.dart';
@@ -23,6 +25,94 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   double todayEarnings = 420.0;
   int completedTrips = 11;
   int selectedTab = 0;
+
+  Timer? _locationTimer;
+  static const String _dutyPrefKey = 'kraveo_driver_duty_online';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedDutyState();
+  }
+
+  @override
+  void dispose() {
+    _stopLocationStreaming();
+    super.dispose();
+  }
+
+  Future<void> _loadSavedDutyState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedOnline = prefs.getBool(_dutyPrefKey) ?? true;
+      if (mounted) {
+        setState(() {
+          isOnline = savedOnline;
+        });
+      }
+      DriverApiService.toggleDutyStatus(savedOnline);
+      if (savedOnline) {
+        _startLocationStreaming();
+      }
+    } catch (_) {
+      if (isOnline) _startLocationStreaming();
+    }
+  }
+
+  Future<void> _toggleDuty(bool val) async {
+    setState(() {
+      isOnline = val;
+    });
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_dutyPrefKey, val);
+    } catch (_) {}
+
+    DriverApiService.toggleDutyStatus(val);
+
+    if (val) {
+      _startLocationStreaming();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Duty Status: ONLINE. GPS location streaming active.'),
+          backgroundColor: Color(0xFF00450D),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    } else {
+      _stopLocationStreaming();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Duty Status: OFFLINE. Location streaming paused.'),
+          backgroundColor: Colors.redAccent,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  void _startLocationStreaming() {
+    _locationTimer?.cancel();
+    // Simulate background GPS heartbeat updates (VIT Bhopal Campus region)
+    _locationTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (!isOnline) {
+        timer.cancel();
+        return;
+      }
+      const baseLat = 23.0775;
+      const baseLng = 76.8513;
+      final stepOffset = (timer.tick % 6) * 0.0001;
+      DriverApiService.updateLocation(baseLat + stepOffset, baseLng + stepOffset);
+    });
+  }
+
+  void _stopLocationStreaming() {
+    _locationTimer?.cancel();
+    _locationTimer = null;
+  }
 
   void _acceptJob() {
     setState(() {
@@ -174,11 +264,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             padding: const EdgeInsets.only(right: 12.0),
             child: DutyToggle(
               isOnline: isOnline,
-              onChanged: (val) {
-                setState(() {
-                  isOnline = val;
-                });
-              },
+              onChanged: _toggleDuty,
             ),
           ),
         ],

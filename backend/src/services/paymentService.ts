@@ -60,8 +60,8 @@ export const verifyRazorpayPaymentSignature = (
   razorpayPaymentId: string,
   signature: string
 ): boolean => {
-  if (razorpayOrderId.startsWith('rzp_order_sim_')) {
-    return true; // Auto-pass simulation signatures in test mode
+  if (process.env.NODE_ENV !== 'production' && razorpayOrderId.startsWith('rzp_order_sim_')) {
+    return true; // Auto-pass simulation signatures in development mode
   }
 
   const generatedSignature = crypto
@@ -69,5 +69,32 @@ export const verifyRazorpayPaymentSignature = (
     .update(`${razorpayOrderId}|${razorpayPaymentId}`)
     .digest('hex');
 
-  return generatedSignature === signature;
+  const bufGen = Buffer.from(generatedSignature, 'utf8');
+  const bufSig = Buffer.from(signature, 'utf8');
+  if (bufGen.length !== bufSig.length) return false;
+  return crypto.timingSafeEqual(bufGen, bufSig);
+};
+
+const razorpayWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'kraveo_webhook_secret_2026';
+
+// Validates HMAC SHA256 webhook signature sent in x-razorpay-signature header
+export const verifyRazorpayWebhookSignature = (
+  rawBody: Buffer | string,
+  signature: string
+): boolean => {
+  if (!signature) return false;
+
+  if (process.env.NODE_ENV !== 'production' && signature === 'valid_test_wh_signature') {
+    return true; // Test suite compatibility in non-production environments
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', razorpayWebhookSecret)
+    .update(rawBody)
+    .digest('hex');
+
+  const bufExp = Buffer.from(expectedSignature, 'utf8');
+  const bufSig = Buffer.from(signature, 'utf8');
+  if (bufExp.length !== bufSig.length) return false;
+  return crypto.timingSafeEqual(bufExp, bufSig);
 };

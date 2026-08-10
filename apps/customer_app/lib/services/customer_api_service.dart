@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
 
@@ -14,11 +15,11 @@ class CustomerApiService {
       ).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
-        print('📱 [Customer API] OTP sent successfully to $phone');
+        debugPrint('📱 [Customer API] OTP sent successfully to $phone');
         return true;
       }
     } catch (e) {
-      print('⚠️ [Customer API Notice] Send OTP delayed ($e).');
+      debugPrint('⚠️ [Customer API Notice] Send OTP delayed ($e).');
     }
     return false;
   }
@@ -36,11 +37,11 @@ class CustomerApiService {
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         final token = json['token'] as String?;
-        print('🔑 [Customer API] OTP verified successfully for $phone');
+        debugPrint('🔑 [Customer API] OTP verified successfully for $phone');
         return token;
       }
     } catch (e) {
-      print('⚠️ [Customer API Notice] Verify OTP delayed ($e).');
+      debugPrint('⚠️ [Customer API Notice] Verify OTP delayed ($e).');
     }
     return null;
   }
@@ -59,11 +60,11 @@ class CustomerApiService {
       ).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200 || response.statusCode == 201) {
-        print('🛍️ [Customer API] Order placed successfully on AWS backend!');
+        debugPrint('🛍️ [Customer API] Order placed successfully on AWS backend!');
         return true;
       }
     } catch (e) {
-      print('⚠️ [Customer API Notice] Order placement sync delayed ($e).');
+      debugPrint('⚠️ [Customer API Notice] Order placement sync delayed ($e).');
     }
     return false;
   }
@@ -92,12 +93,13 @@ class CustomerApiService {
       ).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
-        print('⭐️ [Customer API] Review submitted! +10 Kraveo Coins awarded.');
+        debugPrint('⭐️ [Customer API] Review submitted! +10 Kraveo Coins awarded.');
         return true;
       }
     } catch (e) {
-      print('⚠️ [Customer API Notice] Review submission delayed ($e).');
+      debugPrint('⚠️ [Customer API Notice] Review submission delayed ($e).');
     }
     return false;
   }
 }
+

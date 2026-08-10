@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
 
@@ -16,11 +17,34 @@ class DriverApiService {
       ).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
-        print('🛵 [Driver API] Successfully accepted job $orderId on backend.');
+        debugPrint('🛵 [Driver API] Successfully accepted job $orderId on backend.');
         return true;
       }
     } catch (e) {
-      print('⚠️ [Driver API Notice] Job acceptance delayed ($e).');
+      debugPrint('⚠️ [Driver API Notice] Job acceptance delayed ($e).');
+    }
+    return false;
+  }
+
+  /// Driver updates duty status (ONLINE / OFFLINE) on backend
+  static Future<bool> toggleDutyStatus(bool isOnline) async {
+    try {
+      final url = Uri.parse('${ApiConfig.baseUrl}/drivers/duty-status');
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer mock-driver-token',
+        },
+        body: jsonEncode({'isOnline': isOnline}),
+      ).timeout(const Duration(seconds: 4));
+
+      if (response.statusCode == 200) {
+        debugPrint('🟢 [Driver API] Duty status synced: ${isOnline ? "ONLINE" : "OFFLINE"}');
+        return true;
+      }
+    } catch (e) {
+      debugPrint('⚠️ [Driver API Notice] Duty status sync delayed ($e).');
     }
     return false;
   }
@@ -42,16 +66,16 @@ class DriverApiService {
       ).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
-        print('🛵 [Driver API] Delivery status updated to $newStatus on backend.');
+        debugPrint('🛵 [Driver API] Delivery status updated to $newStatus on backend.');
         return true;
       }
     } catch (e) {
-      print('⚠️ [Driver API Notice] Delivery status sync delayed ($e).');
+      debugPrint('⚠️ [Driver API Notice] Delivery status sync delayed ($e).');
     }
     return false;
   }
 
-  /// Driver location update broadcast
+  /// Driver location update broadcast (Background GPS Heartbeat)
   static Future<bool> updateLocation(double lat, double lng, {double heading = 0}) async {
     try {
       final url = Uri.parse('${ApiConfig.baseUrl}/drivers/location');
@@ -65,10 +89,11 @@ class DriverApiService {
       ).timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200) {
+        debugPrint('📍 [Driver API] Location stream updated: ($lat, $lng)');
         return true;
       }
     } catch (e) {
-      // Background location heartbeat
+      // Background location heartbeat fail-safe
     }
     return false;
   }

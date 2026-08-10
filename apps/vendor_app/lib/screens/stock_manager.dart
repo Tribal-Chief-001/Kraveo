@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/dish_model.dart';
 import '../widgets/stock_card.dart';
 import '../widgets/add_dish_modal.dart';
+import '../services/vendor_api_service.dart';
 
 class StockManagerScreen extends StatefulWidget {
   final List<DishModel> dishes;
@@ -42,6 +43,11 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
               widget.dishes.add(newDish);
             });
             widget.onDishListChanged();
+            VendorApiService.updateDishStock(
+              newDish.id,
+              isAvailable: newDish.inStock,
+              price: newDish.price,
+            );
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text('${newDish.name} added to menu!')),
             );
@@ -229,12 +235,20 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
                             dish.inStock = !dish.inStock;
                           });
                           widget.onDishListChanged();
+                          VendorApiService.updateDishStock(
+                            dish.id,
+                            isAvailable: dish.inStock,
+                          );
                         },
                         onUpdatePrice: (newPrice) {
                           setState(() {
                             dish.price = newPrice;
                           });
                           widget.onDishListChanged();
+                          VendorApiService.updateDishStock(
+                            dish.id,
+                            price: newPrice,
+                          );
                         },
                       );
                     },

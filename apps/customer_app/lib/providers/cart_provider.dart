@@ -213,6 +213,15 @@ class CartProvider with ChangeNotifier {
     }
   }
 
+  void consumeRedeemedCoins() {
+    if (_isKraveoCoinsRedeemed) {
+      _userKraveoCoins = (_userKraveoCoins - 50).clamp(0, 999999);
+      _isKraveoCoinsRedeemed = false;
+      _kraveoCoinsDiscountAmount = 0.0;
+      notifyListeners();
+    }
+  }
+
   void clearCart() {
     _dhabaId = null;
     _dhabaName = null;
@@ -224,6 +233,7 @@ class CartProvider with ChangeNotifier {
     _couponError = null;
     notifyListeners();
   }
+
 
   int getItemQuantityInCart(String itemId) {
     return _items

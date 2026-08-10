@@ -15,8 +15,13 @@ class SplitBillModal extends StatefulWidget {
 class _SplitBillModalState extends State<SplitBillModal> {
   int _roommateCount = 2;
 
+  String get _formattedPerPerson {
+    return (widget.order.totalAmount / _roommateCount).round().toString();
+  }
+
+
   String get _splitSummaryText {
-    final perPerson = (widget.order.totalAmount / _roommateCount).toStringAsFixed(0);
+    final perPerson = _formattedPerPerson;
     final buffer = StringBuffer();
     buffer.writeln('🛵 *KRAVEO LATE-NIGHT HOSTEL BILL SPLIT* 🍕');
     buffer.writeln('📍 Dhaba: ${widget.order.dhabaName}');
@@ -34,7 +39,8 @@ class _SplitBillModalState extends State<SplitBillModal> {
 
   @override
   Widget build(BuildContext context) {
-    final perPersonAmount = (widget.order.totalAmount / _roommateCount).toStringAsFixed(0);
+    final perPersonAmount = _formattedPerPerson;
+
 
     return Container(
       padding: const EdgeInsets.all(24),

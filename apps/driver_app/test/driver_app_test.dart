@@ -15,7 +15,7 @@ void main() {
               expectedOtp: '4829',
               orderId: '#ORD-99',
               customerName: 'Rahul',
-              onVerified: () {
+              onVerified: (otp) {
                 verified = true;
               },
             ),
@@ -42,7 +42,7 @@ void main() {
 
       await tester.tap(find.text('VERIFY HANDSHAKE & DELIVER'));
       await tester.pump(const Duration(milliseconds: 700));
-      expect(find.text('Invalid OTP PIN. Try again or check with student.'), findsOneWidget);
+      expect(find.text('Invalid OTP PIN. Check with student at gate.'), findsOneWidget);
       expect(verified, isFalse);
 
       // Enter correct PIN: 4829

@@ -130,7 +130,7 @@ class StockCard extends StatelessWidget {
                   height: 44,
                   child: IconButton(
                     onPressed: () {
-                      if (dish.price >= 10) {
+                      if (dish.price > 10) {
                         onUpdatePrice(dish.price - 10);
                       }
                     },

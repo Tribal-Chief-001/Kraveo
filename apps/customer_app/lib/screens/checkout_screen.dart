@@ -264,7 +264,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     ),
                     Switch(
                       value: cart.isKraveoCoinsRedeemed,
-                      activeColor: AppTheme.primaryEmerald,
+                      activeThumbColor: AppTheme.primaryEmerald,
                       onChanged: (val) => cart.toggleKraveoCoinsRedemption(),
                     ),
                   ],
@@ -404,11 +404,18 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     _buildRow('Taxes & Packaging', '₹${cart.taxAndPackaging.toInt()}'),
                     if (cart.appliedCouponCode != null)
                       _buildRow(
-                        'Discount (${cart.appliedCouponCode})',
+                        'Coupon Discount (${cart.appliedCouponCode})',
                         '-₹${cart.couponDiscountAmount.toInt()}',
                         isDiscount: true,
                       ),
+                    if (cart.isKraveoCoinsRedeemed)
+                      _buildRow(
+                        'Kraveo Coins Discount',
+                        '-₹${cart.kraveoCoinsDiscountAmount.toInt()}',
+                        isDiscount: true,
+                      ),
                     const Divider(height: 20, color: AppTheme.borderLight),
+
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [

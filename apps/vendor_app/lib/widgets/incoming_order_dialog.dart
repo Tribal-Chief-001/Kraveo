@@ -77,10 +77,12 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      child: AnimatedBuilder(
+    return PopScope(
+      canPop: false,
+      child: Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        child: AnimatedBuilder(
         animation: _scaleAnimation,
         builder: (context, child) {
           return Transform.scale(
@@ -331,6 +333,7 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }

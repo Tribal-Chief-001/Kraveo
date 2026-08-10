@@ -1,4 +1,4 @@
-import { menuItems } from '../store';
+import { prisma } from '../db';
 import { OrderItem } from '../types';
 
 export interface OrderValidationResult {
@@ -11,15 +11,15 @@ export interface OrderValidationResult {
 }
 
 // Recalculates total price on server side to prevent client pricing tampering
-export const validateAndCalculateOrder = (
+export const validateAndCalculateOrder = async (
   vendorId: string, 
   items: { itemId: string; quantity: number }[],
   couponCode?: string
-): OrderValidationResult => {
-  if (!items || items.length === 0) {
+): Promise<OrderValidationResult> => {
+  if (!items || !Array.isArray(items) || items.length === 0) {
     return {
       isValid: false,
-      errorMessage: 'Cart cannot be empty.',
+      errorMessage: 'Cart items must be a non-empty array.',
       verifiedItems: [],
       calculatedSubtotal: 0,
       calculatedDeliveryFee: 25,
@@ -27,14 +27,21 @@ export const validateAndCalculateOrder = (
     };
   }
 
+  const itemIds = items.map((i) => i.itemId).filter(Boolean);
+  const dbMenuItems = await prisma.menuItem.findMany({
+    where: { id: { in: itemIds }, vendorId }
+  });
+
+  const menuItemMap = new Map(dbMenuItems.map((item) => [item.id, item]));
+
   let subtotal = 0;
   const verifiedItems: OrderItem[] = [];
 
   for (const rawItem of items) {
-    if (!rawItem.quantity || rawItem.quantity <= 0) {
+    if (!rawItem || typeof rawItem !== 'object' || !rawItem.quantity || typeof rawItem.quantity !== 'number' || rawItem.quantity <= 0) {
       return {
         isValid: false,
-        errorMessage: `Invalid quantity '${rawItem.quantity}' for item ${rawItem.itemId}.`,
+        errorMessage: `Invalid quantity '${rawItem?.quantity}' for item ${rawItem?.itemId}.`,
         verifiedItems: [],
         calculatedSubtotal: 0,
         calculatedDeliveryFee: 25,
@@ -42,7 +49,7 @@ export const validateAndCalculateOrder = (
       };
     }
 
-    const menuItem = menuItems.find((i) => i.id === rawItem.itemId && i.vendorId === vendorId);
+    const menuItem = menuItemMap.get(rawItem.itemId);
 
     if (!menuItem) {
       return {

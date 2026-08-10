@@ -239,7 +239,14 @@ class CartSheet extends StatelessWidget {
                     '-₹${cart.couponDiscountAmount.toInt()}',
                     isDiscount: true,
                   ),
+                if (cart.isKraveoCoinsRedeemed)
+                  _buildBillRow(
+                    'Kraveo Coins Discount',
+                    '-₹${cart.kraveoCoinsDiscountAmount.toInt()}',
+                    isDiscount: true,
+                  ),
                 const Divider(height: 20, color: AppTheme.borderLight),
+
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [

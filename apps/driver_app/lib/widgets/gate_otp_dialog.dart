@@ -5,7 +5,7 @@ class GateOtpDialog extends StatefulWidget {
   final String orderId;
   final String customerName;
   final String gateName;
-  final VoidCallback onVerified;
+  final ValueChanged<String> onVerified;
 
   const GateOtpDialog({
     super.key,
@@ -56,12 +56,12 @@ class _GateOtpDialogState extends State<GateOtpDialog> {
       if (enteredOtp == widget.expectedOtp) {
         if (!mounted) return;
         Navigator.of(context).pop();
-        widget.onVerified();
+        widget.onVerified(enteredOtp);
       } else {
         if (!mounted) return;
         setState(() {
           _isVerifying = false;
-          _errorMessage = 'Invalid OTP PIN. Try again or check with student.';
+          _errorMessage = 'Invalid OTP PIN. Check with student at gate.';
         });
       }
     });

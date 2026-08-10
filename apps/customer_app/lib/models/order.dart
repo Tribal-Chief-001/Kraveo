@@ -90,4 +90,49 @@ class OrderModel {
     this.riderPhone = '+91 98765 43210',
     this.riderVehicle = 'Hero Splendor (MP-04-KV-8821)',
   });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'dhabaId': dhabaId,
+      'dhabaName': dhabaName,
+      'subtotal': subtotal,
+      'discount': discount,
+      'deliveryFee': deliveryFee,
+      'taxAndPackaging': taxAndPackaging,
+      'totalAmount': totalAmount,
+      'hostel': hostel,
+      'deliveryNote': deliveryNote,
+      'paymentMethod': paymentMethod,
+      'status': status.name,
+      'otpCode': otpCode,
+      'createdAt': createdAt.toIso8601String(),
+    };
+  }
+
+  factory OrderModel.fromJson(Map<String, dynamic> json) {
+    return OrderModel(
+      id: json['id'] ?? '',
+      dhabaId: json['dhabaId'] ?? '',
+      dhabaName: json['dhabaName'] ?? '',
+      items: const [],
+      subtotal: (json['subtotal'] ?? 0.0).toDouble(),
+      discount: (json['discount'] ?? 0.0).toDouble(),
+      deliveryFee: (json['deliveryFee'] ?? 0.0).toDouble(),
+      taxAndPackaging: (json['taxAndPackaging'] ?? 0.0).toDouble(),
+      totalAmount: (json['totalAmount'] ?? 0.0).toDouble(),
+      hostel: json['hostel'] ?? '',
+      deliveryNote: json['deliveryNote'] ?? '',
+      paymentMethod: json['paymentMethod'] ?? 'UPI',
+      status: OrderProgressStatus.values.firstWhere(
+        (s) => s.name == json['status'],
+        orElse: () => OrderProgressStatus.placed,
+      ),
+      otpCode: json['otpCode'] ?? '1234',
+      createdAt: json['createdAt'] != null
+          ? DateTime.parse(json['createdAt'])
+          : DateTime.now(),
+    );
+  }
 }
+

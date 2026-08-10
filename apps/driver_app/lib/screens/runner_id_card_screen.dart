@@ -54,8 +54,8 @@ class RunnerIdCardScreen extends StatelessWidget {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Row(
-                          children: const [
+                        const Row(
+                          children: [
                             Icon(Icons.verified_user, color: Color(0xFFFDD400), size: 20),
                             SizedBox(width: 8),
                             Text(
@@ -133,10 +133,10 @@ class RunnerIdCardScreen extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 4),
-                        Text(
+                        const Text(
                           'VIT Reg: 21BCG10045',
                           style: TextStyle(
-                            color: const Color(0xFFFDD400),
+                            color: Color(0xFFFDD400),
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
                             letterSpacing: 0.5,
@@ -172,11 +172,11 @@ class RunnerIdCardScreen extends StatelessWidget {
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(16),
                           ),
-                          child: Column(
+                          child: const Column(
                             children: [
-                              Icon(Icons.qr_code_2, size: 140, color: const Color(0xFF1B1C1C)),
-                              const SizedBox(height: 6),
-                              const Text(
+                              Icon(Icons.qr_code_2, size: 140, color: Color(0xFF1B1C1C)),
+                              SizedBox(height: 6),
+                              Text(
                                 'SCAN FOR SECURITY GATE VERIFICATION',
                                 style: TextStyle(
                                   color: Color(0xFF1B1C1C),

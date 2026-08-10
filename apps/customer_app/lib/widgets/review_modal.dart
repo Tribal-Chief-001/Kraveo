@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import '../services/customer_api_service.dart';
 
 class ReviewModal extends StatefulWidget {
   final String orderId;
@@ -64,16 +65,29 @@ class _ReviewModalState extends State<ReviewModal> {
   void _submitReview() async {
     setState(() => _isSubmitting = true);
 
-    await Future.delayed(const Duration(milliseconds: 600));
+    final avgDishRating = _dishRatings.values.isEmpty
+        ? 5.0
+        : (_dishRatings.values.reduce((a, b) => a + b) / _dishRatings.values.length).toDouble();
+
+    final reviewText = _dhabaNotesController.text.trim().isNotEmpty
+        ? _dhabaNotesController.text.trim()
+        : _driverNotesController.text.trim();
+
+    await CustomerApiService.submitReview(
+      orderId: widget.orderId,
+      dhabaRating: avgDishRating,
+      driverRating: _driverRating.toDouble(),
+      reviewText: reviewText,
+    );
 
     if (mounted) {
       widget.onReviewSubmitted(10);
       Navigator.of(context).pop();
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
+        const SnackBar(
           content: Row(
-            children: const [
+            children: [
               Icon(Icons.monetization_on, color: Color(0xFFFDD400)),
               SizedBox(width: 10),
               Expanded(
@@ -85,11 +99,12 @@ class _ReviewModalState extends State<ReviewModal> {
             ],
           ),
           backgroundColor: AppTheme.primaryEmerald,
-          duration: const Duration(seconds: 4),
+          duration: Duration(seconds: 4),
         ),
       );
     }
   }
+
 
   @override
   Widget build(BuildContext context) {

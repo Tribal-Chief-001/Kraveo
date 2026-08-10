@@ -17,6 +17,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const app = express();
+app.disable('x-powered-by');
 const server = http.createServer(app);
 
 const io = new SocketIOServer(server, {
@@ -29,7 +30,11 @@ const io = new SocketIOServer(server, {
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+  verify: (req: any, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
 // Pass socket.io instance to Express app for route handlers
 app.set('io', io);
@@ -46,21 +51,49 @@ app.get('/health', (req, res) => {
   });
 });
 
+// 404 Non-Existent Route Guard
+app.use((req: express.Request, res: express.Response) => {
+  res.status(404).json({
+    success: false,
+    message: `Route ${req.method} ${req.originalUrl} not found.`
+  });
+});
+
+// Global Express Error Handler (Handles JSON Syntax Errors & Bad Payloads)
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err && (err.status === 400 || err.type === 'entity.parse.failed' || err instanceof SyntaxError)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or malformed JSON payload.'
+    });
+  }
+  return res.status(500).json({
+    success: false,
+    message: err.message || 'Internal Server Error'
+  });
+});
+
 // Socket.io Real-time Event Subscriptions
 io.on('connection', (socket) => {
   console.log(`⚡ Kraveo Socket Client Connected: ${socket.id}`);
 
   socket.on('join_room', (room: string) => {
-    socket.join(room);
-    console.log(`📌 Socket ${socket.id} joined room: ${room}`);
+    if (room && typeof room === 'string' && room.trim().length > 0) {
+      socket.join(room);
+      console.log(`📌 Socket ${socket.id} joined room: ${room}`);
+    }
   });
 
   socket.on('update_driver_location', (data) => {
-    io.emit('driver_location_update', data);
+    if (data && typeof data === 'object') {
+      io.emit('driver_location_update', data);
+    }
   });
 
   socket.on('order_status_change', (data) => {
-    io.emit('order_updated', data);
+    if (data && typeof data === 'object') {
+      io.emit('order_updated', data);
+    }
   });
 
   socket.on('disconnect', () => {

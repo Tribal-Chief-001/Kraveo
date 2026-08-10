@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vendor_app/services/audio_alert_service.dart';
+import 'package:vendor_app/services/order_queue_service.dart';
 import 'package:vendor_app/models/dish_model.dart';
 import 'package:vendor_app/models/order_model.dart';
 import 'package:vendor_app/widgets/incoming_order_dialog.dart';
@@ -27,6 +28,40 @@ void main() {
       expect(AudioAlertService.isPlaying, isTrue);
       await AudioAlertService.stopAlarm();
       expect(AudioAlertService.isPlaying, isFalse);
+    });
+  });
+
+  group('Vendor App - OrderQueueService & OrderCard Tests', () {
+    testWidgets('OrderQueueService handles duplicate orders and clearQueue', (WidgetTester tester) async {
+      final testOrder = OrderModel(
+        id: '#ORD-9999',
+        studentName: 'Test Student',
+        studentLocation: 'Block X',
+        items: [],
+        totalAmount: 100,
+        createdAt: DateTime.now(),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  OrderQueueService.enqueueIncomingOrder(context, testOrder, (_) {});
+                  OrderQueueService.enqueueIncomingOrder(context, testOrder, (_) {});
+                });
+                return const Text('Queue Test');
+              },
+            ),
+          ),
+        ),
+      );
+
+      await tester.pump(const Duration(seconds: 3));
+      expect(OrderQueueService.pendingCount, equals(1)); // 2nd order pending in queue
+      OrderQueueService.clearQueue();
+      expect(OrderQueueService.pendingCount, equals(0)); // Cleared
     });
   });
 
@@ -136,4 +171,12 @@ void main() {
       expect(find.textContaining('SOLD OUT'), findsOneWidget);
     });
   });
+
+  group('Vendor App - OrderQueueService Unit Test', () {
+    test('OrderQueueService handles clearQueue and queue count', () {
+      OrderQueueService.clearQueue();
+      expect(OrderQueueService.pendingCount, equals(0));
+    });
+  });
 }
+

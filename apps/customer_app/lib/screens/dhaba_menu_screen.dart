@@ -33,7 +33,8 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
     final List<MenuItemModel> allItems = dhabaProvider.getMenuItemsForDhaba(widget.dhaba.id);
 
     // Extract unique categories from menu items
-    final categories = ['All', ...allItems.map((i) => i.category).toSet().toList()];
+    final categories = ['All', ...allItems.map((i) => i.category).toSet()];
+
 
     // Filter items
     final filteredItems = allItems.where((item) {
@@ -369,8 +370,10 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
                                                 padding: EdgeInsets.zero,
                                                 icon: const Icon(Icons.remove, size: 16, color: Colors.white),
                                                 onPressed: () {
-                                                  final existingItem = cart.items.firstWhere((i) => i.item.id == item.id);
-                                                  cart.decrementItem(existingItem.cartItemId);
+                                                  final matchingItems = cart.items.where((i) => i.item.id == item.id);
+                                                  if (matchingItems.isNotEmpty) {
+                                                    cart.decrementItem(matchingItems.last.cartItemId);
+                                                  }
                                                 },
                                               ),
                                               Text(
@@ -382,11 +385,33 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
                                                 padding: EdgeInsets.zero,
                                                 icon: const Icon(Icons.add, size: 16, color: Colors.white),
                                                 onPressed: () {
-                                                  cart.addItem(
-                                                    item: item,
-                                                    dhabaId: widget.dhaba.id,
-                                                    dhabaName: widget.dhaba.name,
-                                                  );
+                                                  if (item.hasCustomizations) {
+                                                    showModalBottomSheet(
+                                                      context: context,
+                                                      isScrollControlled: true,
+                                                      shape: const RoundedRectangleBorder(
+                                                        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                                                      ),
+                                                      builder: (context) => CustomizationModal(
+                                                        item: item,
+                                                        onAddToCart: (selectedOptions, notes) {
+                                                          cart.addItem(
+                                                            item: item,
+                                                            dhabaId: widget.dhaba.id,
+                                                            dhabaName: widget.dhaba.name,
+                                                            selectedOptions: selectedOptions,
+                                                            specialInstructions: notes,
+                                                          );
+                                                        },
+                                                      ),
+                                                    );
+                                                  } else {
+                                                    cart.addItem(
+                                                      item: item,
+                                                      dhabaId: widget.dhaba.id,
+                                                      dhabaName: widget.dhaba.name,
+                                                    );
+                                                  }
                                                 },
                                               ),
                                             ],

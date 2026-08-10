@@ -37,9 +37,14 @@ export const sendPushNotification = async (payload: PushNotificationPayload): Pr
     const apps = getApps();
     if (apps.length > 0) {
       const messaging = getMessaging();
-      if (payload.targetFcmToken) {
+      const isTokenValid = payload.targetFcmToken && 
+        typeof payload.targetFcmToken === 'string' && 
+        payload.targetFcmToken.trim().length > 15 && 
+        !payload.targetFcmToken.startsWith('usr-');
+
+      if (isTokenValid) {
         await messaging.send({
-          token: payload.targetFcmToken,
+          token: payload.targetFcmToken!,
           notification: {
             title: payload.title,
             body: payload.body,
@@ -93,8 +98,10 @@ export const triggerDhabaAlarmPushNotification = async (vendorId: string, orderI
 };
 
 // Dispatch drop-off arrival alert to student phone
-export const triggerStudentArrivalNotification = async (studentPhone: string, orderId: string, otpCode: string): Promise<void> => {
+export const triggerStudentArrivalNotification = async (targetFcmToken: string | undefined, orderId: string, otpCode: string): Promise<void> => {
   await sendPushNotification({
+    targetFcmToken: targetFcmToken,
+    topic: `order_${orderId}`,
     title: '🛵 RUNNER ARRIVED AT HOSTEL GATE!',
     body: `Your runner is waiting at the gate. Handshake OTP code: ${otpCode}`,
     data: {

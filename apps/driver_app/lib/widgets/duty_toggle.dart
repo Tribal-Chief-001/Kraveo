@@ -12,8 +12,8 @@ class DutyToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final emerald = const Color(0xFF00450D);
-    final emeraldLight = const Color(0xFF91D78A);
+    const emerald = Color(0xFF00450D);
+    const emeraldLight = Color(0xFF91D78A);
     final offlineBg = Colors.red.withValues(alpha: 0.15);
     final offlineText = Colors.redAccent.shade100;
 

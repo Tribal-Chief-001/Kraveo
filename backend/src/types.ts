@@ -72,6 +72,7 @@ export interface Order {
   dropoffNotes?: string;
   status: OrderStatus;
   paymentStatus: 'PAID' | 'PENDING' | 'REFUNDED';
+  otpCode?: string;
   isReviewed?: boolean;
   createdAt: string;
   updatedAt: string;

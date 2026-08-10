@@ -75,7 +75,8 @@ class _ActiveDeliveryScreenState extends State<ActiveDeliveryScreen> {
         customerName: customerName,
         gateName: hostelGate,
         expectedOtp: '4829',
-        onVerified: () {
+        onVerified: (verifiedOtp) {
+          DriverApiService.updateDeliveryStatus(orderId, 'DELIVERED', otpCode: verifiedOtp);
           widget.onCompleted();
         },
       ),
@@ -156,12 +157,12 @@ class _ActiveDeliveryScreenState extends State<ActiveDeliveryScreen> {
                           letterSpacing: 0.8,
                         ),
                       ),
-                      Row(
+                      const Row(
                         children: [
-                          const Icon(Icons.timer_outlined,
+                          Icon(Icons.timer_outlined,
                               color: Colors.grey, size: 14),
-                          const SizedBox(width: 4),
-                          const Text(
+                          SizedBox(width: 4),
+                          Text(
                             '12 mins ETA',
                             style: TextStyle(
                               color: Colors.grey,
@@ -359,7 +360,13 @@ class _ActiveDeliveryScreenState extends State<ActiveDeliveryScreen> {
                       height: 52,
                       child: ElevatedButton(
                         onPressed: () {
-                          widget.onStepChanged(widget.currentStep + 1);
+                          final nextStep = widget.currentStep + 1;
+                          if (nextStep == 1) {
+                            DriverApiService.updateDeliveryStatus(orderId, 'PICKED_UP');
+                          } else if (nextStep == 2) {
+                            DriverApiService.updateDeliveryStatus(orderId, 'ARRIVED_AT_GATE');
+                          }
+                          widget.onStepChanged(nextStep);
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: emerald,

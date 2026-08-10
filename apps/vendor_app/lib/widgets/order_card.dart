@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/order_model.dart';
+import '../services/vendor_api_service.dart';
 
 class OrderCard extends StatefulWidget {
   final OrderModel order;
@@ -19,11 +21,29 @@ class OrderCard extends StatefulWidget {
 
 class _OrderCardState extends State<OrderCard> {
   late Duration _remaining;
+  Timer? _countdownTimer;
 
   @override
   void initState() {
     super.initState();
     _remaining = widget.order.remainingDuration;
+    _startTimer();
+  }
+
+  void _startTimer() {
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() {
+          _remaining = widget.order.remainingDuration;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    super.dispose();
   }
 
   String _formatDuration(Duration d) {
@@ -291,6 +311,10 @@ class _OrderCardState extends State<OrderCard> {
                         it.isPrepared = true;
                       }
                     });
+                    VendorApiService.updateOrderStatus(
+                      widget.order.id.replaceAll('#', ''),
+                      'READY_FOR_PICKUP',
+                    );
                     widget.onStatusChanged();
                   },
                   icon: const Icon(Icons.check_circle_outline, color: Colors.white, size: 26),
@@ -313,6 +337,10 @@ class _OrderCardState extends State<OrderCard> {
                     setState(() {
                       widget.order.status = OrderStatus.pickedUp;
                     });
+                    VendorApiService.updateOrderStatus(
+                      widget.order.id.replaceAll('#', ''),
+                      'PICKED_UP',
+                    );
                     widget.onStatusChanged();
                   },
                   icon: const Icon(Icons.task_alt, color: Colors.black87, size: 26),

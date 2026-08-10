@@ -10,6 +10,12 @@ class OrderQueueService {
 
   /// Enqueues a new incoming order alert and presents modal dialogs sequentially.
   static void enqueueIncomingOrder(BuildContext context, OrderModel newOrder, Function(OrderModel acceptedOrder) onOrderAccepted) {
+    // Avoid duplicate order enqueuing
+    if (_incomingQueue.any((o) => o.id == newOrder.id)) {
+      print('⚠️ [Order Queue Engine] Order ${newOrder.id} already in queue. Skipping duplicate.');
+      return;
+    }
+
     _incomingQueue.add(newOrder);
     print('📥 [Order Queue Engine] Enqueued incoming order ${newOrder.id}. Queue length: ${_incomingQueue.length}');
 
@@ -23,6 +29,13 @@ class OrderQueueService {
       _isShowingDialog = false;
       AudioAlertService.stopAlarm();
       print('🔕 [Order Queue Engine] All pending incoming order alerts resolved.');
+      return;
+    }
+
+    if (!context.mounted) {
+      print('⚠️ [Order Queue Engine] Context unmounted while processing queue. Retrying when context available.');
+      // Keep queue active so next interaction or screen resume can process
+      _isShowingDialog = false;
       return;
     }
 
@@ -43,30 +56,39 @@ class OrderQueueService {
 
           // Process next order in queue after short delay
           Future.delayed(const Duration(milliseconds: 300), () {
-            if (context.mounted) {
-              _processNextOrderInQueue(context, onOrderAccepted);
-            }
+            _processNextOrderInQueue(context, onOrderAccepted);
           });
         },
         onDecline: () {
           AudioAlertService.stopAlarm();
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Order ${currentOrder.id} Declined / अस्वीकार किया'),
-              backgroundColor: const Color(0xFFBA1A1A),
-            ),
-          );
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Order ${currentOrder.id} Declined / अस्वीकार किया'),
+                backgroundColor: const Color(0xFFBA1A1A),
+              ),
+            );
+          }
 
           // Process next order in queue after short delay
           Future.delayed(const Duration(milliseconds: 300), () {
-            if (context.mounted) {
-              _processNextOrderInQueue(context, onOrderAccepted);
-            }
+            _processNextOrderInQueue(context, onOrderAccepted);
           });
         },
       ),
-    );
+    ).then((_) {
+      // Safety net: If dialog popped without onAccept/onDecline (e.g. unexpected pop), stop alarm
+      AudioAlertService.stopAlarm();
+    });
+  }
+
+  /// Reset queue state (useful for cleanup or testing)
+  static void clearQueue() {
+    _incomingQueue.clear();
+    _isShowingDialog = false;
+    AudioAlertService.stopAlarm();
   }
 
   static int get pendingCount => _incomingQueue.length;
 }
+

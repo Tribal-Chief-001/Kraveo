@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../models/order.dart';
+import '../services/customer_api_service.dart';
 import 'cart_provider.dart';
 import 'dhaba_provider.dart';
 
@@ -79,12 +80,19 @@ class OrderProvider with ChangeNotifier {
 
     _activeOrder = order;
     _orderHistory.insert(0, order);
+
+    // Consume redeemed coins if applied
+    cart.consumeRedeemedCoins();
     cart.clearCart();
-    
+
+    // Async sync to AWS EC2 backend API
+    CustomerApiService.placeOrder(order.toJson());
+
     _startSimulatedProgression();
     notifyListeners();
     return order;
   }
+
 
   void _startSimulatedProgression() {
     _statusTimer?.cancel();

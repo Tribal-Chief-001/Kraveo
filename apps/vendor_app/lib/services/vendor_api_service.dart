@@ -66,4 +66,22 @@ class VendorApiService {
     }
     return false;
   }
+
+  /// Fetches pending active orders for vendor from backend API
+  static Future<List<dynamic>> fetchIncomingOrders(String vendorId) async {
+    try {
+      final url = Uri.parse('${ApiConfig.baseUrl}/vendors/$vendorId/orders?status=PLACED');
+      final response = await http.get(url).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(response.body);
+        print('📡 [Vendor API] Fetched ${data.length} active orders from backend.');
+        return data;
+      }
+    } catch (e) {
+      print('⚠️ [Vendor API Notice] Fetching incoming orders delayed ($e).');
+    }
+    return [];
+  }
 }
+
