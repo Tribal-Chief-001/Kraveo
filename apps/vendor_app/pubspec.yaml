@@ -13,6 +13,9 @@ dependencies:
   http: ^1.2.1
   audioplayers: ^6.0.0
   permission_handler: ^11.3.1
+  shared_preferences: ^2.2.2
+  socket_io_client: ^2.0.3+1
+  wakelock_plus: ^1.2.8
 
 dev_dependencies:
   flutter_test:

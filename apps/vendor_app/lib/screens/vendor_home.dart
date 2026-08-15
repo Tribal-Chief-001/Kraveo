@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:wakelock_plus/wakelock_plus.dart';
+import '../config/api_config.dart';
 import '../services/audio_alert_service.dart';
 import '../services/permission_service.dart';
 import '../services/vendor_api_service.dart';
@@ -19,6 +22,8 @@ class VendorHomeScreen extends StatefulWidget {
 class _VendorHomeScreenState extends State<VendorHomeScreen> {
   int _currentIndex = 0;
   bool isStoreOpen = true;
+  IO.Socket? _socket;
+  final String vendorId = 'ven-1';
 
   // Master State for Kitchen Orders
   late List<OrderModel> _orders;
@@ -31,6 +36,105 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     super.initState();
     _initSampleData();
     PermissionService.requestVendorPermissions();
+    _enableScreenWakeLock();
+    _initWebSocket();
+    _fetchBackendOrders();
+  }
+
+  @override
+  void dispose() {
+    _socket?.disconnect();
+    _socket?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _enableScreenWakeLock() async {
+    try {
+      await WakelockPlus.enable();
+    } catch (_) {}
+  }
+
+  void _initWebSocket() {
+    try {
+      _socket = IO.io(
+        ApiConfig.baseUrl,
+        IO.OptionBuilder()
+            .setTransports(['websocket', 'polling'])
+            .disableAutoConnect()
+            .build(),
+      );
+
+      _socket?.connect();
+
+      _socket?.onConnect((_) {
+        debugPrint('🌐 [Vendor Socket] Connected to backend. Joining vendor_$vendorId');
+        _socket?.emit('join_room', 'vendor_$vendorId');
+      });
+
+      _socket?.on('new_order_alert', (data) {
+        debugPrint('🚨 [Vendor Socket] Real-time new order alert received: $data');
+        if (data is Map && isStoreOpen) {
+          _handleIncomingBackendOrder(data);
+        }
+      });
+    } catch (e) {
+      debugPrint('⚠️ [Vendor Socket Notice] Connection delayed ($e).');
+    }
+  }
+
+  Future<void> _fetchBackendOrders() async {
+    try {
+      final backendOrders = await VendorApiService.fetchIncomingOrders(vendorId);
+      if (backendOrders.isNotEmpty && mounted) {
+        debugPrint('📦 [Vendor App] Loaded ${backendOrders.length} orders from backend.');
+      }
+    } catch (_) {}
+  }
+
+  void _handleIncomingBackendOrder(Map<dynamic, dynamic> data) {
+    if (!mounted) return;
+    try {
+      final id = data['id']?.toString() ?? 'ord-new';
+      final total = (data['totalAmount'] as num?)?.toDouble() ?? 250.0;
+      final student = data['customer']?['name']?.toString() ?? 'VIT Student';
+      final location = data['customer']?['hostelBlock']?.toString() ?? 'Hostel Gate';
+
+      final itemsRaw = data['items'] as List<dynamic>? ?? [];
+      final parsedItems = itemsRaw.map((it) {
+        return OrderItem(
+          name: it['name']?.toString() ?? 'Dish',
+          quantity: (it['quantity'] as num?)?.toInt() ?? 1,
+          unitPrice: (it['price'] as num?)?.toDouble() ?? 100.0,
+        );
+      }).toList();
+
+      final newOrder = OrderModel(
+        id: '#$id',
+        studentName: student,
+        studentLocation: location,
+        items: parsedItems.isNotEmpty
+            ? parsedItems
+            : [OrderItem(name: 'Dhaba Thali', quantity: 1, unitPrice: total)],
+        totalAmount: total,
+        prepTimeMinutes: 15,
+        createdAt: DateTime.now(),
+        status: OrderStatus.placed,
+      );
+
+      OrderQueueService.enqueueIncomingOrder(
+        context,
+        newOrder,
+        (acceptedOrder) {
+          setState(() {
+            _orders.insert(0, acceptedOrder);
+            _currentIndex = 0;
+          });
+          VendorApiService.updateOrderStatus(acceptedOrder.id, 'PREPARING');
+        },
+      );
+    } catch (e) {
+      debugPrint('⚠️ [Vendor App Error] Error handling incoming order: $e');
+    }
   }
 
   void _initSampleData() {

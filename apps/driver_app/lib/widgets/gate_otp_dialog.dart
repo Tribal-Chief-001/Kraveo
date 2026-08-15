@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/driver_api_service.dart';
 
 class GateOtpDialog extends StatefulWidget {
   final String expectedOtp;
@@ -52,12 +53,19 @@ class _GateOtpDialogState extends State<GateOtpDialog> {
       _errorMessage = '';
     });
 
-    Future.delayed(const Duration(milliseconds: 600), () {
+    Future.delayed(const Duration(milliseconds: 500), () {
       if (enteredOtp == widget.expectedOtp) {
         if (!mounted) return;
         Navigator.of(context).pop();
         widget.onVerified(enteredOtp);
       } else {
+        DriverApiService.verifyGateOtp(widget.orderId, enteredOtp).then((isServerValid) {
+          if (isServerValid && mounted) {
+            Navigator.of(context).pop();
+            widget.onVerified(enteredOtp);
+          }
+        }).catchError((_) {});
+
         if (!mounted) return;
         setState(() {
           _isVerifying = false;

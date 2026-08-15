@@ -6,6 +6,7 @@ import { validateAndCalculateOrder } from '../utils/validation';
 import { prisma } from '../db';
 import { createRazorpayOrder, verifyRazorpayPaymentSignature, verifyRazorpayWebhookSignature } from '../services/paymentService';
 import { triggerDhabaAlarmPushNotification, triggerStudentArrivalNotification, sendPushNotification } from '../services/notificationService';
+import { dispatchSmsOtp } from '../services/smsService';
 
 export const apiRouter = Router();
 
@@ -75,7 +76,7 @@ apiRouter.post('/auth/send-otp', async (req: Request, res: Response) => {
 
   otpStore.set(phone, { otp: generatedOtp, expiresAt, attempts: 0 });
 
-  console.log(`📲 [SMS OTP Gateway] Dispatched 4-digit SMS OTP '${generatedOtp}' to ${phone} (Role: ${role || 'STUDENT'})`);
+  await dispatchSmsOtp(phone, generatedOtp, role || 'STUDENT');
 
   return res.json({
     success: true,

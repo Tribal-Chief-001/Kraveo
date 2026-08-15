@@ -64,7 +64,7 @@ class OrderModel {
   final String deliveryNote;
   final String paymentMethod;
   OrderProgressStatus status;
-  final String otpCode;
+  String otpCode;
   final DateTime createdAt;
   final String riderName;
   final String riderPhone;

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:geolocator/geolocator.dart';
 import '../widgets/duty_toggle.dart';
 import '../widgets/earnings_card.dart';
 import '../widgets/swipe_accept_card.dart';
@@ -66,6 +67,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_dutyPrefKey, val.toString());
       await prefs.setBool(_dutyPrefKey, val);
     } catch (_) {}
 
@@ -96,16 +98,24 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   void _startLocationStreaming() {
     _locationTimer?.cancel();
-    // Simulate background GPS heartbeat updates (VIT Bhopal Campus region)
-    _locationTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+    _locationTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
       if (!isOnline) {
         timer.cancel();
         return;
       }
-      const baseLat = 23.0775;
-      const baseLng = 76.8513;
-      final stepOffset = (timer.tick % 6) * 0.0001;
-      DriverApiService.updateLocation(baseLat + stepOffset, baseLng + stepOffset);
+      try {
+        final position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 3),
+        );
+        DriverApiService.updateLocation(position.latitude, position.longitude, heading: position.heading);
+      } catch (_) {
+        // Background fail-safe coordinates for VIT Bhopal campus
+        const baseLat = 23.0775;
+        const baseLng = 76.8513;
+        final stepOffset = (timer.tick % 6) * 0.0001;
+        DriverApiService.updateLocation(baseLat + stepOffset, baseLng + stepOffset);
+      }
     });
   }
 

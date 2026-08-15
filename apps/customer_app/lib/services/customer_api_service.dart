@@ -1,9 +1,48 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
 
 class CustomerApiService {
+  static const String _tokenPrefKey = 'kraveo_customer_jwt_token';
+  static String? _cachedToken;
+
+  /// Retrieves stored JWT auth token from SharedPreferences or memory cache
+  static Future<String?> getSavedToken() async {
+    if (_cachedToken != null && _cachedToken!.isNotEmpty) {
+      return _cachedToken;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _cachedToken = prefs.getString(_tokenPrefKey);
+      return _cachedToken;
+    } catch (_) {
+      return _cachedToken;
+    }
+  }
+
+  /// Saves JWT token to local persistence
+  static Future<void> saveToken(String token) async {
+    _cachedToken = token;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_tokenPrefKey, token);
+    } catch (_) {}
+  }
+
+  /// Builds authenticated request headers dynamically
+  static Future<Map<String, String>> getAuthHeaders() async {
+    final token = await getSavedToken();
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+    };
+    if (token != null && token.isNotEmpty) {
+      headers['Authorization'] = token.startsWith('Bearer ') ? token : 'Bearer $token';
+    }
+    return headers;
+  }
+
   /// Sends SMS OTP to student phone number
   static Future<bool> sendOtp(String phone) async {
     try {
@@ -24,19 +63,26 @@ class CustomerApiService {
     return false;
   }
 
-  /// Verifies student 4-digit SMS OTP
-  static Future<String?> verifyOtp(String phone, String otp) async {
+  /// Verifies student 4-digit SMS OTP & stores returned JWT session token
+  static Future<String?> verifyOtp(String phone, String otp, {String? name, String? hostelBlock}) async {
     try {
       final url = Uri.parse('${ApiConfig.baseUrl}/auth/verify-otp');
+      final bodyMap = <String, dynamic>{'phone': phone, 'otp': otp, 'role': 'STUDENT'};
+      if (name != null) bodyMap['name'] = name;
+      if (hostelBlock != null) bodyMap['hostelBlock'] = hostelBlock;
+
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'phone': phone, 'otp': otp}),
+        body: jsonEncode(bodyMap),
       ).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         final token = json['token'] as String?;
+        if (token != null) {
+          await saveToken(token);
+        }
         debugPrint('🔑 [Customer API] OTP verified successfully for $phone');
         return token;
       }
@@ -46,16 +92,15 @@ class CustomerApiService {
     return null;
   }
 
-  /// Places order on AWS EC2 backend
+  /// Places order on AWS EC2 backend with dynamic JWT token
   static Future<bool> placeOrder(Map<String, dynamic> orderPayload) async {
     try {
       final url = Uri.parse('${ApiConfig.baseUrl}/orders');
+      final headers = await getAuthHeaders();
+
       final response = await http.post(
         url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer mock_jwt_token_usr-1',
-        },
+        headers: headers,
         body: jsonEncode(orderPayload),
       ).timeout(const Duration(seconds: 5));
 
@@ -69,7 +114,7 @@ class CustomerApiService {
     return false;
   }
 
-  /// Submits dish & runner review, awarding +10 Kraveo Coins
+  /// Submits dish & runner review with dynamic JWT token
   static Future<bool> submitReview({
     required String orderId,
     required double dhabaRating,
@@ -78,12 +123,11 @@ class CustomerApiService {
   }) async {
     try {
       final url = Uri.parse('${ApiConfig.baseUrl}/reviews');
+      final headers = await getAuthHeaders();
+
       final response = await http.post(
         url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer mock_jwt_token_usr-1',
-        },
+        headers: headers,
         body: jsonEncode({
           'orderId': orderId,
           'dhabaRating': dhabaRating,

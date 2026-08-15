@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
+import '../config/api_config.dart';
 import '../models/order.dart';
 import '../services/customer_api_service.dart';
 import 'cart_provider.dart';
@@ -88,15 +90,82 @@ class OrderProvider with ChangeNotifier {
     // Async sync to AWS EC2 backend API
     CustomerApiService.placeOrder(order.toJson());
 
+    _connectToOrderSocket(order.id);
     _startSimulatedProgression();
     notifyListeners();
     return order;
   }
 
+  void _connectToOrderSocket(String orderId) {
+    try {
+      final socket = IO.io(
+        ApiConfig.baseUrl,
+        IO.OptionBuilder()
+            .setTransports(['websocket', 'polling'])
+            .disableAutoConnect()
+            .build(),
+      );
+
+      socket.connect();
+
+      socket.onConnect((_) {
+        debugPrint('🌐 [Customer Socket] Connected. Joining order_$orderId');
+        socket.emit('join_room', 'order_$orderId');
+      });
+
+      socket.on('order_updated', (data) {
+        debugPrint('🔔 [Customer Socket] Order update received: $data');
+        if (data is Map && _activeOrder != null) {
+          final newStatus = data['status']?.toString().toUpperCase();
+          if (newStatus != null) {
+            _updateStatusFromBackend(newStatus, data['otpCode']?.toString());
+          }
+        }
+      });
+    } catch (e) {
+      debugPrint('⚠️ [Customer Socket Notice] Socket connection delayed ($e).');
+    }
+  }
+
+  void _updateStatusFromBackend(String statusStr, String? serverOtp) {
+    if (_activeOrder == null) return;
+    _statusTimer?.cancel();
+
+    switch (statusStr) {
+      case 'PLACED':
+        _activeOrder!.status = OrderProgressStatus.placed;
+        break;
+      case 'ACCEPTED':
+      case 'PREPARING':
+        _activeOrder!.status = OrderProgressStatus.preparing;
+        break;
+      case 'READY_FOR_PICKUP':
+      case 'PICKED_UP':
+        _activeOrder!.status = OrderProgressStatus.pickedUp;
+        break;
+      case 'IN_TRANSIT':
+        _activeOrder!.status = OrderProgressStatus.onTheWay;
+        break;
+      case 'ARRIVED_AT_GATE':
+      case 'ARRIVED':
+        _activeOrder!.status = OrderProgressStatus.arrivedAtGate;
+        if (serverOtp != null && serverOtp.isNotEmpty) {
+          _activeOrder!.otpCode = serverOtp;
+        }
+        break;
+      case 'DELIVERED':
+        _activeOrder!.status = OrderProgressStatus.delivered;
+        break;
+      case 'CANCELLED':
+        _activeOrder!.status = OrderProgressStatus.cancelled;
+        break;
+    }
+    notifyListeners();
+  }
 
   void _startSimulatedProgression() {
     _statusTimer?.cancel();
-    _statusTimer = Timer.periodic(const Duration(seconds: 8), (timer) {
+    _statusTimer = Timer.periodic(const Duration(seconds: 12), (timer) {
       if (_activeOrder == null) {
         timer.cancel();
         return;
