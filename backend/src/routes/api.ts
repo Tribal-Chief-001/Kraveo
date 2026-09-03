@@ -149,6 +149,60 @@ apiRouter.post('/auth/verify-otp', async (req: Request, res: Response) => {
   }
 });
 
+// Admin Authentication (Passcode Login for Super Admin Dashboard)
+apiRouter.post('/auth/admin-login', async (req: Request, res: Response) => {
+  try {
+    const { username, passcode } = req.body;
+
+    if (!passcode) {
+      return res.status(400).json({ success: false, message: 'Admin passcode is required.' });
+    }
+
+    const configuredPasscode = process.env.ADMIN_PASSCODE || 'kraveo_admin_2026';
+    const isPasscodeValid = String(passcode).trim() === configuredPasscode;
+
+    if (!isPasscodeValid) {
+      return res.status(401).json({ success: false, message: 'Invalid admin passcode. Access denied.' });
+    }
+
+    // Find or create admin profile in PostgreSQL
+    let adminUser = await prisma.user.findFirst({
+      where: { role: Role.ADMIN }
+    });
+
+    if (!adminUser) {
+      adminUser = await prisma.user.create({
+        data: {
+          name: username || 'Kraveo Super Admin',
+          phone: '9999999999',
+          role: Role.ADMIN,
+          hostelBlock: 'Operations Command Center',
+        }
+      });
+    }
+
+    const token = generateToken({
+      id: adminUser.id,
+      phone: adminUser.phone,
+      role: Role.ADMIN
+    });
+
+    return res.json({
+      success: true,
+      message: 'Admin authenticated successfully.',
+      token,
+      admin: {
+        id: adminUser.id,
+        name: adminUser.name,
+        role: adminUser.role,
+        phone: adminUser.phone
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message || 'Error during admin login.' });
+  }
+});
+
 
 
 // Get Authenticated User Profile

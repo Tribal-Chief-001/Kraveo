@@ -5,20 +5,50 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.en
 export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || API_BASE_URL;
 
 export const getAuthToken = (): string => {
-  return localStorage.getItem('kraveo_admin_token') || 'Bearer mock_jwt_token_usr-5';
+  return localStorage.getItem('kraveo_admin_token') || '';
+};
+
+export const setAuthToken = (token: string, adminProfile?: any) => {
+  localStorage.setItem('kraveo_admin_token', token);
+  if (adminProfile) {
+    localStorage.setItem('kraveo_admin_profile', JSON.stringify(adminProfile));
+  }
+};
+
+export const clearAuthToken = () => {
+  localStorage.removeItem('kraveo_admin_token');
+  localStorage.removeItem('kraveo_admin_profile');
+};
+
+export const isAuthenticated = (): boolean => {
+  const token = localStorage.getItem('kraveo_admin_token');
+  return Boolean(token && token.trim().length > 10);
 };
 
 const getHeaders = (extraHeaders: Record<string, string> = {}) => {
   const token = getAuthToken();
-  const authHeader = token.startsWith('Bearer ') ? token : `Bearer ${token}`;
+  const authHeader = token ? (token.startsWith('Bearer ') ? token : `Bearer ${token}`) : '';
   return {
     'Content-Type': 'application/json',
-    'Authorization': authHeader,
+    ...(authHeader ? { 'Authorization': authHeader } : {}),
     ...extraHeaders,
   };
 };
 
 export const apiService = {
+  async adminLogin(passcode: string, username?: string): Promise<{ token: string; admin: any }> {
+    const res = await fetch(`${API_BASE_URL}/api/auth/admin-login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passcode, username: username || 'Campus Dispatch Admin' }),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.message || 'Invalid admin passcode.');
+    }
+    setAuthToken(json.token, json.admin);
+    return json;
+  },
   async fetchOrders(): Promise<Order[]> {
     const res = await fetch(`${API_BASE_URL}/api/orders`, {
       headers: getHeaders(),

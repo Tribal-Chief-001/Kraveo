@@ -8,9 +8,11 @@ import { VendorManager } from './components/VendorManager';
 import { DriverManager } from './components/DriverManager';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { TabType, Order, Vendor, DriverPin, OrderStatus, DriverPartner } from './types';
-import { apiService, SOCKET_URL } from './services/api';
+import { apiService, SOCKET_URL, isAuthenticated as checkIsAuthenticated, clearAuthToken } from './services/api';
+import { LoginScreen } from './components/LoginScreen';
 
 export const App: React.FC = () => {
+  const [isAuth, setIsAuth] = useState<boolean>(checkIsAuthenticated());
   const [activeTab, setActiveTab] = useState<TabType>('map');
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(true);
 
@@ -285,6 +287,22 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleLogout = () => {
+    clearAuthToken();
+    setIsAuth(false);
+  };
+
+  if (!isAuth) {
+    return (
+      <LoginScreen
+        onLoginSuccess={() => {
+          setIsAuth(true);
+          fetchBackendData();
+        }}
+      />
+    );
+  }
+
   return (
     <div className="flex min-h-screen bg-[#0B0F19]">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
@@ -294,6 +312,7 @@ export const App: React.FC = () => {
           activeTab={activeTab} 
           isLiveConnected={isLiveConnected} 
           onRefresh={fetchBackendData} 
+          onLogout={handleLogout}
         />
 
         <main className="p-6 flex-1 overflow-y-auto">

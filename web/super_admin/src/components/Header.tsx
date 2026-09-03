@@ -1,13 +1,14 @@
 import React from 'react';
-import { Shield, Bell, RefreshCw, Radio } from 'lucide-react';
+import { Shield, Bell, RefreshCw, Radio, LogOut } from 'lucide-react';
 
 interface HeaderProps {
   activeTab: string;
   isLiveConnected: boolean;
   onRefresh: () => void;
+  onLogout?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ activeTab, isLiveConnected, onRefresh }) => {
+export const Header: React.FC<HeaderProps> = ({ activeTab, isLiveConnected, onRefresh, onLogout }) => {
   const getTabTitle = () => {
     switch (activeTab) {
       case 'map': return 'Live Campus Command Center';
@@ -62,6 +63,17 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, isLiveConnected, onRe
             <div className="text-[10px] text-gray-400">VIT Bhopal Super Admin</div>
           </div>
         </div>
+
+        {onLogout && (
+          <button
+            onClick={onLogout}
+            className="p-2 rounded-xl bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/30 hover:border-red-500/60 transition-colors flex items-center gap-1.5 text-xs font-bold"
+            title="Lock & Log Out of Command Center"
+          >
+            <LogOut className="w-4 h-4 text-red-400" />
+            <span className="hidden sm:inline">Log Out</span>
+          </button>
+        )}
       </div>
     </header>
   );
