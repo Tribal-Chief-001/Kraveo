@@ -39,15 +39,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       <div className="absolute bottom-10 right-10 w-[300px] h-[300px] bg-[#FDD400]/10 rounded-full blur-[100px] pointer-events-none" />
 
       <div className="w-full max-w-md relative z-10">
-        {/* Branding Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-[#00450D] to-[#15803d] border border-[#91D78A]/40 shadow-xl shadow-[#00450D]/40 mb-4">
-            <Shield className="w-8 h-8 text-[#FDD400]" />
+        {/* Branding Header with Real Official Logo */}
+        <div className="text-center mb-6">
+          <div className="flex justify-center mb-3">
+            <img 
+              src="/logo-bgremove.png" 
+              alt="Kraveo Logo" 
+              className="h-28 w-auto object-contain drop-shadow-[0_12px_24px_rgba(0,69,13,0.6)] hover:scale-105 transition-transform duration-300" 
+            />
           </div>
-          <h1 className="text-3xl font-extrabold text-white tracking-tight flex items-center justify-center gap-1.5">
-            KRAVEO <span className="w-2 h-2 rounded-full bg-[#FDD400] inline-block" />
-          </h1>
-          <p className="text-xs font-semibold text-[#91D78A] tracking-wider uppercase mt-1">
+          <p className="text-xs font-extrabold text-[#91D78A] tracking-wider uppercase">
             Campus Ops Command Center
           </p>
           <p className="text-xs text-gray-400 mt-1">

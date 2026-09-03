@@ -19,16 +19,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
   return (
     <aside className="w-64 border-r border-[#242f46] bg-[#1b1c1c] flex flex-col justify-between p-4 sticky top-0 h-screen">
       <div>
-        {/* Kraveo Logo Brand from Stitch UI */}
-        <div className="flex items-center space-x-3 px-3 py-4 mb-6 border-b border-[#242f46]">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#00450d] via-[#1b5e20] to-[#fdd400] flex items-center justify-center shadow-lg shadow-[#00450d]/40 font-black text-white text-xl tracking-wider border border-white/20">
-            K
-          </div>
+        {/* Kraveo Logo Brand */}
+        <div className="flex items-center space-x-3 px-2 py-3 mb-6 border-b border-[#242f46]">
+          <img 
+            src="/logo-bgremove.png" 
+            alt="Kraveo" 
+            className="h-12 w-auto object-contain drop-shadow-md" 
+          />
           <div>
-            <h1 className="text-lg font-black text-white tracking-wide flex items-center gap-1">
-              KRAVEO <Utensils className="w-4 h-4 text-[#fdd400]" />
-            </h1>
-            <p className="text-[10px] uppercase font-bold text-[#fdd400] tracking-widest">VIT Bhopal Campus</p>
+            <p className="text-[10px] uppercase font-extrabold text-[#91d78a] tracking-wider">Ops Console</p>
+            <p className="text-[10px] uppercase font-bold text-gray-400 tracking-widest">VIT Bhopal</p>
           </div>
         </div>
 
