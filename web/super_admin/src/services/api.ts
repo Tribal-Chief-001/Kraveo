@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { Order, Vendor, DriverPartner, OrderStatus } from '../types';
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? 'http://3.110.189.80' : 'http://localhost:5000');
 export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || API_BASE_URL;
 
 export const getAuthToken = (): string => {

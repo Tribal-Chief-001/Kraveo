@@ -381,6 +381,50 @@ apiRouter.get('/vendors/:id', async (req: Request, res: Response) => {
   }
 });
 
+apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { name, category, address, lat, lng, bannerImage } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, message: 'Vendor name is required.' });
+    }
+
+    const createdVendor = await prisma.vendor.create({
+      data: {
+        name: name.trim(),
+        category: category || 'North Indian • Campus Dhaba',
+        address: address || 'Ashta Highway, near VIT Bhopal',
+        lat: typeof lat === 'number' ? lat : 23.0768,
+        lng: typeof lng === 'number' ? lng : 76.8524,
+        bannerImage: bannerImage || 'https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=600',
+        isAcceptingOrders: true,
+      },
+      include: { menuItems: true }
+    });
+
+    return res.status(201).json({ success: true, message: 'Vendor onboarded successfully', data: createdVendor });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message || 'Error onboarding vendor' });
+  }
+});
+
+apiRouter.patch('/vendors/:id/status', requireAuth, requireRole('VENDOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { isAcceptingOrders } = req.body;
+    const vendor = await prisma.vendor.findUnique({ where: { id: req.params.id } });
+    if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+
+    const newStatus = typeof isAcceptingOrders === 'boolean' ? isAcceptingOrders : !vendor.isAcceptingOrders;
+
+    const updated = await prisma.vendor.update({
+      where: { id: req.params.id },
+      data: { isAcceptingOrders: newStatus }
+    });
+    return res.json({ success: true, isAcceptingOrders: updated.isAcceptingOrders, data: updated });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message || 'Error updating vendor status' });
+  }
+});
+
 apiRouter.patch('/vendors/:id/toggle', requireAuth, requireRole('VENDOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const vendor = await prisma.vendor.findUnique({ where: { id: req.params.id } });
@@ -393,6 +437,32 @@ apiRouter.patch('/vendors/:id/toggle', requireAuth, requireRole('VENDOR', 'ADMIN
     return res.json({ success: true, isAcceptingOrders: updated.isAcceptingOrders });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message || 'Error toggling vendor' });
+  }
+});
+
+apiRouter.post('/vendors/:id/items', requireAuth, requireRole('VENDOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { name, price, category, description, isVeg, imageUrl } = req.body;
+    if (!name || price === undefined) {
+      return res.status(400).json({ success: false, message: 'Item name and price are required.' });
+    }
+
+    const newItem = await prisma.menuItem.create({
+      data: {
+        vendorId: req.params.id,
+        name: name.trim(),
+        price: parseFloat(price.toString()),
+        category: category || 'Main Course',
+        description: description || '',
+        isVeg: isVeg !== false,
+        imageUrl: imageUrl || 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400',
+        isAvailable: true,
+      }
+    });
+
+    return res.status(201).json({ success: true, message: 'Menu item created successfully', data: newItem });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message || 'Error creating menu item' });
   }
 });
 
