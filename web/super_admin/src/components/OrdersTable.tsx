@@ -4,12 +4,17 @@ import { Search, Filter, Phone, CheckCircle, Clock, AlertTriangle, ShieldCheck }
 
 interface OrdersTableProps {
   orders: Order[];
-  onStatusChange: (orderId: string, status: OrderStatus) => void;
+  onStatusChange: (orderId: string, status: OrderStatus, otpCode?: string) => void;
 }
 
 export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, onStatusChange }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [otpByOrder, setOtpByOrder] = useState<Record<string, string>>({});
+  const nextStatuses: Record<OrderStatus, OrderStatus[]> = {
+    PLACED: ['ACCEPTED', 'CANCELLED'], ACCEPTED: ['PREPARING', 'CANCELLED'], PREPARING: ['READY_FOR_PICKUP', 'CANCELLED'],
+    READY_FOR_PICKUP: ['PICKED_UP', 'CANCELLED'], PICKED_UP: ['ARRIVED_AT_GATE', 'CANCELLED'], ARRIVED_AT_GATE: ['DELIVERED'], DELIVERED: [], CANCELLED: []
+  };
 
   const filteredOrders = orders.filter((o) => {
     const q = searchTerm.toLowerCase();
@@ -94,11 +99,13 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, onStatusChange
               <th className="px-4 py-3">Highway Dhaba</th>
               <th className="px-4 py-3">Assigned Runner</th>
               <th className="px-4 py-3">Amount</th>
+              <th className="px-4 py-3">Payment</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3 text-right">Quick Override</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#242F46]/60 text-gray-200 font-medium">
+            {filteredOrders.length === 0 && <tr><td colSpan={8} className="px-4 py-12 text-center text-sm text-gray-500">No orders match the current filters.</td></tr>}
             {filteredOrders.map((ord) => (
               <tr key={ord.id} className="hover:bg-[#151C2C]/80 transition-colors">
                 <td className="px-4 py-3.5 font-mono font-bold text-orange-400">{ord.id}</td>
@@ -118,26 +125,22 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, onStatusChange
                     <span className="text-gray-500 italic">Unassigned</span>
                   )}
                 </td>
-                <td className="px-4 py-3.5 font-bold text-white">₹{ord.totalAmount}</td>
+                <td className="px-4 py-3.5 font-bold text-white">₹{ord.totalAmount.toLocaleString('en-IN')}</td>
+                <td className="px-4 py-3.5"><span className={ord.paymentStatus === 'PAID' ? 'text-emerald-400' : 'text-amber-400'}>{ord.paymentStatus}</span></td>
                 <td className="px-4 py-3.5">
                   <span className={`px-2.5 py-1 rounded-full border text-[11px] font-bold ${getStatusBadge(ord.status)}`}>
                     {ord.status}
                   </span>
                 </td>
                 <td className="px-4 py-3.5 text-right">
+                  {ord.status === 'ARRIVED_AT_GATE' && <input aria-label={`Gate OTP for ${ord.id}`} value={otpByOrder[ord.id] || ''} onChange={(e) => setOtpByOrder((current) => ({ ...current, [ord.id]: e.target.value.replace(/\D/g, '').slice(0, 4) }))} placeholder="Gate OTP" inputMode="numeric" className="mb-1 w-20 bg-[#0B0F19] text-white border border-[#242F46] rounded-lg px-2 py-1 text-[11px]" />}
                   <select
                     value={ord.status}
-                    onChange={(e) => onStatusChange(ord.id, e.target.value as OrderStatus)}
+                    onChange={(e) => onStatusChange(ord.id, e.target.value as OrderStatus, otpByOrder[ord.id])}
                     className="bg-[#0B0F19] text-gray-200 border border-[#242F46] rounded-lg px-2 py-1 text-[11px] font-bold focus:border-[#fdd400] cursor-pointer"
                   >
-                    <option value="PLACED">Set PLACED</option>
-                    <option value="ACCEPTED">Set ACCEPTED</option>
-                    <option value="PREPARING">Set PREPARING</option>
-                    <option value="READY_FOR_PICKUP">Set READY FOR PICKUP</option>
-                    <option value="PICKED_UP">Set PICKED UP</option>
-                    <option value="ARRIVED_AT_GATE">Set ARRIVED AT GATE</option>
-                    <option value="DELIVERED">Set DELIVERED</option>
-                    <option value="CANCELLED">Set CANCELLED</option>
+                    <option value={ord.status}>{ord.status}</option>
+                    {nextStatuses[ord.status].map((nextStatus) => <option key={nextStatus} value={nextStatus}>Set {nextStatus}</option>)}
                   </select>
                 </td>
               </tr>

@@ -1,79 +1,48 @@
 import React from 'react';
-import { Shield, Bell, RefreshCw, Radio, LogOut } from 'lucide-react';
+import { Bell, LogOut, Radio, RefreshCw, Shield } from 'lucide-react';
+import { AdminProfile, TabType } from '../types';
 
 interface HeaderProps {
-  activeTab: string;
+  activeTab: TabType;
   isLiveConnected: boolean;
+  isLoading: boolean;
+  adminProfile?: AdminProfile;
   onRefresh: () => void;
-  onLogout?: () => void;
+  onLogout: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ activeTab, isLiveConnected, onRefresh, onLogout }) => {
-  const getTabTitle = () => {
-    switch (activeTab) {
-      case 'map': return 'Live Campus Command Center';
-      case 'orders': return 'Active Orders Matrix';
-      case 'vendors': return 'Dhaba & Menu Management';
-      case 'analytics': return 'Campus Delivery Analytics';
-      default: return 'Command Center';
-    }
+export const Header: React.FC<HeaderProps> = ({ activeTab, isLiveConnected, isLoading, adminProfile, onRefresh, onLogout }) => {
+  const title: Record<TabType, string> = {
+    map: 'Live Campus Command Center',
+    orders: 'Active Orders Matrix',
+    vendors: 'Dhaba & Menu Management',
+    drivers: 'Driver Partner Operations',
+    analytics: 'Campus Delivery Analytics',
   };
 
   return (
-    <header className="h-16 border-b border-[#242f46] bg-[#1b1c1c]/90 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-30">
-      <div className="flex items-center space-x-4">
-        <h1 className="text-lg font-extrabold text-white tracking-tight flex items-center gap-2">
-          {getTabTitle()}
-        </h1>
-        <div className="flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-[#151c2c] border border-[#242f46]">
-          <span className={`w-2 h-2 rounded-full ${isLiveConnected ? 'bg-[#91d78a] animate-pulse' : 'bg-[#fdd400]'}`} />
-          <span className="text-gray-300 flex items-center gap-1">
-            <Radio className="w-3 h-3 text-[#fdd400] animate-spin" />
-            {isLiveConnected ? 'Socket.io Stream Active' : 'Connecting Engine...'}
-          </span>
+    <header className="sticky top-0 z-30 flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-[#242f46] bg-[#1b1c1c]/95 px-4 py-3 backdrop-blur-md sm:px-6">
+      <div className="flex min-w-0 items-center gap-3">
+        <h1 className="truncate text-base font-extrabold tracking-tight text-white sm:text-lg">{title[activeTab]}</h1>
+        <div className="hidden items-center gap-2 rounded-full border border-[#242f46] bg-[#151c2c] px-3 py-1 text-xs font-semibold sm:flex">
+          <span className={`h-2 w-2 rounded-full ${isLiveConnected ? 'bg-[#91d78a] animate-pulse' : 'bg-red-400'}`} />
+          <span className="flex items-center gap-1 text-gray-300"><Radio className="h-3 w-3 text-[#fdd400]" />{isLiveConnected ? 'Live stream' : 'Offline'}</span>
         </div>
       </div>
-
-      <div className="flex items-center space-x-3">
-        <button 
-          onClick={onRefresh}
-          className="p-2 rounded-xl bg-[#151c2c] hover:bg-[#1b2538] text-gray-300 border border-[#242f46] transition-colors"
-          title="Refresh Data Feed"
-        >
-          <RefreshCw className="w-4 h-4 text-[#fdd400]" />
+      <div className="flex items-center gap-2">
+        <button aria-label="Refresh data feed" title="Refresh data feed" onClick={onRefresh} disabled={isLoading} className="rounded-xl border border-[#242f46] bg-[#151c2c] p-2 text-gray-300 transition-colors hover:bg-[#1b2538] disabled:cursor-wait disabled:opacity-60">
+          <RefreshCw className={`h-4 w-4 text-[#fdd400] ${isLoading ? 'animate-spin' : ''}`} />
         </button>
-        
-        <div className="relative">
-          <button className="p-2 rounded-xl bg-[#151c2c] text-gray-300 border border-[#242f46] hover:text-white">
-            <Bell className="w-4 h-4" />
-            <span className="absolute top-1 right-1 w-2 h-2 bg-[#fdd400] rounded-full" />
-          </button>
+        <button aria-label="Notifications" title="Notifications are not configured" className="relative rounded-xl border border-[#242f46] bg-[#151c2c] p-2 text-gray-300">
+          <Bell className="h-4 w-4" />
+          <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-[#fdd400]" />
+        </button>
+        <div className="hidden h-6 w-px bg-[#242f46] sm:block" />
+        <div className="hidden items-center gap-2 rounded-xl border border-[#242f46] bg-[#151c2c] px-3 py-1.5 sm:flex">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[#91d78a]/40 bg-[#00450d] text-xs font-bold text-[#fdd400]">{(adminProfile?.name || 'AD').slice(0, 2).toUpperCase()}</div>
+          <div className="max-w-40 text-left"><div className="truncate text-xs font-bold text-white">{adminProfile?.name || 'Admin'} <Shield className="inline h-3 w-3 text-[#fdd400]" /></div><div className="truncate text-[10px] text-gray-400">Administrator</div></div>
         </div>
-
-        <div className="h-6 w-[1px] bg-[#242f46] mx-1" />
-
-        <div className="flex items-center space-x-3 bg-[#151c2c] px-3 py-1.5 rounded-xl border border-[#242f46]">
-          <div className="w-8 h-8 rounded-full bg-[#00450d] border border-[#91d78a]/40 flex items-center justify-center font-bold text-[#fdd400] text-xs">
-            KV
-          </div>
-          <div className="text-left">
-            <div className="text-xs font-bold text-white flex items-center gap-1">
-              Kraveo Founder <Shield className="w-3 h-3 text-[#fdd400] inline" />
-            </div>
-            <div className="text-[10px] text-gray-400">VIT Bhopal Super Admin</div>
-          </div>
-        </div>
-
-        {onLogout && (
-          <button
-            onClick={onLogout}
-            className="p-2 rounded-xl bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/30 hover:border-red-500/60 transition-colors flex items-center gap-1.5 text-xs font-bold"
-            title="Lock & Log Out of Command Center"
-          >
-            <LogOut className="w-4 h-4 text-red-400" />
-            <span className="hidden sm:inline">Log Out</span>
-          </button>
-        )}
+        <button aria-label="Log out" title="Lock and log out" onClick={onLogout} className="flex items-center gap-1.5 rounded-xl border border-red-500/30 bg-red-950/40 p-2 text-xs font-bold text-red-300 transition-colors hover:bg-red-900/60 sm:px-3"><LogOut className="h-4 w-4 text-red-400" /><span className="hidden sm:inline">Log out</span></button>
       </div>
     </header>
   );

@@ -1,111 +1,49 @@
-import React from 'react';
-import { TrendingUp, DollarSign, Clock, Users, Award } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { TrendingUp, DollarSign, Clock, Users, Award, RefreshCw } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, BarChart, Bar } from 'recharts';
+import { AnalyticsData } from '../types';
+import { apiService } from '../services/api';
 
-const hourlyOrdersData = [
-  { hour: '12 PM', orders: 15 },
-  { hour: '2 PM', orders: 32 },
-  { hour: '4 PM', orders: 18 },
-  { hour: '6 PM', orders: 45 },
-  { hour: '8 PM', orders: 85 },
-  { hour: '10 PM', orders: 120 },
-  { hour: '12 AM', orders: 140 },
-  { hour: '2 AM', orders: 60 }
-];
-
-const hostelOrdersData = [
-  { hostel: 'Boys Block 1', orders: 45 },
-  { hostel: 'Boys Block 2', orders: 60 },
-  { hostel: 'Boys Block 3', orders: 95 },
-  { hostel: 'Boys Block 4', orders: 50 },
-  { hostel: 'Girls Gate 1', orders: 80 },
-  { hostel: 'Girls Gate 2', orders: 70 }
-];
+type Range = 'today' | '7d' | '30d';
 
 export const AnalyticsPanel: React.FC = () => {
-  return (
-    <div className="space-y-6">
-      {/* Metric Highlights */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="glass-card p-4 rounded-xl space-y-1">
-          <div className="text-xs font-bold text-gray-400 uppercase">Gross Order Volume</div>
-          <div className="text-2xl font-extrabold text-white flex items-center justify-between">
-            <span>₹42,850</span>
-            <DollarSign className="w-6 h-6 text-emerald-500" />
-          </div>
-          <p className="text-[11px] text-emerald-400">↑ +24% vs last week</p>
-        </div>
+  const [range, setRange] = useState<Range>('7d');
+  const [data, setData] = useState<AnalyticsData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const load = async (nextRange = range) => {
+    setLoading(true); setError('');
+    try { setData(await apiService.fetchAnalytics(nextRange)); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Analytics could not be loaded.'); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void load(); }, [range]);
 
-        <div className="glass-card p-4 rounded-xl space-y-1">
-          <div className="text-xs font-bold text-gray-400 uppercase">Avg Delivery Time</div>
-          <div className="text-2xl font-extrabold text-white flex items-center justify-between">
-            <span>26.4 Mins</span>
-            <Clock className="w-6 h-6 text-amber-500" />
-          </div>
-          <p className="text-[11px] text-gray-400">Highway dhaba to Hostel Gate</p>
-        </div>
+  const cards = data ? [
+    { label: 'Gross paid volume', value: `₹${data.grossOrderVolume.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, note: `${data.orderCount} orders in selected range`, icon: DollarSign, color: 'text-emerald-500' },
+    { label: 'Average delivery time', value: `${data.averageDeliveryMinutes.toFixed(1)} min`, note: 'Created to last persisted update', icon: Clock, color: 'text-amber-500' },
+    { label: 'Active students', value: data.activeStudents.toLocaleString('en-IN'), note: `${data.cancellationRate.toFixed(1)}% cancellation rate`, icon: Users, color: 'text-orange-500' },
+    { label: 'Top vendor', value: data.topVendor?.name || 'No delivered orders', note: data.topVendor ? `${data.topVendor.deliveredOrders} delivered orders` : 'Awaiting completed orders', icon: Award, color: 'text-purple-500' },
+  ] : [];
 
-        <div className="glass-card p-4 rounded-xl space-y-1">
-          <div className="text-xs font-bold text-gray-400 uppercase">Active Students</div>
-          <div className="text-2xl font-extrabold text-white flex items-center justify-between">
-            <span>485 Unique</span>
-            <Users className="w-6 h-6 text-orange-500" />
-          </div>
-          <p className="text-[11px] text-emerald-400">VIT Bhopal Campus Active</p>
-        </div>
-
-        <div className="glass-card p-4 rounded-xl space-y-1">
-          <div className="text-xs font-bold text-gray-400 uppercase">Top Dhaba</div>
-          <div className="text-2xl font-extrabold text-white flex items-center justify-between">
-            <span>Sharma Dhaba</span>
-            <Award className="w-6 h-6 text-purple-500" />
-          </div>
-          <p className="text-[11px] text-gray-400">182 Thalis Delivered</p>
-        </div>
-      </div>
-
-      {/* Analytics Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Peak Order Hours Area Chart */}
-        <div className="glass-card rounded-2xl p-5 border border-[#242F46] space-y-4">
-          <h3 className="text-sm font-bold text-white flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-orange-500" /> Campus Peak Order Hours (Late Night Rush)
-          </h3>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={hourlyOrdersData}>
-                <defs>
-                  <linearGradient id="colorOrders" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#FF5722" stopOpacity={0.8}/>
-                    <stop offset="95%" stopColor="#FF5722" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="hour" stroke="#64748B" fontSize={11} />
-                <YAxis stroke="#64748B" fontSize={11} />
-                <Tooltip contentStyle={{ background: '#0B0F19', borderColor: '#242F46', borderRadius: '12px', fontSize: '12px' }} />
-                <Area type="monotone" dataKey="orders" stroke="#FF5722" fillOpacity={1} fill="url(#colorOrders)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Hostel Dropoff Distribution Bar Chart */}
-        <div className="glass-card rounded-2xl p-5 border border-[#242F46] space-y-4">
-          <h3 className="text-sm font-bold text-white flex items-center gap-2">
-            <Users className="w-4 h-4 text-amber-500" /> Hostel Block Delivery Volume
-          </h3>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={hostelOrdersData}>
-                <XAxis dataKey="hostel" stroke="#64748B" fontSize={10} />
-                <YAxis stroke="#64748B" fontSize={11} />
-                <Tooltip contentStyle={{ background: '#0B0F19', borderColor: '#242F46', borderRadius: '12px', fontSize: '12px' }} />
-                <Bar dataKey="orders" fill="#FF9800" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
+  return <div className="space-y-6">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div><h2 className="text-lg font-bold text-white">Operations analytics</h2><p className="text-xs text-gray-400">Calculated from persisted orders; no sample metrics are shown.</p></div>
+      <div className="flex items-center gap-2">
+        {(['today', '7d', '30d'] as Range[]).map((option) => <button key={option} onClick={() => setRange(option)} className={`rounded-lg px-3 py-1.5 text-xs font-bold ${range === option ? 'bg-[#fdd400] text-[#0B0F19]' : 'border border-[#242F46] text-gray-300'}`}>{option === 'today' ? 'Today' : option}</button>)}
+        <button aria-label="Refresh analytics" title="Refresh analytics" onClick={() => void load()} className="rounded-lg border border-[#242F46] p-2 text-gray-300 hover:text-white"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button>
       </div>
     </div>
-  );
+    {error && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-950/30 px-4 py-3 text-xs text-red-200">{error}</div>}
+    {loading && !data && <div className="rounded-xl border border-[#242F46] p-8 text-center text-sm text-gray-400">Loading persisted analytics…</div>}
+    {!loading && !data && !error && <div className="rounded-xl border border-[#242F46] p-8 text-center text-sm text-gray-400">No analytics data available for this range.</div>}
+    {data && <>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">{cards.map(({ label, value, note, icon: Icon, color }) => <div key={label} className="glass-card rounded-xl p-4 space-y-1"><div className="text-xs font-bold uppercase text-gray-400">{label}</div><div className="flex items-center justify-between gap-2 text-2xl font-extrabold text-white"><span className="truncate">{value}</span><Icon className={`h-6 w-6 shrink-0 ${color}`} /></div><p className="text-[11px] text-gray-400">{note}</p></div>)}</div>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="glass-card rounded-2xl border border-[#242F46] p-5 space-y-4"><h3 className="flex items-center gap-2 text-sm font-bold text-white"><TrendingUp className="h-4 w-4 text-orange-500" /> Orders by hour</h3><div className="h-64"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data.hourlyOrders}><defs><linearGradient id="colorOrders" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#FF5722" stopOpacity={0.8}/><stop offset="95%" stopColor="#FF5722" stopOpacity={0}/></linearGradient></defs><XAxis dataKey="hour" stroke="#64748B" fontSize={10} interval={2}/><YAxis stroke="#64748B" fontSize={11} allowDecimals={false}/><Tooltip contentStyle={{ background: '#0B0F19', borderColor: '#242F46', borderRadius: '12px', fontSize: '12px' }}/><Area type="monotone" dataKey="orders" stroke="#FF5722" fill="url(#colorOrders)"/></AreaChart></ResponsiveContainer></div></div>
+        <div className="glass-card rounded-2xl border border-[#242F46] p-5 space-y-4"><h3 className="flex items-center gap-2 text-sm font-bold text-white"><Users className="h-4 w-4 text-amber-500" /> Hostel drop-off volume</h3>{data.hostelOrders.length ? <div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.hostelOrders}><XAxis dataKey="hostel" stroke="#64748B" fontSize={10}/><YAxis stroke="#64748B" fontSize={11} allowDecimals={false}/><Tooltip contentStyle={{ background: '#0B0F19', borderColor: '#242F46', borderRadius: '12px', fontSize: '12px' }}/><Bar dataKey="orders" fill="#FF9800" radius={[6, 6, 0, 0]}/></BarChart></ResponsiveContainer></div> : <div className="flex h-64 items-center justify-center text-sm text-gray-500">No non-cancelled orders in this range.</div>}</div>
+      </div>
+      <p className="text-right text-[11px] text-gray-500">Generated {new Date(data.generatedAt).toLocaleString()}</p>
+    </>}
+  </div>;
 };

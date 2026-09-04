@@ -1,13 +1,18 @@
 import crypto from 'crypto';
 import Razorpay from 'razorpay';
+import dotenv from 'dotenv';
 
-const razorpayKeyId = process.env.RAZORPAY_KEY_ID || 'rzp_test_kraveo_vit_bhopal_key';
-const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || 'kraveo_razorpay_secret_key_2026';
+dotenv.config();
 
-const razorpay = new Razorpay({
-  key_id: razorpayKeyId,
-  key_secret: razorpayKeySecret,
-});
+const razorpayKeyId = process.env.RAZORPAY_KEY_ID || '';
+const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || '';
+
+let razorpayClient: Razorpay | undefined;
+const getRazorpayClient = () => {
+  if (!razorpayKeyId || !razorpayKeySecret) return undefined;
+  razorpayClient ||= new Razorpay({ key_id: razorpayKeyId, key_secret: razorpayKeySecret });
+  return razorpayClient;
+};
 
 export interface CreatePaymentOrderResult {
   success: boolean;
@@ -20,6 +25,10 @@ export interface CreatePaymentOrderResult {
 
 // Creates an official Razorpay payment order for UPI checkout
 export const createRazorpayOrder = async (orderId: string, amountInRupees: number): Promise<CreatePaymentOrderResult> => {
+  const razorpay = getRazorpayClient();
+  if (!razorpay) {
+    return { success: false, error: 'Razorpay is not configured on this server.' };
+  }
   try {
     const amountInPaise = Math.round(amountInRupees * 100);
 
@@ -43,14 +52,11 @@ export const createRazorpayOrder = async (orderId: string, amountInRupees: numbe
       keyId: razorpayKeyId,
     };
   } catch (err: any) {
-    console.warn('⚠️ [Razorpay Fallback] Using simulated test transaction order ID for dev mode:', err.message);
-    return {
-      success: true,
-      razorpayOrderId: `rzp_order_sim_${Date.now()}`,
-      amountInPaise: Math.round(amountInRupees * 100),
-      currency: 'INR',
-      keyId: razorpayKeyId,
-    };
+    if (process.env.NODE_ENV === 'test') {
+      return { success: true, razorpayOrderId: `rzp_order_sim_${Date.now()}`, amountInPaise: Math.round(amountInRupees * 100), currency: 'INR', keyId: razorpayKeyId };
+    }
+    console.error('Razorpay order creation failed:', err.message);
+    return { success: false, error: 'Payment provider is unavailable. Please try again.' };
   }
 };
 
@@ -60,7 +66,7 @@ export const verifyRazorpayPaymentSignature = (
   razorpayPaymentId: string,
   signature: string
 ): boolean => {
-  if (process.env.NODE_ENV !== 'production' && razorpayOrderId.startsWith('rzp_order_sim_')) {
+  if (process.env.NODE_ENV === 'test' && razorpayOrderId.startsWith('rzp_order_sim_')) {
     return true; // Auto-pass simulation signatures in development mode
   }
 
@@ -75,7 +81,7 @@ export const verifyRazorpayPaymentSignature = (
   return crypto.timingSafeEqual(bufGen, bufSig);
 };
 
-const razorpayWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'kraveo_webhook_secret_2026';
+const razorpayWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
 
 // Validates HMAC SHA256 webhook signature sent in x-razorpay-signature header
 export const verifyRazorpayWebhookSignature = (
@@ -84,10 +90,11 @@ export const verifyRazorpayWebhookSignature = (
 ): boolean => {
   if (!signature) return false;
 
-  if (process.env.NODE_ENV !== 'production' && signature === 'valid_test_wh_signature') {
+  if (process.env.NODE_ENV === 'test' && signature === 'valid_test_wh_signature') {
     return true; // Test suite compatibility in non-production environments
   }
 
+  if (!razorpayWebhookSecret) return false;
   const expectedSignature = crypto
     .createHmac('sha256', razorpayWebhookSecret)
     .update(rawBody)

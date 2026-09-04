@@ -449,6 +449,7 @@ async function main() {
       status: OrderStatus.PICKED_UP,
       paymentStatus: PaymentStatus.PAID,
       driverId: 'usr-4',
+      otpCode: null,
     },
     create: {
       id: 'ord-101',
@@ -461,7 +462,6 @@ async function main() {
       dropoffNotes: 'Call when at Hostel Gate 2',
       status: OrderStatus.PICKED_UP,
       paymentStatus: PaymentStatus.PAID,
-      otpCode: '1234',
       items: {
         create: [
           { menuItemId: 'item-1', name: 'Special Shahi Paneer Thali', quantity: 2, price: 180.0 },
@@ -476,6 +476,7 @@ async function main() {
     update: {
       status: OrderStatus.PREPARING,
       paymentStatus: PaymentStatus.PAID,
+      otpCode: null,
     },
     create: {
       id: 'ord-102',
@@ -487,7 +488,6 @@ async function main() {
       dropoffNotes: 'Leave with security if not answering',
       status: OrderStatus.PREPARING,
       paymentStatus: PaymentStatus.PAID,
-      otpCode: '5678',
       items: {
         create: [
           { menuItemId: 'item-4', name: 'Cheese Butter Cheese Maggi', quantity: 1, price: 70.0 },

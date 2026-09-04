@@ -1,6 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import dotenv from 'dotenv';
 import { UserRole } from '../types';
+
+dotenv.config();
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -10,11 +13,16 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'kraveo_vit_bhopal_super_secret_jwt_key_2026';
+const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'test' ? 'kraveo_vit_bhopal_super_secret_jwt_key_2026' : '');
+
+const getJwtSecret = (): string => {
+  if (!JWT_SECRET) throw new Error('JWT_SECRET is not configured.');
+  return JWT_SECRET;
+};
 
 // Generates real signed JWT tokens with 30-day expiration
 export const generateToken = (payload: { id: string; phone: string; role: UserRole }): string => {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: '30d' });
 };
 
 // Middleware to verify JWT authentication header
@@ -31,7 +39,7 @@ export const requireAuth = (req: AuthenticatedRequest, res: Response, next: Next
   const token = authHeader.split(' ')[1];
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { id: string; phone: string; role: UserRole };
+    const decoded = jwt.verify(token, getJwtSecret()) as { id: string; phone: string; role: UserRole };
     req.user = decoded;
     return next();
   } catch (error) {
@@ -43,6 +51,7 @@ export const requireAuth = (req: AuthenticatedRequest, res: Response, next: Next
 };
 
 export const authenticateJwt = requireAuth;
+export const verifyToken = (token: string) => jwt.verify(token, getJwtSecret()) as { id: string; phone: string; role: UserRole };
 
 // Role-Based Access Control (RBAC) middleware
 export const requireRole = (...allowedRoles: UserRole[]) => {

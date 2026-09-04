@@ -1,6 +1,6 @@
 import React from 'react';
 import { TabType } from '../types';
-import { MapPin, ShoppingBag, Store, TrendingUp, Cpu, Utensils, Bike } from 'lucide-react';
+import { MapPin, ShoppingBag, Store, TrendingUp, Cpu, Bike } from 'lucide-react';
 
 interface SidebarProps {
   activeTab: TabType;
@@ -17,10 +17,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
   ];
 
   return (
-    <aside className="w-64 border-r border-[#242f46] bg-[#1b1c1c] flex flex-col justify-between p-4 sticky top-0 h-screen">
+    <aside className="flex w-full flex-col justify-between border-b border-[#242f46] bg-[#1b1c1c] p-3 lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:border-b-0 lg:border-r lg:p-4">
       <div>
         {/* Kraveo Logo Brand */}
-        <div className="flex items-center space-x-3 px-2 py-3 mb-6 border-b border-[#242f46]">
+        <div className="mb-3 flex items-center space-x-3 border-b border-[#242f46] px-2 py-2 sm:mb-6 sm:py-3">
           <img 
             src="/logo-bgremove.png" 
             alt="Kraveo" 
@@ -34,7 +34,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
 
         {/* Navigation Section */}
         <div className="space-y-1.5">
-          <p className="px-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Core Operations</p>
+          <p className="mb-2 hidden px-3 text-[10px] font-bold uppercase tracking-widest text-gray-400 sm:block">Core Operations</p>
+          <div className="flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1.5">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -42,7 +43,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id as TabType)}
-                className={`w-full flex items-center space-x-3 px-3 py-3 rounded-xl font-bold text-xs tracking-wide transition-all duration-200 ${
+                aria-label={item.label}
+                className={`flex min-w-max items-center space-x-2 rounded-xl px-3 py-2.5 text-xs font-bold tracking-wide transition-all duration-200 lg:w-full lg:space-x-3 lg:py-3 ${
                   isActive
                     ? 'bg-gradient-to-r from-[#00450d] to-[#1b5e20] text-white shadow-md shadow-[#00450d]/40 border border-[#91d78a]/30'
                     : 'text-gray-400 hover:text-white hover:bg-[#151c2c]'
@@ -53,11 +55,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
               </button>
             );
           })}
+          </div>
         </div>
       </div>
 
       {/* System Engine Card */}
-      <div className="p-3 rounded-xl bg-[#151c2c] border border-[#242f46] space-y-2">
+      <div className="mt-3 hidden space-y-2 rounded-xl border border-[#242f46] bg-[#151c2c] p-3 lg:block">
         <div className="flex items-center justify-between text-xs text-gray-400">
           <span className="flex items-center gap-1.5 font-semibold text-white">
             <Cpu className="w-4 h-4 text-[#fdd400]" /> Engine

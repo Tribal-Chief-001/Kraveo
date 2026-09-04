@@ -32,6 +32,7 @@ try {
 // Sends push notifications to dhaba tablet phones, runners, and student devices
 export const sendPushNotification = async (payload: PushNotificationPayload): Promise<boolean> => {
   console.log(`🔔 [FCM Notification Engine] Dispatching alert: "${payload.title}" - ${payload.body}`);
+  if (process.env.NODE_ENV === 'test') return true;
 
   try {
     const apps = getApps();

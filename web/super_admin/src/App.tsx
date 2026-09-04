@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -7,342 +7,192 @@ import { OrdersTable } from './components/OrdersTable';
 import { VendorManager } from './components/VendorManager';
 import { DriverManager } from './components/DriverManager';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
-import { TabType, Order, Vendor, DriverPin, OrderStatus, DriverPartner } from './types';
-import { apiService, SOCKET_URL, isAuthenticated as checkIsAuthenticated, clearAuthToken } from './services/api';
+import { AdminProfile, DriverPartner, DriverPin, Order, OrderStatus, TabType, Vendor, normalizeOrder } from './types';
+import { ApiError, apiService, clearAuthToken, getAuthToken, isAuthenticated as hasSession, SOCKET_URL } from './services/api';
 import { LoginScreen } from './components/LoginScreen';
 
 export const App: React.FC = () => {
-  const [isAuth, setIsAuth] = useState<boolean>(checkIsAuthenticated());
+  const [isAuth, setIsAuth] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [adminProfile, setAdminProfile] = useState<AdminProfile | undefined>();
   const [activeTab, setActiveTab] = useState<TabType>('map');
-  const [isLiveConnected, setIsLiveConnected] = useState<boolean>(true);
+  const [isLiveConnected, setIsLiveConnected] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [driverPartners, setDriverPartners] = useState<DriverPartner[]>([]);
+  const [drivers, setDrivers] = useState<DriverPin[]>([]);
 
-  // Initial Driver Partners State
-  const [driverPartners, setDriverPartners] = useState<DriverPartner[]>([
-    {
-      id: 'usr-4',
-      name: 'Vikram Singh',
-      phone: '+91 9876543213',
-      studentRegNo: '21BCG10045',
-      runnerCode: 'RUN-8042',
-      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
-      vehicleType: 'TVS Jupiter Scooty',
-      vehicleRegNo: 'MP 04 AB 1234',
-      emergencyPhone: '+91 98989 12345',
-      dutyStatus: 'IN_TRANSIT',
-      ordersToday: 8,
-      totalEarningsToday: 320,
-      avgCompletionTimeMinutes: 18.5,
-      onTimeRatePercent: 98.2,
-      rating: 4.9,
-      upiId: 'vikram@upi',
-      createdAt: new Date().toISOString()
-    },
-    {
-      id: 'usr-8',
-      name: 'Rohan Mehta',
-      phone: '+91 9123456780',
-      studentRegNo: '22BCE10192',
-      runnerCode: 'RUN-8043',
-      avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80',
-      vehicleType: 'Hero Splendor Bike',
-      vehicleRegNo: 'MP 04 CD 5678',
-      emergencyPhone: '+91 97777 54321',
-      dutyStatus: 'ONLINE',
-      ordersToday: 5,
-      totalEarningsToday: 200,
-      avgCompletionTimeMinutes: 16.0,
-      onTimeRatePercent: 99.0,
-      rating: 4.8,
-      upiId: 'rohanm@upi',
-      createdAt: new Date().toISOString()
-    },
-    {
-      id: 'usr-9',
-      name: 'Aman Deep',
-      phone: '+91 9112233445',
-      studentRegNo: '23BCE10884',
-      runnerCode: 'RUN-8044',
-      avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80',
-      vehicleType: 'Bicycle (Campus)',
-      vehicleRegNo: 'CYCLE-B3',
-      emergencyPhone: '+91 96666 11223',
-      dutyStatus: 'OFFLINE',
-      ordersToday: 0,
-      totalEarningsToday: 0,
-      avgCompletionTimeMinutes: 22.0,
-      onTimeRatePercent: 95.5,
-      rating: 4.7,
-      upiId: 'amand@upi',
-      createdAt: new Date().toISOString()
+  const handleAuthFailure = useCallback((error: unknown) => {
+    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+      clearAuthToken();
+      setIsAuth(false);
+      setAdminProfile(undefined);
     }
-  ]);
+    setErrorMessage(error instanceof Error ? error.message : 'The operations request failed.');
+  }, []);
 
-  // Mock State Data (Synced with API backend)
-  const [orders, setOrders] = useState<Order[]>([
-    {
-      id: 'ord-101',
-      customerName: 'Rahul Sharma',
-      customerPhone: '+91 9876543210',
-      vendorName: 'Sharma Highway Dhaba',
-      driverName: 'Vikram Singh',
-      itemsCount: 4,
-      totalAmount: 460,
-      dropoffHostel: 'Boys Hostel Block 3',
-      status: 'PICKED_UP',
-      createdAt: '15 mins ago'
-    },
-    {
-      id: 'ord-102',
-      customerName: 'Ananya Verma',
-      customerPhone: '+91 9876543211',
-      vendorName: 'Campus Night Canteen',
-      driverName: 'Aman Patel',
-      itemsCount: 2,
-      totalAmount: 175,
-      dropoffHostel: 'Girls Hostel Gate 1',
-      status: 'PREPARING',
-      createdAt: '5 mins ago'
-    },
-    {
-      id: 'ord-103',
-      customerName: 'Siddharth Roy',
-      customerPhone: '+91 9876543215',
-      vendorName: 'Singh Punjabi Kitchen',
-      driverName: 'Vikram Singh',
-      itemsCount: 3,
-      totalAmount: 320,
-      dropoffHostel: 'Boys Hostel Block 1',
-      status: 'ARRIVED_AT_GATE',
-      createdAt: '22 mins ago'
-    }
-  ]);
-
-  const [vendors, setVendors] = useState<Vendor[]>([
-    {
-      id: 'ven-1',
-      name: 'Sharma Highway Dhaba',
-      category: 'North Indian • Thalis',
-      rating: 4.8,
-      isAcceptingOrders: true,
-      address: 'Ashta-Kothri Highway km 1.2',
-      activeOrdersCount: 3
-    },
-    {
-      id: 'ven-2',
-      name: 'Campus Night Canteen',
-      category: 'Fast Food • Maggi',
-      rating: 4.6,
-      isAcceptingOrders: true,
-      address: 'VIT Bhopal Entry Gate 1',
-      activeOrdersCount: 2
-    },
-    {
-      id: 'ven-3',
-      name: 'Singh Punjabi Kitchen',
-      category: 'Butter Chicken • Naan',
-      rating: 4.9,
-      isAcceptingOrders: true,
-      address: 'Kothri Bypass Road',
-      activeOrdersCount: 1
-    }
-  ]);
-
-  const [drivers, setDrivers] = useState<DriverPin[]>([
-    {
-      id: 'drv-1',
-      name: 'Vikram Singh',
-      lat: 23.0772,
-      lng: 76.8535,
-      heading: 120,
-      status: 'EN_ROUTE_DHABA',
-      currentOrderId: 'ord-101'
-    },
-    {
-      id: 'drv-2',
-      name: 'Aman Patel',
-      lat: 23.0785,
-      lng: 76.8550,
-      heading: 90,
-      status: 'DELIVERING_GATE',
-      currentOrderId: 'ord-102'
-    }
-  ]);
-
-  // Attempt real API fetch if server is running
-  const fetchBackendData = async () => {
-    try {
-      const [fetchedOrders, fetchedVendors, fetchedDrivers] = await Promise.allSettled([
-        apiService.fetchOrders(),
-        apiService.fetchVendors(),
-        apiService.fetchDrivers(),
-      ]);
-
-      if (fetchedOrders.status === 'fulfilled' && fetchedOrders.value.length > 0) {
-        setOrders(fetchedOrders.value);
-        setIsLiveConnected(true);
-      }
-      if (fetchedVendors.status === 'fulfilled' && fetchedVendors.value.length > 0) {
-        setVendors(fetchedVendors.value);
-      }
-      if (fetchedDrivers.status === 'fulfilled' && fetchedDrivers.value.length > 0) {
-        setDriverPartners(fetchedDrivers.value);
-      }
-    } catch {
-      // Offline fallback or standalone mode
-    }
-  };
+  const fetchBackendData = useCallback(async () => {
+    if (!getAuthToken()) return;
+    setIsLoading(true);
+    setErrorMessage('');
+    const results = await Promise.allSettled([
+      apiService.fetchOrders(),
+      apiService.fetchVendors(),
+      apiService.fetchDrivers(),
+      apiService.fetchDriverLocations(),
+    ]);
+    const [ordersResult, vendorsResult, driversResult, locationsResult] = results;
+    if (ordersResult.status === 'fulfilled') setOrders(ordersResult.value);
+    if (vendorsResult.status === 'fulfilled') setVendors(vendorsResult.value);
+    if (driversResult.status === 'fulfilled') setDriverPartners(driversResult.value);
+    if (locationsResult.status === 'fulfilled') setDrivers(locationsResult.value);
+    const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (firstError) handleAuthFailure(firstError.reason);
+    setIsLoading(false);
+  }, [handleAuthFailure]);
 
   useEffect(() => {
+    if (!hasSession()) {
+      setAuthChecking(false);
+      return;
+    }
+    apiService.validateSession()
+      .then((profile) => {
+        setAdminProfile(profile);
+        setIsAuth(true);
+      })
+      .catch((error) => {
+        clearAuthToken();
+        handleAuthFailure(error);
+      })
+      .finally(() => setAuthChecking(false));
+  }, [handleAuthFailure]);
+
+  useEffect(() => {
+    if (!isAuth) return undefined;
     fetchBackendData();
 
+    const token = getAuthToken();
     const socket = io(SOCKET_URL, {
+      auth: { token },
       transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
+      reconnectionAttempts: 8,
     });
-
     socket.on('connect', () => {
       setIsLiveConnected(true);
+      socket.emit('join_room', 'admins');
     });
-
-    socket.on('disconnect', () => {
-      setIsLiveConnected(false);
-    });
-
-    socket.on('order_updated', (updatedOrder: Order) => {
-      setOrders((prev) => {
-        const exists = prev.some((o) => o.id === updatedOrder.id);
-        if (exists) {
-          return prev.map((o) => (o.id === updatedOrder.id ? { ...o, ...updatedOrder } : o));
-        } else {
-          return [updatedOrder, ...prev];
-        }
+    socket.on('disconnect', () => setIsLiveConnected(false));
+    socket.on('connect_error', () => setIsLiveConnected(false));
+    socket.on('order_updated', (rawOrder: unknown) => {
+      const updatedOrder = normalizeOrder(rawOrder);
+      setOrders((previous) => {
+        const exists = previous.some((order) => order.id === updatedOrder.id);
+        return exists ? previous.map((order) => order.id === updatedOrder.id ? { ...order, ...updatedOrder } : order) : [updatedOrder, ...previous];
       });
     });
-
-    socket.on('new_order_alert', (newOrder: Order) => {
-      setOrders((prev) => [newOrder, ...prev.filter((o) => o.id !== newOrder.id)]);
+    socket.on('new_order_alert', (rawOrder: unknown) => {
+      const newOrder = normalizeOrder(rawOrder);
+      setOrders((previous) => [newOrder, ...previous.filter((order) => order.id !== newOrder.id)]);
     });
-
-    socket.on('driver_location_update', (loc: { driverId: string; driverName: string; lat: number; lng: number; heading: number }) => {
-      setDrivers((prev) => {
-        const exists = prev.some((d) => d.id === loc.driverId);
-        if (exists) {
-          return prev.map((d) => (d.id === loc.driverId ? { ...d, lat: loc.lat, lng: loc.lng, heading: loc.heading } : d));
-        } else {
-          return [...prev, { id: loc.driverId, name: loc.driverName, lat: loc.lat, lng: loc.lng, heading: loc.heading, status: 'DELIVERING_GATE' }];
-        }
+    socket.on('driver_location_update', (location: DriverPin) => {
+      setDrivers((previous) => {
+        const exists = previous.some((driver) => driver.id === location.id);
+        return exists ? previous.map((driver) => driver.id === location.id ? { ...driver, ...location } : driver) : [location, ...previous];
       });
     });
-
     return () => {
       socket.disconnect();
     };
-  }, []);
+  }, [fetchBackendData, isAuth]);
 
-  const handleStatusChange = async (orderId: string, status: OrderStatus) => {
-    setOrders((prev) =>
-      prev.map((o) => (o.id === orderId ? { ...o, status } : o))
-    );
+  const handleStatusChange = async (orderId: string, status: OrderStatus, otpCode?: string) => {
+    const previous = orders;
+    setOrders((current) => current.map((order) => order.id === orderId ? { ...order, status } : order));
     try {
-      await apiService.updateOrderStatus(orderId, status);
-    } catch (e) {
-      console.log('Backend status update fallback:', e);
+      const updated = await apiService.updateOrderStatus(orderId, status, otpCode);
+      setOrders((current) => current.map((order) => order.id === orderId ? updated : order));
+      setErrorMessage('');
+    } catch (error) {
+      setOrders(previous);
+      handleAuthFailure(error);
     }
   };
 
   const handleToggleVendor = async (vendorId: string) => {
-    const targetVendor = vendors.find((v) => v.id === vendorId);
-    if (!targetVendor) return;
-
-    const newStatus = !targetVendor.isAcceptingOrders;
-
-    setVendors((prev) =>
-      prev.map((v) => (v.id === vendorId ? { ...v, isAcceptingOrders: newStatus } : v))
-    );
-
+    const target = vendors.find((vendor) => vendor.id === vendorId);
+    if (!target) return;
+    const previous = vendors;
+    const nextStatus = !target.isAcceptingOrders;
+    setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, isAcceptingOrders: nextStatus } : vendor));
     try {
-      await apiService.toggleVendorStatus(vendorId, newStatus);
-    } catch (e) {
-      console.log('Backend vendor status toggle fallback:', e);
+      const updated = await apiService.toggleVendorStatus(vendorId, nextStatus);
+      setVendors((current) => current.map((vendor) => vendor.id === vendorId ? updated : vendor));
+    } catch (error) {
+      setVendors(previous);
+      handleAuthFailure(error);
     }
   };
 
-  const handleAddVendor = async (newVendor: Vendor) => {
-    setVendors((prev) => [...prev, newVendor]);
+  const handleAddVendor = async (vendorInput: Pick<Vendor, 'name' | 'category' | 'address'>) => {
     try {
-      await apiService.createVendor(newVendor);
-    } catch (e) {
-      console.log('Backend dhaba onboarding fallback:', e);
+      const created = await apiService.createVendor(vendorInput);
+      setVendors((current) => [...current, created]);
+      setErrorMessage('');
+    } catch (error) {
+      handleAuthFailure(error);
+      throw error;
     }
   };
 
-  const handleReassignDriver = async (orderId: string) => {
-    setOrders((prev) =>
-      prev.map((o) => (o.id === orderId ? { ...o, driverName: 'Reassigning...', status: 'PLACED' } : o))
-    );
+  const handleReassignDriver = async (orderId: string, driverId: string | null) => {
+    const previous = orders;
+    setOrders((current) => current.map((order) => order.id === orderId ? { ...order, driverId: driverId || undefined, driverName: driverId ? 'Updating assignment…' : undefined } : order));
     try {
-      await apiService.reassignOrderDriver(orderId);
-    } catch (e) {
-      console.log('Backend reassign driver fallback:', e);
+      const updated = await apiService.reassignOrderDriver(orderId, driverId);
+      setOrders((current) => current.map((order) => order.id === orderId ? updated : order));
+    } catch (error) {
+      setOrders(previous);
+      handleAuthFailure(error);
     }
   };
 
   const handleLogout = () => {
     clearAuthToken();
     setIsAuth(false);
+    setAdminProfile(undefined);
+    setOrders([]);
+    setVendors([]);
+    setDriverPartners([]);
+    setDrivers([]);
   };
 
+  if (authChecking) {
+    return <div className="min-h-screen bg-[#0B0F19] text-gray-300 flex items-center justify-center text-sm">Verifying admin session…</div>;
+  }
+
   if (!isAuth) {
-    return (
-      <LoginScreen
-        onLoginSuccess={() => {
-          setIsAuth(true);
-          fetchBackendData();
-        }}
-      />
-    );
+    return <LoginScreen onLoginSuccess={(profile) => { setAdminProfile(profile); setIsAuth(true); }} />;
   }
 
   return (
-    <div className="flex min-h-screen bg-[#0B0F19]">
+    <div className="min-h-screen bg-[#0B0F19] text-gray-100 lg:flex">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
-      
-      <div className="flex-1 flex flex-col min-w-0">
-        <Header 
-          activeTab={activeTab} 
-          isLiveConnected={isLiveConnected} 
-          onRefresh={fetchBackendData} 
-          onLogout={handleLogout}
-        />
-
-        <main className="p-6 flex-1 overflow-y-auto">
-          {activeTab === 'map' && (
-            <LiveCommandCenter 
-              drivers={drivers} 
-              orders={orders} 
-              onReassignDriver={handleReassignDriver} 
-            />
-          )}
-
-          {activeTab === 'orders' && (
-            <OrdersTable 
-              orders={orders} 
-              onStatusChange={handleStatusChange} 
-            />
-          )}
-
-          {activeTab === 'vendors' && (
-            <VendorManager 
-              vendors={vendors} 
-              onToggleVendor={handleToggleVendor} 
-              onAddVendor={handleAddVendor}
-            />
-          )}
-
-          {activeTab === 'drivers' && (
-            <DriverManager drivers={driverPartners} />
-          )}
-
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Header activeTab={activeTab} isLiveConnected={isLiveConnected} isLoading={isLoading} adminProfile={adminProfile} onRefresh={fetchBackendData} onLogout={handleLogout} />
+        {errorMessage && (
+          <div role="alert" className="mx-4 mt-4 flex items-center justify-between gap-4 rounded-xl border border-red-500/40 bg-red-950/40 px-4 py-3 text-xs text-red-200 lg:mx-6">
+            <span>{errorMessage}</span>
+            <button className="font-bold text-white underline" onClick={fetchBackendData}>Retry</button>
+          </div>
+        )}
+        <main className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
+          {activeTab === 'map' && <LiveCommandCenter drivers={drivers} orders={orders} driverPartners={driverPartners} onReassignDriver={handleReassignDriver} />}
+          {activeTab === 'orders' && <OrdersTable orders={orders} onStatusChange={handleStatusChange} />}
+          {activeTab === 'vendors' && <VendorManager vendors={vendors} onToggleVendor={handleToggleVendor} onAddVendor={handleAddVendor} />}
+          {activeTab === 'drivers' && <DriverManager drivers={driverPartners} />}
           {activeTab === 'analytics' && <AnalyticsPanel />}
         </main>
       </div>

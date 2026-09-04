@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { apiService } from '../services/api';
+import { AdminProfile } from '../types';
 import { Shield, KeyRound, Eye, EyeOff, Lock, ArrowRight, Sparkles, CheckCircle2 } from 'lucide-react';
 
 interface LoginScreenProps {
-  onLoginSuccess: () => void;
+  onLoginSuccess: (profile: AdminProfile) => void;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
@@ -23,9 +24,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     setErrorMessage('');
 
     try {
-      await apiService.adminLogin(passcode.trim());
+      const response = await apiService.adminLogin(passcode.trim());
       setIsLoading(false);
-      onLoginSuccess();
+      onLoginSuccess(response.admin);
     } catch (err: any) {
       setIsLoading(false);
       setErrorMessage(err.message || 'Access Denied. Invalid admin passcode.');
@@ -100,7 +101,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               </div>
               <p className="text-[11px] text-gray-400 mt-2 flex items-center gap-1.5">
                 <Sparkles className="w-3 h-3 text-[#FDD400]" />
-                <span>Default Passcode: <code className="bg-[#0B0F19] px-1.5 py-0.5 rounded text-[#FDD400] font-mono">kraveo_admin_2026</code></span>
+                <span>Use the administrator credential issued by your platform owner.</span>
               </p>
             </div>
 

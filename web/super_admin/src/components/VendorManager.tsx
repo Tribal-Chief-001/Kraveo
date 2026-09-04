@@ -5,7 +5,7 @@ import { Store, Star, ToggleLeft, ToggleRight, MapPin, Plus, X } from 'lucide-re
 interface VendorManagerProps {
   vendors: Vendor[];
   onToggleVendor: (vendorId: string) => void;
-  onAddVendor?: (vendor: Vendor) => void;
+  onAddVendor?: (vendor: Pick<Vendor, 'name' | 'category' | 'address'>) => Promise<void> | void;
 }
 
 export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleVendor, onAddVendor }) => {
@@ -13,26 +13,19 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
   const [dhabaName, setDhabaName] = useState('');
   const [category, setCategory] = useState('North Indian • Parathas');
   const [address, setAddress] = useState('Ashta Highway, km 2.0');
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
 
-  const handleCreateDhaba = (e: React.FormEvent) => {
+  const handleCreateDhaba = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!dhabaName.trim()) return;
-
-    const newVendor: Vendor = {
-      id: `ven-${Date.now()}`,
-      name: dhabaName,
-      category: category || 'North Indian',
-      rating: 4.8,
-      isAcceptingOrders: true,
-      activeOrdersCount: 0,
-      address: address || 'Ashta Highway',
-    };
-
-    if (onAddVendor) {
-      onAddVendor(newVendor);
-    }
-    setShowModal(false);
-    setDhabaName('');
+    setSaving(true); setFormError('');
+    try {
+      await onAddVendor?.({ name: dhabaName.trim(), category: category || 'North Indian', address: address || 'Ashta Highway' });
+      setShowModal(false); setDhabaName('');
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Vendor could not be created.');
+    } finally { setSaving(false); }
   };
 
   return (
@@ -53,6 +46,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {vendors.length === 0 && <div className="md:col-span-3 rounded-2xl border border-[#242f46] p-10 text-center text-sm text-gray-500">No vendors are currently returned by the operations API.</div>}
         {vendors.map((v) => (
           <div key={v.id} className="stitch-card rounded-2xl p-5 border border-[#242f46] space-y-4">
             <div className="flex items-start justify-between">
@@ -68,6 +62,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
             <div className="text-xs text-gray-400 flex items-center gap-1">
               <MapPin className="w-3.5 h-3.5 text-gray-500" /> {v.address}
             </div>
+            <div className="text-[11px] text-gray-500">{v.menuItems?.length ?? 0} menu items · {v.activeOrdersCount} active orders</div>
 
             <div className="pt-3 border-t border-[#242f46] flex items-center justify-between">
               <div>
@@ -107,6 +102,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
             </div>
 
             <form onSubmit={handleCreateDhaba} className="space-y-4">
+              {formError && <div role="alert" className="rounded-lg border border-red-500/40 bg-red-950/30 px-3 py-2 text-xs text-red-200">{formError}</div>}
               <div>
                 <label className="text-xs font-bold text-gray-300 block mb-1">Dhaba / Mess Name</label>
                 <input 
@@ -149,9 +145,10 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
                 </button>
                 <button
                   type="submit"
+                  disabled={saving}
                   className="w-1/2 py-2.5 bg-[#00450d] text-white font-bold rounded-xl text-xs hover:bg-[#1b5e20] border border-[#91d78a]/30"
                 >
-                  Onboard Dhaba
+                  {saving ? 'Saving…' : 'Onboard Dhaba'}
                 </button>
               </div>
             </form>
