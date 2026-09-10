@@ -29,9 +29,13 @@ export const createRazorpayOrder = async (orderId: string, amountInRupees: numbe
   if (!razorpay) {
     return { success: false, error: 'Razorpay is not configured on this server.' };
   }
-  try {
-    const amountInPaise = Math.round(amountInRupees * 100);
 
+  const amountInPaise = Math.round(amountInRupees * 100);
+  if (!Number.isFinite(amountInRupees) || amountInPaise < 100) {
+    return { success: false, error: 'Payment amount must be at least ₹1.00.' };
+  }
+
+  try {
     const options = {
       amount: amountInPaise,
       currency: 'INR',

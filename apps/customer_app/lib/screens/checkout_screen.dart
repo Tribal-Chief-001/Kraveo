@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:razorpay_flutter/razorpay_flutter.dart';
 import '../theme/app_theme.dart';
 import '../providers/cart_provider.dart';
 import '../providers/order_provider.dart';
+import '../services/customer_api_service.dart';
 import '../widgets/coupon_box.dart';
 import '../widgets/hostel_dropdown.dart';
 import 'live_tracking_screen.dart';
@@ -20,17 +22,21 @@ class CheckoutScreen extends StatefulWidget {
 }
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
+  final Razorpay _razorpay = Razorpay();
   late String _currentHostel;
   final TextEditingController _deliveryNoteController = TextEditingController();
-  String _selectedPaymentMethod = 'PhonePe UPI';
+  String _selectedPaymentMethod = 'UPI via Razorpay';
   bool _isProcessingPayment = false;
+  CartProvider? _pendingCart;
+  OrderProvider? _pendingOrderProvider;
+  String? _pendingServerOrderId;
 
   final List<Map<String, dynamic>> _paymentOptions = [
-    {'name': 'PhonePe UPI', 'icon': Icons.account_balance_wallet, 'sub': 'Instant Demo UPI Checkout'},
-    {'name': 'Google Pay UPI', 'icon': Icons.g_mobiledata, 'sub': 'Direct bank transfer'},
-    {'name': 'Paytm UPI', 'icon': Icons.payment, 'sub': 'Pay via Paytm wallet / UPI'},
-    {'name': 'CRED UPI', 'icon': Icons.credit_card, 'sub': 'Earn CRED coins'},
-    {'name': 'Cash on Gate Delivery', 'icon': Icons.money, 'sub': 'Pay runner at hostel gate'},
+    {
+      'name': 'UPI via Razorpay',
+      'icon': Icons.account_balance_wallet,
+      'sub': 'Google Pay, PhonePe, Paytm and more',
+    },
   ];
 
   @override
@@ -38,87 +44,129 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     super.initState();
     _currentHostel = widget.selectedHostel;
     _deliveryNoteController.text = 'Call when reaching hostel gate';
+    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
+    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
+    _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _handleExternalWallet);
   }
 
   @override
   void dispose() {
+    _razorpay.clear();
     _deliveryNoteController.dispose();
     super.dispose();
   }
 
-  void _handlePlaceOrder(CartProvider cart, OrderProvider orderProvider) async {
-    setState(() => _isProcessingPayment = true);
+  Future<void> _handlePlaceOrder(CartProvider cart, OrderProvider orderProvider) async {
+    if (cart.dhabaId == null || cart.items.isEmpty) {
+      _showPaymentError('Your cart is empty or the restaurant is missing.');
+      return;
+    }
 
-    // Show sleek Instant Payment Success Sheet
-    showModalBottomSheet(
-      context: context,
-      isDismissible: false,
-      enableDrag: false,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: const BoxDecoration(
-                  color: AppTheme.accentGreen,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.check_circle_outline, color: Colors.white, size: 48),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'UPI Payment Successful! 🎉',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.textDark),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Authorized ₹${cart.grandTotal.toInt()} via $_selectedPaymentMethod',
-                style: const TextStyle(fontSize: 13, color: AppTheme.textMuted),
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context); // Close sheet
-                    _completeOrderPlacement(cart, orderProvider);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primaryEmerald,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                  ),
-                  child: const Text(
-                    'VIEW LIVE TRACKING & GATE OTP',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
+    setState(() => _isProcessingPayment = true);
+    _pendingCart = cart;
+    _pendingOrderProvider = orderProvider;
+
+    try {
+      final serverOrder = await CustomerApiService.createOrder(
+        vendorId: cart.dhabaId!,
+        items: cart.items.map((item) => {
+          'itemId': item.item.id,
+          'quantity': item.quantity,
+        }).toList(),
+        dropoffHostel: _currentHostel,
+        dropoffNotes: _deliveryNoteController.text.trim(),
+        couponCode: cart.appliedCouponCode,
+      );
+      final serverOrderId = serverOrder['id']?.toString();
+      if (serverOrderId == null || serverOrderId.isEmpty) {
+        throw Exception('The backend did not return an order ID.');
+      }
+
+      final paymentOrder = await CustomerApiService.createPaymentOrder(serverOrderId);
+      final keyId = (paymentOrder['key_id'] ?? paymentOrder['keyId'])?.toString();
+      final razorpayOrderId = (paymentOrder['order_id'] ?? paymentOrder['razorpayOrderId'])?.toString();
+      final amount = paymentOrder['amount'];
+      if (keyId == null || razorpayOrderId == null || amount is! num || amount < 100) {
+        throw Exception('The payment gateway returned an invalid order.');
+      }
+
+      _pendingServerOrderId = serverOrderId;
+      _razorpay.open({
+        'key': keyId,
+        'amount': amount.toInt(),
+        'currency': paymentOrder['currency'] ?? 'INR',
+        'order_id': razorpayOrderId,
+        'name': 'Kraveo',
+        'description': 'Campus food order',
+        'theme': {'color': '#006B3C'},
+      });
+    } catch (error) {
+      _resetPendingPayment();
+      _showPaymentError(_friendlyPaymentError(error));
+    }
   }
 
-  void _completeOrderPlacement(CartProvider cart, OrderProvider orderProvider) {
+  Future<void> _handlePaymentSuccess(PaymentSuccessResponse response) async {
+    final paymentId = response.paymentId;
+    final razorpayOrderId = response.orderId;
+    final signature = response.signature;
+    if (paymentId == null || razorpayOrderId == null || signature == null) {
+      _resetPendingPayment();
+      _showPaymentError('Razorpay returned an incomplete payment response.');
+      return;
+    }
+
+    try {
+      await CustomerApiService.verifyPayment(
+        razorpayOrderId: razorpayOrderId,
+        razorpayPaymentId: paymentId,
+        razorpaySignature: signature,
+      );
+
+      final cart = _pendingCart;
+      final orderProvider = _pendingOrderProvider;
+      final serverOrderId = _pendingServerOrderId;
+      if (cart == null || orderProvider == null || serverOrderId == null) {
+        throw Exception('Payment verified, but the local checkout session was lost.');
+      }
+
+      _resetPendingPayment();
+      if (!mounted) return;
+      _completeOrderPlacement(
+        cart,
+        orderProvider,
+        serverOrderId: serverOrderId,
+      );
+    } catch (error) {
+      _resetPendingPayment();
+      _showPaymentError(_friendlyPaymentError(error));
+    }
+  }
+
+  void _handlePaymentError(PaymentFailureResponse response) {
+    _resetPendingPayment();
+    _showPaymentError(response.message ?? 'Payment was cancelled or failed.');
+  }
+
+  void _handleExternalWallet(ExternalWalletResponse response) {
+    _resetPendingPayment();
+    _showPaymentError('External wallet ${response.walletName ?? ''} is not supported for this checkout.');
+  }
+
+  void _completeOrderPlacement(
+    CartProvider cart,
+    OrderProvider orderProvider, {
+    required String serverOrderId,
+  }) {
     // Place Order in OrderProvider
     final newOrder = orderProvider.placeOrder(
       cart: cart,
       hostel: _currentHostel,
       deliveryNote: _deliveryNoteController.text.trim(),
       paymentMethod: _selectedPaymentMethod,
+      serverOrderId: serverOrderId,
+      syncBackend: false,
+      simulateProgression: false,
     );
 
     // Navigate to Live Tracking replacing checkout stack
@@ -128,6 +176,26 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         builder: (context) => LiveTrackingScreen(order: newOrder),
       ),
       (route) => route.isFirst,
+    );
+  }
+
+  void _resetPendingPayment() {
+    if (!mounted) return;
+    setState(() => _isProcessingPayment = false);
+    _pendingCart = null;
+    _pendingOrderProvider = null;
+    _pendingServerOrderId = null;
+  }
+
+  String _friendlyPaymentError(Object error) {
+    final message = error.toString().replaceFirst('Exception: ', '').trim();
+    return message.isEmpty ? 'Unable to start payment. Please try again.' : message;
+  }
+
+  void _showPaymentError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red.shade700),
     );
   }
 

@@ -318,6 +318,10 @@ apiRouter.post('/payments/create-order', requireAuth, async (req: AuthenticatedR
   }
 
   const amount = dbOrder.totalAmount;
+  if (!Number.isFinite(amount) || Math.round(amount * 100) < 100) {
+    return res.status(400).json({ success: false, message: 'Payment amount must be at least ₹1.00.' });
+  }
+
   const result = await createRazorpayOrder(orderId, amount);
 
   if (!result.success) {
@@ -339,7 +343,10 @@ apiRouter.post('/payments/create-order', requireAuth, async (req: AuthenticatedR
 
   return res.json({
     ...result,
-    amount: result.amountInPaise
+    amount: result.amountInPaise,
+    // Standard Checkout names these fields order_id and key_id.
+    order_id: result.razorpayOrderId,
+    key_id: result.keyId
   });
 });
 

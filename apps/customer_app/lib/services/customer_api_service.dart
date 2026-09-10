@@ -114,6 +114,96 @@ class CustomerApiService {
     return false;
   }
 
+  /// Creates the server-authoritative order used as the Razorpay receipt.
+  /// The backend recalculates prices from the database; client totals are never trusted.
+  static Future<Map<String, dynamic>> createOrder({
+    required String vendorId,
+    required List<Map<String, dynamic>> items,
+    required String dropoffHostel,
+    required String dropoffNotes,
+    String? couponCode,
+  }) async {
+    final url = Uri.parse('${ApiConfig.baseUrl}/orders');
+    final headers = await getAuthHeaders();
+    final payload = <String, dynamic>{
+      'vendorId': vendorId,
+      'items': items,
+      'dropoffHostel': dropoffHostel,
+      'dropoffNotes': dropoffNotes,
+    };
+    if (couponCode != null && couponCode.isNotEmpty) {
+      payload['couponCode'] = couponCode;
+    }
+
+    try {
+      final response = await http.post(
+        url,
+        headers: headers,
+        body: jsonEncode(payload),
+      ).timeout(const Duration(seconds: 15));
+      final body = jsonDecode(response.body);
+      if (response.statusCode == 201 && body is Map && body['data'] is Map) {
+        return Map<String, dynamic>.from(body['data'] as Map);
+      }
+      throw Exception(body is Map ? body['message'] ?? 'Unable to create order.' : 'Unable to create order.');
+    } catch (e) {
+      debugPrint('⚠️ [Customer API] Create order failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Creates a Razorpay order on the backend. The key ID is safe to return to the app.
+  static Future<Map<String, dynamic>> createPaymentOrder(String orderId) async {
+    final url = Uri.parse('${ApiConfig.baseUrl}/payments/create-order');
+    final headers = await getAuthHeaders();
+
+    try {
+      final response = await http.post(
+        url,
+        headers: headers,
+        body: jsonEncode({'orderId': orderId}),
+      ).timeout(const Duration(seconds: 15));
+      final body = jsonDecode(response.body);
+      if (response.statusCode == 200 && body is Map && body['success'] == true) {
+        return Map<String, dynamic>.from(body);
+      }
+      throw Exception(body is Map ? body['message'] ?? 'Unable to start payment.' : 'Unable to start payment.');
+    } catch (e) {
+      debugPrint('⚠️ [Customer API] Create payment order failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Verifies Razorpay's checkout response on the backend before showing success.
+  static Future<void> verifyPayment({
+    required String razorpayOrderId,
+    required String razorpayPaymentId,
+    required String razorpaySignature,
+  }) async {
+    final url = Uri.parse('${ApiConfig.baseUrl}/payments/verify-signature');
+    final headers = await getAuthHeaders();
+
+    try {
+      final response = await http.post(
+        url,
+        headers: headers,
+        body: jsonEncode({
+          'razorpayOrderId': razorpayOrderId,
+          'razorpayPaymentId': razorpayPaymentId,
+          'razorpaySignature': razorpaySignature,
+        }),
+      ).timeout(const Duration(seconds: 15));
+      final body = jsonDecode(response.body);
+      if (response.statusCode == 200 && body is Map && body['success'] == true) {
+        return;
+      }
+      throw Exception(body is Map ? body['message'] ?? 'Payment verification failed.' : 'Payment verification failed.');
+    } catch (e) {
+      debugPrint('⚠️ [Customer API] Payment verification failed: $e');
+      rethrow;
+    }
+  }
+
   /// Submits dish & runner review with dynamic JWT token
   static Future<bool> submitReview({
     required String orderId,
@@ -146,4 +236,3 @@ class CustomerApiService {
     return false;
   }
 }
-

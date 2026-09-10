@@ -57,10 +57,13 @@ class OrderProvider with ChangeNotifier {
     required String hostel,
     required String deliveryNote,
     required String paymentMethod,
+    String? serverOrderId,
+    bool syncBackend = true,
+    bool simulateProgression = true,
   }) {
     final random = Random();
     final otp = (1000 + random.nextInt(9000)).toString();
-    final orderId = 'ORD-${10000 + random.nextInt(90000)}';
+    final orderId = serverOrderId ?? 'ORD-${10000 + random.nextInt(90000)}';
 
     final order = OrderModel(
       id: orderId,
@@ -88,10 +91,14 @@ class OrderProvider with ChangeNotifier {
     cart.clearCart();
 
     // Async sync to AWS EC2 backend API
-    CustomerApiService.placeOrder(order.toJson());
+    if (syncBackend) {
+      CustomerApiService.placeOrder(order.toJson());
+    }
 
     _connectToOrderSocket(order.id);
-    _startSimulatedProgression();
+    if (simulateProgression) {
+      _startSimulatedProgression();
+    }
     notifyListeners();
     return order;
   }
