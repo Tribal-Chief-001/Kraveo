@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/dhaba.dart';
 import '../models/menu_item.dart';
 import '../models/customization.dart';
+import '../services/customer_api_service.dart';
 
 class DhabaProvider with ChangeNotifier {
   String _searchQuery = '';
@@ -308,6 +309,37 @@ class DhabaProvider with ChangeNotifier {
 
   List<MenuItemModel> getMenuItemsForDhaba(String dhabaId) {
     return _menuItems[dhabaId] ?? [];
+  }
+
+  /// Replaces demo catalog data with the authoritative PostgreSQL catalog.
+  /// This ensures checkout sends real database menu IDs and current availability.
+  Future<void> loadCatalog() async {
+    try {
+      final vendors = await CustomerApiService.fetchVendors();
+      if (vendors.isEmpty) return;
+
+      final loadedDhabas = <Dhaba>[];
+      final loadedMenus = <String, List<MenuItemModel>>{};
+      for (final vendor in vendors) {
+        final dhaba = Dhaba.fromJson(vendor);
+        final rawMenu = (vendor['menuItems'] ?? vendor['menu'] ?? []) as List<dynamic>;
+        loadedDhabas.add(dhaba);
+        loadedMenus[dhaba.id] = rawMenu
+            .whereType<Map>()
+            .map((item) => MenuItemModel.fromJson(Map<String, dynamic>.from(item)))
+            .toList();
+      }
+
+      _dhabas
+        ..clear()
+        ..addAll(loadedDhabas);
+      _menuItems
+        ..clear()
+        ..addAll(loadedMenus);
+      notifyListeners();
+    } catch (error) {
+      debugPrint('⚠️ [Catalog] Live catalog unavailable; retaining local catalog: $error');
+    }
   }
 
   void setSearchQuery(String query) {

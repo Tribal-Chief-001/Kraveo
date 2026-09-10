@@ -62,6 +62,21 @@ class CustomerApiService {
     return null;
   }
 
+  /// Loads the public restaurant catalog, including database-backed menu IDs.
+  static Future<List<Map<String, dynamic>>> fetchVendors() async {
+    final response = await http.get(
+      Uri.parse('${ApiConfig.baseUrl}/vendors'),
+    ).timeout(const Duration(seconds: 15));
+    final body = jsonDecode(response.body);
+    if (response.statusCode != 200 || body is! Map || body['data'] is! List) {
+      throw Exception(body is Map ? body['message'] ?? 'Unable to load restaurants.' : 'Unable to load restaurants.');
+    }
+    return (body['data'] as List)
+        .whereType<Map>()
+        .map((vendor) => Map<String, dynamic>.from(vendor))
+        .toList();
+  }
+
   /// Builds authenticated request headers dynamically
   static Future<Map<String, String>> getAuthHeaders() async {
     final token = await getSavedToken();

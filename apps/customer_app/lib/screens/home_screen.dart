@@ -23,6 +23,16 @@ class _HomeScreenState extends State<HomeScreen> {
   String selectedHostel = 'Block 1';
   final TextEditingController _searchController = TextEditingController();
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        Provider.of<DhabaProvider>(context, listen: false).loadCatalog();
+      }
+    });
+  }
+
   final List<String> hostelBlocks = [
     'Block 1',
     'Block 2',
