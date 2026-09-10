@@ -82,6 +82,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         throw Exception('The backend did not return an order ID.');
       }
 
+      final customer = serverOrder['customer'];
+      final customerPhone = customer is Map ? customer['phone']?.toString() : null;
+
       final paymentOrder = await CustomerApiService.createPaymentOrder(serverOrderId);
       final keyId = (paymentOrder['key_id'] ?? paymentOrder['keyId'])?.toString();
       final razorpayOrderId = (paymentOrder['order_id'] ?? paymentOrder['razorpayOrderId'])?.toString();
@@ -91,7 +94,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
 
       _pendingServerOrderId = serverOrderId;
-      _razorpay.open({
+      final checkoutOptions = <String, dynamic>{
         'key': keyId,
         'amount': amount.toInt(),
         'currency': paymentOrder['currency'] ?? 'INR',
@@ -99,7 +102,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         'name': 'Kraveo',
         'description': 'Campus food order',
         'theme': {'color': '#006B3C'},
-      });
+      };
+      if (customerPhone != null && customerPhone.isNotEmpty) {
+        checkoutOptions['prefill'] = {'contact': customerPhone};
+      }
+      _razorpay.open(checkoutOptions);
     } catch (error) {
       _resetPendingPayment();
       _showPaymentError(_friendlyPaymentError(error));
