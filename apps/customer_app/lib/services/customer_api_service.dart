@@ -31,6 +31,37 @@ class CustomerApiService {
     } catch (_) {}
   }
 
+  /// Clears the persisted student session after logout or token rejection.
+  static Future<void> clearToken() async {
+    _cachedToken = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_tokenPrefKey);
+    } catch (_) {}
+  }
+
+  /// Validates the stored JWT against the backend and returns the profile.
+  static Future<Map<String, dynamic>?> fetchProfile() async {
+    final token = await getSavedToken();
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/auth/profile'),
+        headers: await getAuthHeaders(),
+      ).timeout(const Duration(seconds: 10));
+      final body = jsonDecode(response.body);
+      if (response.statusCode == 200 && body is Map && body['user'] is Map) {
+        return Map<String, dynamic>.from(body['user'] as Map);
+      }
+    } catch (e) {
+      debugPrint('⚠️ [Customer API] Session validation failed: $e');
+    }
+
+    await clearToken();
+    return null;
+  }
+
   /// Builds authenticated request headers dynamically
   static Future<Map<String, String>> getAuthHeaders() async {
     final token = await getSavedToken();
