@@ -28,7 +28,15 @@ const app = express();
 app.disable('x-powered-by');
 const server = http.createServer(app);
 
-const allowedOrigins = [process.env.CLIENT_URL, process.env.ADMIN_URL, 'http://localhost:3000', 'http://localhost:5173']
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  process.env.ADMIN_URL,
+  // The deployed Super Admin portal uses this Vercel origin when the optional
+  // CLIENT_URL/ADMIN_URL environment variables are not present on EC2.
+  'https://kraveo.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:5173',
+]
   .filter((origin): origin is string => Boolean(origin));
 const corsOptions = {
   origin: (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
