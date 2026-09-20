@@ -36,3 +36,15 @@ Monorepo architecture serving 10,000 students at VIT Bhopal:
 - Backend: `backend/src/`, `backend/prisma/schema.prisma`, `backend/src/routes/api.ts`, `backend/src/middleware/auth.ts`, `backend/src/services/`
 - Web Super Admin: `web/super_admin/src/`, `web/super_admin/src/services/api.ts`
 - Mobile Apps: `apps/customer_app/lib/`, `apps/vendor_app/lib/`, `apps/driver_app/lib/`
+
+## Mobile App Identity and Build Naming
+
+Use these fixed product identities in Android labels, launcher icons, and release artifacts:
+
+| App | Installed name | Logo source | Release APK prefix |
+|---|---|---|---|
+| Customer | `Kraveo` | `logo-customer-app.png` | `Kraveo-Customer` |
+| Vendor | `Kraveo Restaurant Partner` | `Restaurant-Partner-Logo.png` | `Kraveo-Restaurant-Partner` |
+| Driver | `Kraveo Delivery Partner` | `delivery-logo-bgremove.png` | `Kraveo-Delivery-Partner` |
+
+Never distribute three files all named `app-release.apk`; use the role-specific names above with the semantic version and build number.
