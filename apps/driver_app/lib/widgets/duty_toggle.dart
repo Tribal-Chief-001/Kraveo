@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+/// Hero duty control: one giant, glowing ON DUTY / OFF DUTY switch. Tap anywhere to flip.
 class DutyToggle extends StatelessWidget {
   final bool isOnline;
   final ValueChanged<bool> onChanged;
@@ -10,74 +13,77 @@ class DutyToggle extends StatelessWidget {
     required this.onChanged,
   });
 
+  static const double _height = 96;
+  static const double _thumb = 76;
+
   @override
   Widget build(BuildContext context) {
-    const emerald = Color(0xFF00450D);
-    const emeraldLight = Color(0xFF91D78A);
-    final offlineBg = Colors.red.withValues(alpha: 0.15);
-    final offlineText = Colors.redAccent.shade100;
-
-    return GestureDetector(
+    final k = context.k;
+    final on = isOnline;
+    return KPressable(
+      semanticLabel: on ? 'You are on duty. Double tap to go off duty.' : 'You are off duty. Double tap to go on duty.',
+      scale: 0.98,
       onTap: () => onChanged(!isOnline),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: isOnline ? emerald : offlineBg,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-            color: isOnline ? emeraldLight : Colors.red.shade400,
-            width: 1.5,
+      child: ExcludeSemantics(
+        child: AnimatedContainer(
+          duration: KMotion.base,
+          curve: KMotion.emphasized,
+          height: _height,
+          decoration: BoxDecoration(
+            color: on ? k.brand.withValues(alpha: 0.14) : k.surface,
+            borderRadius: BorderRadius.circular(KRadius.pill),
+            border: Border.all(color: on ? k.brand : k.line, width: 2),
+            boxShadow: on ? KShadow.glow(k.brand) : null,
           ),
-          boxShadow: isOnline
-              ? [
-                  BoxShadow(
-                    color: emeraldLight.withValues(alpha: 0.3),
-                    blurRadius: 10,
-                    spreadRadius: 1,
-                  )
-                ]
-              : [],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              width: 10,
-              height: 10,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: isOnline ? emeraldLight : Colors.red,
-                boxShadow: [
-                  BoxShadow(
-                    color: isOnline ? emeraldLight : Colors.red,
-                    blurRadius: isOnline ? 6 : 2,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Positioned.fill(
+                child: AnimatedPadding(
+                  duration: KMotion.base,
+                  curve: KMotion.emphasized,
+                  padding: EdgeInsets.only(left: on ? 30 : _thumb + 24, right: on ? _thumb + 24 : 30),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(on ? 'ON DUTY' : 'OFF DUTY',
+                              style: KraveoType.displayMd.copyWith(color: on ? k.brand : k.inkMuted, fontSize: 32, letterSpacing: 0.4)),
+                          Text(on ? 'Live location on' : 'Tap to go online',
+                              style: KraveoType.bodySm.copyWith(color: on ? k.inkMuted : k.inkFaint)),
+                        ],
+                      ),
+                    ),
                   ),
-                ],
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              isOnline ? 'DUTY ONLINE' : 'OFFLINE',
-              style: TextStyle(
-                color: isOnline ? emeraldLight : offlineText,
-                fontWeight: FontWeight.w900,
-                fontSize: 11,
-                letterSpacing: 0.8,
+              AnimatedAlign(
+                duration: KMotion.base,
+                curve: KMotion.spring,
+                alignment: on ? Alignment.centerRight : Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.all((_height - _thumb) / 2),
+                  child: AnimatedContainer(
+                    duration: KMotion.base,
+                    width: _thumb,
+                    height: _thumb,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: on ? k.brand : k.surfaceAlt,
+                      border: Border.all(color: on ? k.brand : k.line, width: 1.5),
+                      boxShadow: on ? KShadow.glow(k.brand) : null,
+                    ),
+                    child: Icon(LucideIcons.power, size: 34, color: on ? k.onBrand : k.inkFaint),
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(width: 6),
-            Switch.adaptive(
-              value: isOnline,
-              onChanged: onChanged,
-              activeThumbColor: const Color(0xFFFDD400),
-              activeTrackColor: const Color(0xFF00450D),
-              inactiveThumbColor: Colors.grey.shade400,
-              inactiveTrackColor: Colors.black45,
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+/// Horizontal 4-step delivery tracker. The current step is enlarged and glowing,
+/// finished steps show a check, upcoming steps are muted.
 class PipelineStepper extends StatelessWidget {
   final int currentStep; // 0 to 3
   final ValueChanged<int>? onStepTapped;
@@ -10,211 +14,137 @@ class PipelineStepper extends StatelessWidget {
     this.onStepTapped,
   });
 
-  static const List<Map<String, dynamic>> steps = [
-    {
-      'title': '1. NAVIGATE TO DHABA',
-      'subtitle': 'FC Night Mess (Gate 1)',
-      'icon': Icons.directions_bike,
-    },
-    {
-      'title': '2. CONFIRM PICKUP',
-      'subtitle': 'Verify order item list & receipt',
-      'icon': Icons.takeout_dining,
-    },
-    {
-      'title': '3. NAVIGATE TO HOSTEL GATE',
-      'subtitle': 'Boys Hostel Block 1 (Gate 2)',
-      'icon': Icons.map_outlined,
-    },
-    {
-      'title': '4. GATE HANDSHAKE & DELIVER',
-      'subtitle': 'Verify 4-digit student OTP',
-      'icon': Icons.lock_open_rounded,
-    },
+  static const List<({String label, IconData icon})> steps = [
+    (label: 'Go to\nrestaurant', icon: LucideIcons.store),
+    (label: 'Picked up', icon: LucideIcons.package),
+    (label: 'Reached\ngate', icon: LucideIcons.mapPin),
+    (label: 'Delivered', icon: LucideIcons.packageCheck),
   ];
 
   @override
   Widget build(BuildContext context) {
-    const emerald = Color(0xFF00450D);
-    const emeraldLight = Color(0xFF91D78A);
-    const gold = Color(0xFFFDD400);
-
-    return Column(
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Top Horizontal Step Bar
-        Row(
-          children: List.generate(steps.length * 2 - 1, (index) {
-            if (index.isOdd) {
-              // Line separator
-              final stepIndex = index ~/ 2;
-              final isPassed = currentStep > stepIndex;
-              return Expanded(
-                child: Container(
-                  height: 3,
-                  color: isPassed ? emeraldLight : Colors.grey.shade800,
-                ),
-              );
-            }
-
-            // Circle step index
-            final stepIndex = index ~/ 2;
-            final isCompleted = currentStep > stepIndex;
-            final isCurrent = currentStep == stepIndex;
-
-            return GestureDetector(
-              onTap: onStepTapped != null ? () => onStepTapped!(stepIndex) : null,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                width: isCurrent ? 36 : 28,
-                height: isCurrent ? 36 : 28,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isCompleted
-                      ? emerald
-                      : isCurrent
-                          ? gold
-                          : Colors.grey.shade900,
-                  border: Border.all(
-                    color: isCompleted
-                        ? emeraldLight
-                        : isCurrent
-                            ? gold
-                            : Colors.grey.shade700,
-                    width: 2,
-                  ),
-                  boxShadow: isCurrent
-                      ? [
-                          BoxShadow(
-                            color: gold.withValues(alpha: 0.5),
-                            blurRadius: 10,
-                          ),
-                        ]
-                      : [],
-                ),
-                child: Center(
-                  child: isCompleted
-                      ? const Icon(Icons.check, color: emeraldLight, size: 16)
-                      : Text(
-                          '${stepIndex + 1}',
-                          style: TextStyle(
-                            color: isCurrent
-                                ? Colors.black
-                                : Colors.grey.shade400,
-                            fontWeight: FontWeight.bold,
-                            fontSize: isCurrent ? 14 : 12,
-                          ),
-                        ),
-                ),
-              ),
-            );
-          }),
-        ),
-        const SizedBox(height: 20),
-
-        // List of Steps with highlights for current step
-        ...List.generate(steps.length, (index) {
-          final isCompleted = currentStep > index;
-          final isCurrent = currentStep == index;
-          final step = steps[index];
-
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 10.0),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: isCurrent
-                    ? emerald.withValues(alpha: 0.25)
-                    : isCompleted
-                        ? Colors.black26
-                        : const Color(0xFF0F141F),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: isCurrent
-                      ? gold
-                      : isCompleted
-                          ? emeraldLight.withValues(alpha: 0.5)
-                          : Colors.white10,
-                  width: isCurrent ? 2 : 1,
-                ),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: isCompleted
-                          ? emerald
-                          : isCurrent
-                              ? gold.withValues(alpha: 0.2)
-                              : Colors.grey.shade800,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      step['icon'] as IconData,
-                      color: isCompleted
-                          ? emeraldLight
-                          : isCurrent
-                              ? gold
-                              : Colors.grey,
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          step['title'] as String,
-                          style: TextStyle(
-                            color: isCurrent
-                                ? gold
-                                : isCompleted
-                                    ? Colors.white70
-                                    : Colors.grey,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          step['subtitle'] as String,
-                          style: TextStyle(
-                            color: isCurrent
-                                ? Colors.white
-                                : Colors.grey.shade500,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (isCompleted)
-                    const Icon(Icons.check_circle, color: emeraldLight, size: 20)
-                  else if (isCurrent)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: gold,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Text(
-                        'ACTIVE',
-                        style: TextStyle(
-                          color: Colors.black,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+        for (var i = 0; i < steps.length; i++)
+          Expanded(
+            child: _StepNode(
+              index: i,
+              currentStep: currentStep,
+              label: steps[i].label,
+              icon: steps[i].icon,
+              isFirst: i == 0,
+              isLast: i == steps.length - 1,
+              onTap: onStepTapped == null ? null : () => onStepTapped!(i),
             ),
-          );
-        }),
+          ),
       ],
     );
+  }
+}
+
+class _StepNode extends StatelessWidget {
+  const _StepNode({
+    required this.index,
+    required this.currentStep,
+    required this.label,
+    required this.icon,
+    required this.isFirst,
+    required this.isLast,
+    required this.onTap,
+  });
+
+  final int index, currentStep;
+  final String label;
+  final IconData icon;
+  final bool isFirst, isLast;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final done = currentStep > index;
+    final current = currentStep == index;
+    final size = current ? 48.0 : 38.0;
+    final lineLeft = currentStep >= index ? k.brand : k.line;
+    final lineRight = currentStep > index ? k.brand : k.line;
+
+    final node = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          height: 48,
+          child: Row(
+            children: [
+              Expanded(
+                  child: Container(
+                      height: 3,
+                      color: isFirst ? Colors.transparent : lineLeft)),
+              AnimatedContainer(
+                duration: KMotion.base,
+                curve: KMotion.spring,
+                width: size,
+                height: size,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: done
+                      ? k.brandSoft
+                      : current
+                          ? k.brand
+                          : k.surfaceAlt,
+                  border: Border.all(
+                      color: done || current ? k.brand : k.line, width: 2),
+                  boxShadow: current ? KShadow.glow(k.brand) : null,
+                ),
+                child: Icon(
+                  done ? LucideIcons.check : icon,
+                  size: current ? 24 : 18,
+                  color: done
+                      ? k.brand
+                      : current
+                          ? k.onBrand
+                          : k.inkFaint,
+                ),
+              ),
+              Expanded(
+                  child: Container(
+                      height: 3,
+                      color: isLast ? Colors.transparent : lineRight)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              softWrap: false,
+              style: KraveoType.caption.copyWith(
+                color: current ? k.ink : (done ? k.inkMuted : k.inkFaint),
+                fontWeight: current ? FontWeight.w800 : FontWeight.w600,
+                fontVariations: [FontVariation('wght', current ? 800 : 600)],
+                fontSize: 12,
+                height: 1.2,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+
+    final semantic =
+        'Step ${index + 1} of 4: ${label.replaceAll('\n', ' ')}${current ? ', current step' : done ? ', done' : ''}';
+    if (onTap == null) {
+      return Semantics(label: semantic, child: ExcludeSemantics(child: node));
+    }
+    return KPressable(
+        semanticLabel: semantic,
+        onTap: onTap,
+        scale: 0.94,
+        child: ExcludeSemantics(child: node));
   }
 }

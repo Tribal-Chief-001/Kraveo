@@ -1,152 +1,125 @@
 import 'package:flutter/material.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+/// Home hero: today's earnings as a giant count-up number + two glanceable stat tiles.
 class EarningsCard extends StatelessWidget {
   final double todayEarnings;
   final int completedTrips;
   final VoidCallback? onTap;
+
+  /// Share of today's trips delivered within the promised window.
+  /// Placeholder until the backend exposes it (defaults to the previous mock figure).
+  final int onTimePercent;
 
   const EarningsCard({
     super.key,
     required this.todayEarnings,
     required this.completedTrips,
     this.onTap,
+    this.onTimePercent = 96,
   });
 
   @override
   Widget build(BuildContext context) {
-    const gold = Color(0xFFFDD400);
-    const emeraldLight = Color(0xFF91D78A);
-    const darkSurface = Color(0xFF151C2C);
+    final k = context.k;
+    final avg = completedTrips > 0 ? (todayEarnings / completedTrips).round() : 0;
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(24),
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: darkSurface,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: gold.withValues(alpha: 0.4), width: 1.5),
-          boxShadow: [
-            BoxShadow(
-              color: gold.withValues(alpha: 0.1),
-              blurRadius: 16,
-              offset: const Offset(0, 6),
-            ),
-          ],
-        ),
-        child: Column(
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.account_balance_wallet_outlined,
-                            color: Colors.grey, size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          'TODAY\'S PAYOUT',
-                          style: TextStyle(
-                            color: Colors.grey.shade400,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1.0,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '₹${todayEarnings.toInt()}',
-                      style: const TextStyle(
-                        color: gold,
-                        fontSize: 36,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        const Icon(Icons.check_circle_outline,
-                            color: emeraldLight, size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          '$completedTrips Trips Completed',
-                          style: const TextStyle(
-                            color: emeraldLight,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        KCard(
+          onTap: onTap,
+          padding: const EdgeInsets.fromLTRB(20, 18, 16, 18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(LucideIcons.wallet, size: 18, color: k.inkMuted),
+                const SizedBox(width: 8),
+                Expanded(child: Text('TODAY\'S EARNINGS', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.inkMuted, letterSpacing: 1.2))),
+                if (onTap != null) Icon(LucideIcons.chevronRight, size: 22, color: k.inkFaint),
+              ]),
+              const SizedBox(height: 4),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: KAnimatedNumber(
+                  value: todayEarnings,
+                  prefix: '₹',
+                  style: KraveoType.displayLg.copyWith(fontSize: 60, height: 1.05, color: k.ink),
                 ),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: gold.withValues(alpha: 0.15),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: gold, width: 2),
-                  ),
-                  child: const Icon(
-                    Icons.electric_bike,
-                    color: gold,
-                    size: 32,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            const Divider(color: Colors.white10, height: 1),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _buildSubStat('Avg / Order', '₹${(completedTrips > 0 ? (todayEarnings / completedTrips) : 40).toStringAsFixed(0)}'),
-                _buildSubStat('Duty Hours', '4.5 hrs'),
-                _buildSubStat('Incentive', '₹50 Earned'),
-                if (onTap != null)
-                  const Row(
-                    children: [
-                      Text(
-                        'Details',
-                        style: TextStyle(
-                          color: gold,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                      ),
-                      Icon(Icons.chevron_right, color: gold, size: 16),
-                    ],
-                  ),
-              ],
-            ),
-          ],
+              ),
+              if (completedTrips > 0)
+                Text('Avg ₹$avg per trip', style: KraveoType.bodySm.copyWith(color: k.inkFaint)),
+            ],
+          ),
         ),
-      ),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: _MiniStat(
+              icon: LucideIcons.bike,
+              tint: KStatus.pickedUp.color,
+              label: 'Trips',
+              value: KAnimatedNumber(value: completedTrips, style: KraveoType.numericSm.copyWith(color: k.ink, fontSize: 28)),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: _MiniStat(
+              icon: LucideIcons.clock,
+              tint: k.brand,
+              label: 'On time',
+              value: KAnimatedNumber(value: onTimePercent, suffix: '%', style: KraveoType.numericSm.copyWith(color: k.ink, fontSize: 28)),
+            ),
+          ),
+        ]),
+      ],
     );
   }
+}
 
-  Widget _buildSubStat(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(color: Colors.grey, fontSize: 10, fontWeight: FontWeight.bold),
+/// Compact stat tile: icon, big value, small label. Roughly 72dp tall.
+class _MiniStat extends StatelessWidget {
+  const _MiniStat({required this.icon, required this.tint, required this.label, required this.value});
+
+  final IconData icon;
+  final Color tint;
+  final String label;
+  final Widget value;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 72),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: k.surface,
+        borderRadius: BorderRadius.circular(KRadius.lg),
+        border: Border.all(color: k.line),
+      ),
+      child: Row(children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(color: tint.withValues(alpha: 0.16), shape: BoxShape.circle),
+          child: Icon(icon, size: 18, color: tint),
         ),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: value),
+              Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.caption.copyWith(color: k.inkMuted)),
+            ],
+          ),
         ),
-      ],
+      ]),
     );
   }
 }

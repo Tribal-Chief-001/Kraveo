@@ -1,5 +1,11 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../services/driver_api_service.dart';
+import 'ui/icon_action.dart';
+import 'ui/keypad.dart';
 
 class GateOtpDialog extends StatefulWidget {
   final String expectedOtp;
@@ -21,30 +27,52 @@ class GateOtpDialog extends StatefulWidget {
   State<GateOtpDialog> createState() => _GateOtpDialogState();
 }
 
-class _GateOtpDialogState extends State<GateOtpDialog> {
-  final List<TextEditingController> _controllers =
-      List.generate(4, (_) => TextEditingController());
-  final List<FocusNode> _focusNodes = List.generate(4, (_) => FocusNode());
+class _GateOtpDialogState extends State<GateOtpDialog> with SingleTickerProviderStateMixin {
+  static const int _len = 4;
+
+  String _pin = '';
   String _errorMessage = '';
   bool _isVerifying = false;
+  bool _success = false;
+
+  late final AnimationController _shake = AnimationController(vsync: this, duration: const Duration(milliseconds: 420));
 
   @override
   void dispose() {
-    for (var controller in _controllers) {
-      controller.dispose();
-    }
-    for (var focusNode in _focusNodes) {
-      focusNode.dispose();
-    }
+    _shake.dispose();
     super.dispose();
   }
 
+  bool get _locked => _isVerifying || _success;
+
+  void _onDigit(String d) {
+    if (_locked || _pin.length >= _len) return;
+    setState(() {
+      _pin += d;
+      _errorMessage = '';
+    });
+  }
+
+  void _onBackspace() {
+    if (_locked || _pin.isEmpty) return;
+    setState(() {
+      _pin = _pin.substring(0, _pin.length - 1);
+      _errorMessage = '';
+    });
+  }
+
+  void _fail(String message) {
+    HapticFeedback.heavyImpact();
+    _shake.forward(from: 0);
+    setState(() {
+      _errorMessage = message;
+    });
+  }
+
   void _verifyOtp() {
-    final enteredOtp = _controllers.map((c) => c.text).join();
+    final enteredOtp = _pin;
     if (enteredOtp.length < 4) {
-      setState(() {
-        _errorMessage = 'Please enter complete 4-digit PIN';
-      });
+      _fail('Please enter complete 4-digit PIN');
       return;
     }
 
@@ -56,8 +84,16 @@ class _GateOtpDialogState extends State<GateOtpDialog> {
     Future.delayed(const Duration(milliseconds: 500), () {
       if (enteredOtp == widget.expectedOtp) {
         if (!mounted) return;
-        Navigator.of(context).pop();
-        widget.onVerified(enteredOtp);
+        setState(() {
+          _isVerifying = false;
+          _success = true;
+        });
+        HapticFeedback.mediumImpact();
+        Future.delayed(const Duration(milliseconds: 350), () {
+          if (!mounted) return;
+          Navigator.of(context).pop();
+          widget.onVerified(enteredOtp);
+        });
       } else {
         DriverApiService.verifyGateOtp(widget.orderId, enteredOtp).then((isServerValid) {
           if (isServerValid && mounted) {
@@ -69,178 +105,142 @@ class _GateOtpDialogState extends State<GateOtpDialog> {
         if (!mounted) return;
         setState(() {
           _isVerifying = false;
-          _errorMessage = 'Invalid OTP PIN. Check with student at gate.';
+          _pin = '';
         });
+        _fail('Invalid OTP PIN. Check with student at gate.');
       }
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    const gold = Color(0xFFFDD400);
-    const emerald = Color(0xFF00450D);
-    const emeraldLight = Color(0xFF91D78A);
-    const darkBg = Color(0xFF1B1C1C);
-    const darkSurface = Color(0xFF151C2C);
-
-    return Dialog(
-      backgroundColor: darkSurface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(28),
-        side: BorderSide(color: gold.withValues(alpha: 0.4), width: 1.5),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Header Icon
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: gold.withValues(alpha: 0.15),
-                shape: BoxShape.circle,
-                border: Border.all(color: gold, width: 2),
-              ),
-              child: const Icon(Icons.pin_outlined, color: gold, size: 36),
-            ),
-            const SizedBox(height: 16),
-
-            // Title
-            const Text(
-              'GATE HANDSHAKE OTP',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w900,
-                fontSize: 18,
-                letterSpacing: 0.8,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Ask ${widget.customerName} at ${widget.gateName} for the 4-digit PIN',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Order ${widget.orderId} • Demo PIN: 4829',
-              style: const TextStyle(
-                color: gold,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // 4 OTP Boxes
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: List.generate(4, (index) {
-                return SizedBox(
-                  width: 52,
-                  height: 60,
-                  child: TextField(
-                    controller: _controllers[index],
-                    focusNode: _focusNodes[index],
-                    keyboardType: TextInputType.number,
+    final k = context.k;
+    return Dialog.fullscreen(
+      backgroundColor: k.bg,
+      child: SafeArea(
+        child: LayoutBuilder(builder: (context, c) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: c.maxHeight - 24),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(children: [
+                    KIconButton(
+                      icon: LucideIcons.x,
+                      semanticLabel: 'Cancel PIN entry',
+                      onTap: () {
+                        if (!_locked) Navigator.of(context).pop();
+                      },
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Gate PIN', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.headline.copyWith(color: k.ink)),
+                          Text('Order ${widget.orderId}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkFaint)),
+                        ],
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Ask ${widget.customerName} at ${widget.gateName}',
                     textAlign: TextAlign.center,
-                    maxLength: 1,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    decoration: InputDecoration(
-                      counterText: '',
-                      filled: true,
-                      fillColor: darkBg,
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide(
-                          color: _controllers[index].text.isNotEmpty
-                              ? emeraldLight
-                              : Colors.white24,
-                          width: 1.5,
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: const BorderSide(color: gold, width: 2),
-                      ),
-                    ),
-                    onChanged: (value) {
-                      if (value.isNotEmpty && index < 3) {
-                        _focusNodes[index + 1].requestFocus();
-                      } else if (value.isEmpty && index > 0) {
-                        _focusNodes[index - 1].requestFocus();
-                      }
-                      setState(() {});
-                    },
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: KraveoType.titleMd.copyWith(color: k.inkMuted),
                   ),
-                );
-              }),
-            ),
-
-            if (_errorMessage.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text(
-                _errorMessage,
-                style: const TextStyle(
-                  color: Colors.redAccent,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-
-            const SizedBox(height: 24),
-
-            // Confirm Button
-            SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: ElevatedButton(
-                onPressed: _isVerifying ? null : _verifyOtp,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: emerald,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+                  const SizedBox(height: 14),
+                  AnimatedBuilder(
+                    animation: _shake,
+                    builder: (_, child) => Transform.translate(
+                      offset: Offset(math.sin(_shake.value * math.pi * 6) * 12 * (1 - _shake.value), 0),
+                      child: child,
+                    ),
+                    child: _PinBoxes(pin: _pin, length: _len, error: _errorMessage.isNotEmpty, success: _success),
                   ),
-                  elevation: 4,
-                ),
-                child: _isVerifying
-                    ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(
-                          color: emeraldLight,
-                          strokeWidth: 2.5,
-                        ),
-                      )
-                    : const Text(
-                        'VERIFY HANDSHAKE & DELIVER',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 14,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
+                  SizedBox(
+                    height: 34,
+                    child: Center(
+                      child: _success
+                          ? Row(mainAxisSize: MainAxisSize.min, children: [
+                              Icon(LucideIcons.circleCheck, size: 20, color: k.brand),
+                              const SizedBox(width: 8),
+                              Text('PIN verified', style: KraveoType.titleMd.copyWith(color: k.brand)),
+                            ])
+                          : Text(
+                              _errorMessage,
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: KraveoType.titleMd.copyWith(color: KraveoPalette.danger),
+                            ),
+                    ),
+                  ),
+                  KKeypad(onDigit: _onDigit, onBackspace: _onBackspace, enabled: !_locked),
+                  const SizedBox(height: 6),
+                  KButton(
+                    label: 'Verify & deliver',
+                    icon: LucideIcons.packageCheck,
+                    kind: KButtonKind.accent,
+                    large: true,
+                    loading: _isVerifying,
+                    onPressed: _success ? null : _verifyOtp,
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 8),
+          );
+        }),
+      ),
+    );
+  }
+}
 
-            // Cancel Button
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text(
-                'Cancel',
-                style: TextStyle(color: Colors.grey, fontSize: 13),
+class _PinBoxes extends StatelessWidget {
+  const _PinBoxes({required this.pin, required this.length, required this.error, required this.success});
+
+  final String pin;
+  final int length;
+  final bool error, success;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final border = success
+        ? k.brand
+        : error
+            ? KraveoPalette.danger
+            : null;
+    return Semantics(
+      label: 'PIN, ${pin.length} of $length digits entered',
+      child: ExcludeSemantics(
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          for (var i = 0; i < length; i++)
+            Flexible(
+              child: AnimatedContainer(
+                duration: KMotion.fast,
+                constraints: const BoxConstraints(maxWidth: 68),
+                height: 72,
+                margin: const EdgeInsets.symmetric(horizontal: 5),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: success ? k.brand.withValues(alpha: 0.16) : k.surface,
+                  borderRadius: BorderRadius.circular(KRadius.lg),
+                  border: Border.all(
+                    color: border ?? (i == pin.length ? k.ink : (i < pin.length ? k.inkMuted : k.line)),
+                    width: (border != null || i == pin.length) ? 2.5 : 1.5,
+                  ),
+                ),
+                child: i < pin.length
+                    ? Text(pin[i], style: KraveoType.numeric.copyWith(color: success ? k.brand : k.ink, fontSize: 40))
+                    : const SizedBox.shrink(),
               ),
             ),
-          ],
-        ),
+        ]),
       ),
     );
   }

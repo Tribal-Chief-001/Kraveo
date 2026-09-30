@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../widgets/pipeline_stepper.dart';
 import '../widgets/gate_otp_dialog.dart';
+import '../widgets/ui/screen_header.dart';
 import '../services/driver_api_service.dart';
 
 class ActiveDeliveryScreen extends StatefulWidget {
@@ -28,31 +31,30 @@ class _ActiveDeliveryScreenState extends State<ActiveDeliveryScreen> {
   final String dhabaName = 'FC Night Mess';
   final String hostelGate = 'Boys Hostel Block 1 (Gate 2)';
 
+  bool _detailsOpen = false;
+
   void _callCustomer() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF151C2C),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            const Icon(Icons.phone_in_talk, color: Color(0xFF91D78A)),
-            const SizedBox(width: 10),
-            Text('Call $customerName',
-                style: const TextStyle(color: Colors.white, fontSize: 18)),
-          ],
-        ),
-        content: Text(
-          'Dialing $customerPhone...\nMake sure to coordinate exact pickup/handshake gate.',
-          style: const TextStyle(color: Colors.grey),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('End Call', style: TextStyle(color: Colors.redAccent)),
+      builder: (context) {
+        final k = context.k;
+        return AlertDialog(
+          title: Row(
+            children: [
+              Icon(LucideIcons.phoneCall, color: k.brand),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Call $customerName', maxLines: 2, overflow: TextOverflow.ellipsis)),
+            ],
           ),
-        ],
-      ),
+          content: Text(
+            'Dialing $customerPhone...\nMake sure to coordinate exact pickup/handshake gate.',
+            style: KraveoType.body.copyWith(color: k.inkMuted),
+          ),
+          actions: [
+            KButton(label: 'End call', kind: KButtonKind.danger, large: true, icon: LucideIcons.phone, onPressed: () => Navigator.pop(context)),
+          ],
+        );
+      },
     );
   }
 
@@ -60,7 +62,6 @@ class _ActiveDeliveryScreenState extends State<ActiveDeliveryScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Opening Navigation Route to Campus Gate...'),
-        backgroundColor: Color(0xFF00450D),
         duration: Duration(seconds: 2),
       ),
     );
@@ -83,314 +84,196 @@ class _ActiveDeliveryScreenState extends State<ActiveDeliveryScreen> {
     );
   }
 
+  void _advanceStep() {
+    final nextStep = widget.currentStep + 1;
+    if (nextStep == 1) {
+      DriverApiService.updateDeliveryStatus(orderId, 'PICKED_UP');
+    } else if (nextStep == 2) {
+      DriverApiService.updateDeliveryStatus(orderId, 'ARRIVED_AT_GATE');
+    }
+    widget.onStepChanged(nextStep);
+  }
+
   @override
   Widget build(BuildContext context) {
-    const gold = Color(0xFFFDD400);
-    const emerald = Color(0xFF00450D);
-    const emeraldLight = Color(0xFF91D78A);
-    const darkBg = Color(0xFF1B1C1C);
-    const darkSurface = Color(0xFF151C2C);
+    final k = context.k;
+    final step = widget.currentStep.clamp(0, 3);
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+
+    final (String headline, String where, String slideLabel, IconData slideIcon) = switch (step) {
+      0 => ('Go to restaurant', dhabaName, 'Slide · picked up', LucideIcons.package),
+      1 => ('Ride to the gate', hostelGate, 'Slide · at the gate', LucideIcons.mapPin),
+      2 => ('Meet the student', hostelGate, 'Slide · student here', LucideIcons.handshake),
+      _ => ('Hand over the order', 'Ask $customerName for the 4-digit PIN', '', LucideIcons.hash),
+    };
 
     return Scaffold(
-      backgroundColor: darkBg,
-      appBar: AppBar(
-        backgroundColor: darkBg,
-        elevation: 0,
-        title: const Row(
+      body: SafeArea(
+        bottom: false,
+        child: ListView(
+          padding: EdgeInsets.only(bottom: bottomInset + 24),
           children: [
-            Icon(Icons.navigation, color: emeraldLight, size: 22),
-            SizedBox(width: 8),
-            Text(
-              'Active Delivery Console',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: 18,
-                color: Colors.white,
+            ScreenHeader(
+              title: 'Delivery',
+              subtitle: 'Order $orderId',
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(color: k.brandSoft, borderRadius: BorderRadius.circular(KRadius.pill), border: Border.all(color: k.brand.withValues(alpha: 0.5))),
+                child: Text('₹40', style: KraveoType.headlineSm.copyWith(color: k.brand)),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 0),
+              child: PipelineStepper(
+                currentStep: step,
+                onStepTapped: (s) => widget.onStepChanged(s),
+              ),
+            ),
+            KReveal(
+              key: ValueKey('now-$step'),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(KSpace.gutter, 28, KSpace.gutter, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('STEP ${step + 1} OF 4', style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.2)),
+                    const SizedBox(height: 4),
+                    Text(headline, style: KraveoType.displayMd.copyWith(color: k.ink)),
+                    const SizedBox(height: 4),
+                    Row(children: [
+                      Icon(step == 0 ? LucideIcons.store : LucideIcons.mapPin, size: 18, color: k.inkMuted),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(where, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.inkMuted))),
+                    ]),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 24, KSpace.gutter, 0),
+              child: step < 3
+                  ? Semantics(
+                      label: slideLabel,
+                      button: true,
+                      excludeSemantics: true,
+                      onTap: _advanceStep,
+                      // Key per step so the slider resets after each confirmed step.
+                      child: KSlideToConfirm(key: ValueKey('slide-$step'), label: slideLabel, icon: slideIcon, onConfirmed: _advanceStep),
+                    )
+                  : KButton(label: 'Enter gate OTP', icon: LucideIcons.hash, kind: KButtonKind.accent, large: true, onPressed: _triggerGateOtp),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0),
+              child: Row(children: [
+                Expanded(child: KButton(label: 'Call', icon: LucideIcons.phone, kind: KButtonKind.tonal, large: true, onPressed: _callCustomer)),
+                const SizedBox(width: 12),
+                Expanded(child: KButton(label: 'Map', icon: LucideIcons.navigation, kind: KButtonKind.ghost, large: true, onPressed: _openMapRoute)),
+              ]),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0),
+              child: _OrderDetails(
+                open: _detailsOpen,
+                onToggle: () => setState(() => _detailsOpen = !_detailsOpen),
+                restaurant: dhabaName,
+                customer: customerName,
+                block: hostelGate,
+                items: 3,
+                amount: 40,
               ),
             ),
           ],
         ),
-        actions: [
-          Container(
-            margin: const EdgeInsets.only(right: 16),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: gold,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Text(
-              'EARN ₹40',
-              style: TextStyle(
-                color: Colors.black,
-                fontWeight: FontWeight.w900,
-                fontSize: 12,
+      ),
+    );
+  }
+}
+
+class _OrderDetails extends StatelessWidget {
+  const _OrderDetails({
+    required this.open,
+    required this.onToggle,
+    required this.restaurant,
+    required this.customer,
+    required this.block,
+    required this.items,
+    required this.amount,
+  });
+
+  final bool open;
+  final VoidCallback onToggle;
+  final String restaurant, customer, block;
+  final int items, amount;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return KCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          KPressable(
+            semanticLabel: open ? 'Hide order details' : 'Show order details',
+            onTap: onToggle,
+            scale: 0.99,
+            child: Container(
+              constraints: const BoxConstraints(minHeight: 64),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              color: Colors.transparent,
+              child: ExcludeSemantics(
+                child: Row(children: [
+                  Icon(LucideIcons.receipt, size: 22, color: k.inkMuted),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text('Order details', style: KraveoType.titleLg.copyWith(color: k.ink))),
+                  Text('$items items', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+                  const SizedBox(width: 8),
+                  Icon(open ? LucideIcons.chevronUp : LucideIcons.chevronDown, size: 22, color: k.inkFaint),
+                ]),
               ),
             ),
           ),
+          AnimatedSize(
+            duration: KMotion.base,
+            curve: KMotion.emphasized,
+            alignment: Alignment.topCenter,
+            child: open
+                ? Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                    child: Column(children: [
+                      Divider(color: k.line, height: 1),
+                      const SizedBox(height: 12),
+                      _Line(icon: LucideIcons.store, label: 'Restaurant', value: restaurant),
+                      _Line(icon: LucideIcons.user, label: 'Customer', value: customer),
+                      _Line(icon: LucideIcons.mapPin, label: 'Drop', value: block),
+                      _Line(icon: LucideIcons.package, label: 'Items', value: '$items'),
+                      _Line(icon: LucideIcons.wallet, label: 'Your payout', value: '₹$amount'),
+                    ]),
+                  )
+                : const SizedBox(width: double.infinity),
+          ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Active Order Summary Card
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: darkSurface,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'ORDER $orderId',
-                        style: const TextStyle(
-                          color: gold,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 16,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
-                      const Row(
-                        children: [
-                          Icon(Icons.timer_outlined,
-                              color: Colors.grey, size: 14),
-                          SizedBox(width: 4),
-                          Text(
-                            '12 mins ETA',
-                            style: TextStyle(
-                              color: Colors.grey,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            customerName,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                          Text(
-                            customerPhone,
-                            style: const TextStyle(
-                              color: Colors.grey,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _callCustomer,
-                        icon: const Icon(Icons.phone, color: emeraldLight, size: 18),
-                        label: const Text(
-                          'CALL',
-                          style: TextStyle(
-                            color: emeraldLight,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: emeraldLight),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+    );
+  }
+}
 
-            const SizedBox(height: 20),
+class _Line extends StatelessWidget {
+  const _Line({required this.icon, required this.label, required this.value});
+  final IconData icon;
+  final String label, value;
 
-            // 4-Step Pipeline Stepper Widget
-            const Text(
-              'Delivery Guidance Pipeline',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            PipelineStepper(
-              currentStep: widget.currentStep,
-              onStepTapped: (step) => widget.onStepChanged(step),
-            ),
-
-            const SizedBox(height: 20),
-
-            // Action Panel for Current Step
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: darkSurface,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: emerald.withValues(alpha: 0.6), width: 1.5),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.touch_app, color: gold, size: 20),
-                      const SizedBox(width: 8),
-                      Text(
-                        'STEP ${widget.currentStep + 1} ACTION',
-                        style: const TextStyle(
-                          color: gold,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 13,
-                          letterSpacing: 1.0,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-
-                  if (widget.currentStep == 0) ...[
-                    const Text(
-                      'Navigate to FC Night Mess to collect package.',
-                      style: TextStyle(color: Colors.white, fontSize: 14),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: _openMapRoute,
-                            icon: const Icon(Icons.map, color: Colors.black),
-                            label: const Text('OPEN MAP ROUTE'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: gold,
-                              foregroundColor: Colors.black,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14)),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ] else if (widget.currentStep == 1) ...[
-                    const Text(
-                      'Check items at dhaba counter & verify receipt.',
-                      style: TextStyle(color: Colors.white, fontSize: 14),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      '✓ 1x Butter Paneer + 2x Butter Naan',
-                      style: TextStyle(color: emeraldLight, fontSize: 13),
-                    ),
-                    const SizedBox(height: 16),
-                  ] else if (widget.currentStep == 2) ...[
-                    const Text(
-                      'Ride to Boys Hostel Block 1 (Gate 2 Handshake).',
-                      style: TextStyle(color: Colors.white, fontSize: 14),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: _openMapRoute,
-                            icon: const Icon(Icons.navigation, color: Colors.white),
-                            label: const Text('NAVIGATE TO HOSTEL GATE'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: emerald,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14)),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ] else if (widget.currentStep == 3) ...[
-                    const Text(
-                      'Ask student at gate for their 4-digit Handshake OTP to complete order.',
-                      style: TextStyle(color: Colors.white, fontSize: 14),
-                    ),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: _triggerGateOtp,
-                        icon: const Icon(Icons.pin, color: Colors.black),
-                        label: const Text('ENTER GATE OTP PIN'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: gold,
-                          foregroundColor: Colors.black,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
-                        ),
-                      ),
-                    ),
-                  ],
-
-                  const SizedBox(height: 16),
-
-                  // Next Step / Advance Button
-                  if (widget.currentStep < 3)
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          final nextStep = widget.currentStep + 1;
-                          if (nextStep == 1) {
-                            DriverApiService.updateDeliveryStatus(orderId, 'PICKED_UP');
-                          } else if (nextStep == 2) {
-                            DriverApiService.updateDeliveryStatus(orderId, 'ARRIVED_AT_GATE');
-                          }
-                          widget.onStepChanged(nextStep);
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: emerald,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                        ),
-                        child: Text(
-                          'PROCEED TO STEP ${widget.currentStep + 2}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w900,
-                            fontSize: 14,
-                            letterSpacing: 0.8,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(icon, size: 18, color: k.inkFaint),
+        const SizedBox(width: 10),
+        Text(label, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+        const SizedBox(width: 12),
+        Expanded(child: Text(value, textAlign: TextAlign.right, style: KraveoType.titleMd.copyWith(color: k.ink))),
+      ]),
     );
   }
 }
