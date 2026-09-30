@@ -16,6 +16,10 @@ class RunnerIdCardScreen extends StatelessWidget {
   /// Optional profile photo. Falls back to initials when null or when it fails to load.
   final String? photoUrl;
 
+  /// Vehicle, gate access and emergency contact rows. The server does not provide these yet,
+  /// so the real (logged-in) pass hides them instead of showing placeholder values.
+  final bool showExtraDetails;
+
   const RunnerIdCardScreen({
     super.key,
     this.name = 'Vikram Singh',
@@ -25,6 +29,7 @@ class RunnerIdCardScreen extends StatelessWidget {
     this.gateAccess = 'All hostel blocks',
     this.emergencyContact = '+91 98989 12345',
     this.photoUrl,
+    this.showExtraDetails = true,
   });
 
   String get _initials {
@@ -105,19 +110,22 @@ class RunnerIdCardScreen extends StatelessWidget {
                       fit: BoxFit.scaleDown,
                       child: Text(runnerId, style: KraveoType.displayLg.copyWith(color: k.accent, fontSize: 46, letterSpacing: 2)),
                     ),
-                    const SizedBox(height: 18),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 22),
-                      child: Divider(color: k.line, height: 1),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(22, 14, 22, 8),
-                      child: Column(children: [
-                        _Detail(icon: LucideIcons.bike, label: 'Vehicle', value: '$vehicle · $plate'),
-                        _Detail(icon: LucideIcons.mapPinned, label: 'Gate access', value: gateAccess),
-                        _Detail(icon: LucideIcons.phone, label: 'Emergency contact', value: emergencyContact),
-                      ]),
-                    ),
+                    if (showExtraDetails) ...[
+                      const SizedBox(height: 18),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 22),
+                        child: Divider(color: k.line, height: 1),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(22, 14, 22, 8),
+                        child: Column(children: [
+                          _Detail(icon: LucideIcons.bike, label: 'Vehicle', value: '$vehicle · $plate'),
+                          _Detail(icon: LucideIcons.mapPinned, label: 'Gate access', value: gateAccess),
+                          _Detail(icon: LucideIcons.phone, label: 'Emergency contact', value: emergencyContact),
+                        ]),
+                      ),
+                    ] else
+                      const SizedBox(height: 14),
                     Container(
                       margin: const EdgeInsets.fromLTRB(22, 8, 22, 22),
                       padding: const EdgeInsets.all(16),

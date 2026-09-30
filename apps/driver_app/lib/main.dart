@@ -1,21 +1,184 @@
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'screens/driver_home.dart';
+import 'screens/login_screen.dart';
+import 'services/driver_api_service.dart';
+import 'services/partner_auth_service.dart';
+import 'session/session_controller.dart';
 
 void main() {
   runApp(const KraveoDriverApp());
 }
 
-class KraveoDriverApp extends StatelessWidget {
-  const KraveoDriverApp({super.key});
+class KraveoDriverApp extends StatefulWidget {
+  /// [auth] is the network layer for login / session checks; tests pass a fake.
+  const KraveoDriverApp({super.key, this.auth});
+
+  final PartnerAuthService? auth;
+
+  @override
+  State<KraveoDriverApp> createState() => _KraveoDriverAppState();
+}
+
+class _KraveoDriverAppState extends State<KraveoDriverApp> {
+  late final SessionController _session = SessionController(auth: widget.auth);
+
+  @override
+  void dispose() {
+    _session.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Kraveo Runner | Delivery App',
-      debugShowCheckedModeBanner: false,
-      theme: KraveoTheme.driver(),
-      home: const DriverHomeScreen(),
+    return SessionScope(
+      controller: _session,
+      child: MaterialApp(
+        title: 'Kraveo Delivery Partner',
+        debugShowCheckedModeBanner: false,
+        theme: KraveoTheme.driver(),
+        home: AuthGate(session: _session),
+      ),
+    );
+  }
+}
+
+/// Decides between splash, login, the "can't reach Kraveo" retry state and the app, and wires
+/// session expiry (HTTP 401 on any authenticated call) to the login screen.
+class AuthGate extends StatefulWidget {
+  const AuthGate({super.key, required this.session});
+
+  final SessionController session;
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  SessionController get _session => widget.session;
+
+  @override
+  void initState() {
+    super.initState();
+    DriverApiService.onUnauthorized = _handleUnauthorized;
+    _session.restore();
+  }
+
+  @override
+  void dispose() {
+    if (DriverApiService.onUnauthorized == _handleUnauthorized) DriverApiService.onUnauthorized = null;
+    super.dispose();
+  }
+
+  /// A 401 came back from an authenticated call: back to login with an explanation.
+  void _handleUnauthorized() {
+    if (!mounted || _session.status != SessionStatus.signedIn) return;
+    // Close the runner pass / dialogs that sit above the gate.
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    _session.expire();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          duration: Duration(seconds: 5),
+          content: Row(children: [
+            Icon(LucideIcons.logIn, size: 22, color: Colors.white),
+            SizedBox(width: 10),
+            Expanded(child: Text(DriverApiService.sessionExpiredMessage)),
+          ]),
+        ),
+      );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: _session,
+      builder: (context, _) {
+        switch (_session.status) {
+          case SessionStatus.checking:
+            return const _SplashScreen();
+          case SessionStatus.unreachable:
+            return _SessionUnreachable(onRetry: _session.retryRestore);
+          case SessionStatus.signedOut:
+            return LoginScreen(onSubmit: _session.login);
+          case SessionStatus.signedIn:
+            return const DriverHomeScreen();
+        }
+      },
+    );
+  }
+}
+
+class _SplashScreen extends StatelessWidget {
+  const _SplashScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Semantics(
+          label: 'Loading Kraveo Delivery Partner',
+          child: const Column(mainAxisSize: MainAxisSize.min, children: [
+            KBrandMark(height: 64),
+            SizedBox(height: 28),
+            SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 3)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// A saved login exists but Kraveo cannot be reached. The token is kept, so a dropped network
+/// never logs a rider out mid-shift.
+class _SessionUnreachable extends StatefulWidget {
+  const _SessionUnreachable({required this.onRetry});
+
+  final Future<void> Function() onRetry;
+
+  @override
+  State<_SessionUnreachable> createState() => _SessionUnreachableState();
+}
+
+class _SessionUnreachableState extends State<_SessionUnreachable> {
+  bool _busy = false;
+
+  Future<void> _retry() async {
+    setState(() => _busy = true);
+    await widget.onRetry();
+    if (mounted) setState(() => _busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(KSpace.gutter),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: BoxDecoration(color: k.brandSoft, shape: BoxShape.circle),
+                  child: Icon(LucideIcons.wifiOff, size: 32, color: k.brand),
+                ),
+                const SizedBox(height: 16),
+                Text('Can\'t reach Kraveo', textAlign: TextAlign.center, style: KraveoType.headline.copyWith(color: k.ink)),
+                const SizedBox(height: 8),
+                Text('Check your internet. You are still logged in.', textAlign: TextAlign.center, style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 16)),
+                const SizedBox(height: 20),
+                KButton(label: 'Retry', icon: LucideIcons.rotateCcw, large: true, loading: _busy, onPressed: _retry),
+              ]),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

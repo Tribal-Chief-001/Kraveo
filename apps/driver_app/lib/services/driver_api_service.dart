@@ -8,6 +8,18 @@ class DriverApiService {
   static const String _tokenPrefKey = 'kraveo_driver_jwt_token';
   static String? _cachedToken;
 
+  /// Shown when the server rejects the saved token (HTTP 401) on an authenticated call.
+  static const String sessionExpiredMessage = 'Session expired. Please log in again.';
+
+  /// Set by the session gate. Called when any authenticated request comes back 401, so the
+  /// app can drop the dead token and return to the login screen.
+  static void Function()? onUnauthorized;
+
+  /// A 401 on an authenticated call means the JWT is expired or revoked.
+  static void _checkUnauthorized(http.Response response) {
+    if (response.statusCode == 401) onUnauthorized?.call();
+  }
+
   /// Retrieves stored JWT auth token from SharedPreferences or memory cache
   static Future<String?> getSavedToken() async {
     if (_cachedToken != null && _cachedToken!.isNotEmpty) {
@@ -28,6 +40,15 @@ class DriverApiService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_tokenPrefKey, token);
+    } catch (_) {}
+  }
+
+  /// Forgets the JWT (memory and disk). Called on logout and on session expiry.
+  static Future<void> clearToken() async {
+    _cachedToken = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_tokenPrefKey);
     } catch (_) {}
   }
 
@@ -56,6 +77,7 @@ class DriverApiService {
         body: jsonEncode({'otpCode': otpCode.trim()}),
       ).timeout(const Duration(seconds: 5));
 
+      _checkUnauthorized(response);
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         if (json['success'] == true) {
@@ -81,6 +103,7 @@ class DriverApiService {
         headers: headers,
       ).timeout(const Duration(seconds: 5));
 
+      _checkUnauthorized(response);
       if (response.statusCode == 200) {
         debugPrint('🛵 [Driver API] Successfully accepted job $orderId on backend.');
         return true;
@@ -103,6 +126,7 @@ class DriverApiService {
         body: jsonEncode({'isOnline': isOnline}),
       ).timeout(const Duration(seconds: 4));
 
+      _checkUnauthorized(response);
       if (response.statusCode == 200) {
         debugPrint('🟢 [Driver API] Duty status synced: ${isOnline ? "ONLINE" : "OFFLINE"}');
         return true;
@@ -129,6 +153,7 @@ class DriverApiService {
         body: jsonEncode(bodyMap),
       ).timeout(const Duration(seconds: 5));
 
+      _checkUnauthorized(response);
       if (response.statusCode == 200) {
         debugPrint('🛵 [Driver API] Delivery status updated to $newStatus on backend.');
         return true;
@@ -151,6 +176,7 @@ class DriverApiService {
         body: jsonEncode({'lat': lat, 'lng': lng, 'heading': heading}),
       ).timeout(const Duration(seconds: 4));
 
+      _checkUnauthorized(response);
       if (response.statusCode == 200) {
         debugPrint('📍 [Driver API] Location stream updated: ($lat, $lng)');
         return true;

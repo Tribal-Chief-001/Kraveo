@@ -12,6 +12,9 @@ import '../widgets/ui/icon_action.dart';
 import '../widgets/ui/radar_pulse.dart';
 import '../widgets/ui/screen_header.dart';
 import '../services/driver_api_service.dart';
+import '../session/session_controller.dart';
+import '../widgets/account_sheet.dart';
+import '../models/partner_session.dart';
 import 'active_delivery.dart';
 import 'earnings_history.dart';
 import 'trip_logs.dart';
@@ -207,9 +210,41 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   void _openRunnerPass() {
+    final partner = SessionScope.maybeOf(context)?.session;
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (context) => const RunnerIdCardScreen()),
+      MaterialPageRoute(
+        builder: (context) => partner == null
+            ? const RunnerIdCardScreen()
+            : RunnerIdCardScreen(
+                name: partner.name.isEmpty ? 'Runner' : partner.name,
+                runnerId: (partner.runnerCode ?? '').isEmpty ? '-' : partner.runnerCode!,
+                showExtraDetails: false,
+              ),
+      ),
     );
+  }
+
+  void _openAccountSheet() {
+    final partner = SessionScope.maybeOf(context)?.session;
+    if (partner == null) return;
+    showAccountSheet(context, partner: partner, onOpenPass: _openRunnerPass, onLogout: _confirmLogout);
+  }
+
+  /// Asks first, then signs out. Going off duty on the server is part of the sign-out, so a
+  /// logged-out phone never keeps receiving jobs. The session gate swaps to the login screen
+  /// once the controller reports signed-out.
+  Future<void> _confirmLogout() async {
+    final controller = SessionScope.maybeOf(context);
+    if (controller == null) return;
+    final confirmed = await showLogoutConfirm(context, hasActiveJob: hasActiveJob);
+    if (!confirmed || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Logging out...'), duration: Duration(seconds: 6)));
+    _stopLocationStreaming();
+    await controller.logout(beforeClear: () => DriverApiService.toggleDutyStatus(false));
+    messenger.hideCurrentSnackBar();
   }
 
   @override
@@ -261,6 +296,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   Widget _buildHomeDutyTab() {
     final k = context.k;
+    final partner = SessionScope.maybeOf(context)?.session;
     return SafeArea(
       bottom: false,
       child: Builder(builder: (context) {
@@ -278,6 +314,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 KIconButton(icon: LucideIcons.siren, semanticLabel: 'Emergency campus support', tint: KraveoPalette.danger, onTap: _callCampusAdminSupport),
               ],
             ),
+            if (partner != null) ...[
+              const SizedBox(height: 16),
+              _GreetingRow(partner: partner, onTap: _openAccountSheet),
+            ],
             const SizedBox(height: 20),
 
             // Hero duty control
@@ -400,6 +440,39 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 ],
               ),
             ),
+            if (partner != null) ...[
+              const SizedBox(height: 12),
+              KCard(
+                key: const ValueKey('logout-card'),
+                onTap: _confirmLogout,
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                child: Semantics(
+                  label: 'Log out',
+                  excludeSemantics: true,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(color: KraveoPalette.danger.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(KRadius.md)),
+                        child: const Icon(LucideIcons.logOut, color: KraveoPalette.danger, size: 24),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Log out', style: KraveoType.titleLg.copyWith(color: k.ink)),
+                            Text('End your shift on this phone', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+                          ],
+                        ),
+                      ),
+                      Icon(LucideIcons.chevronRight, color: k.inkFaint),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         );
       }),
@@ -424,6 +497,38 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             });
           },
         ),
+      ),
+    );
+  }
+}
+
+/// "Hi, Vikram" under the header: who is on duty. Opens the account sheet.
+class _GreetingRow extends StatelessWidget {
+  const _GreetingRow({required this.partner, required this.onTap});
+
+  final PartnerSession partner;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final code = partner.runnerCode ?? '';
+    return KPressable(
+      semanticLabel: 'Account: ${partner.name}. Double tap to open.',
+      onTap: onTap,
+      scale: 0.98,
+      child: ExcludeSemantics(
+        child: Row(children: [
+          KAvatar(id: partner.avatarId, size: 48),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Hi, ${partner.firstName}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink)),
+              if (code.isNotEmpty) Text(code, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted, letterSpacing: 0.8)),
+            ]),
+          ),
+          Icon(LucideIcons.chevronRight, color: k.inkFaint),
+        ]),
       ),
     );
   }
