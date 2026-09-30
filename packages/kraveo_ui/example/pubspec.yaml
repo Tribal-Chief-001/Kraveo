@@ -1,0 +1,13 @@
+name: kraveo_gallery
+description: Visual gallery of the Kraveo design system.
+publish_to: none
+environment:
+  sdk: ^3.5.0
+dependencies:
+  flutter:
+    sdk: flutter
+  kraveo_ui:
+    path: ..
+  lucide_icons_flutter: ^3.1.20
+flutter:
+  uses-material-design: true
