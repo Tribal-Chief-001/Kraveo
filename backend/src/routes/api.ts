@@ -6,8 +6,10 @@ import { validateAndCalculateOrder } from '../utils/validation';
 import { prisma } from '../db';
 import { createRazorpayOrder, verifyRazorpayPaymentSignature, verifyRazorpayWebhookSignature } from '../services/paymentService';
 import { triggerDhabaAlarmPushNotification, triggerStudentArrivalNotification, sendPushNotification } from '../services/notificationService';
-import { dispatchSmsOtp } from '../services/smsService';
-import { otpStore, canonicalPhone, last10, maskPhone, checkCanSend, issueOtp, discardOtp, checkOtp, isDemoLogin, demoOtp, RESEND_COOLDOWN_MS, OTP_TTL_MS } from '../services/otpService';
+import { canonicalPhone, last10 } from '../utils/phone';
+import { hashPassword, verifyPassword, getDummyHash, passwordProblem } from '../services/password';
+import { isLocked, recordFailure, recordSuccess } from '../services/loginLimiter';
+import { verifyGoogleIdToken, GoogleAuthError } from '../services/googleAuth';
 import { randomInt, timingSafeEqual } from 'crypto';
 
 export const apiRouter = Router();
@@ -86,117 +88,116 @@ apiRouter.get('/drivers/:id', requireAuth, requireRole('DRIVER', 'ADMIN'), async
 });
 
 // ----------------------------------------------------
-// AUTH & SMS OTP ENDPOINTS
+// AUTH: students sign in with Google, partners with phone + password (contract: Docs/15_auth_v2_contract.md)
 // ----------------------------------------------------
-// Re-exported so the e2e suite can read the code it just triggered (SMS is not available in tests).
-export { otpStore };
-
 const PLACEHOLDER_NAMES = new Set(['VIT Student', 'Dhaba Owner', 'Delivery Partner']);
 const NAME_RE = /^[\p{L}][\p{L}\s.'\-]{1,59}$/u;
 const HOSTEL_RE = /^(Block [1-6]|Girls Gate [12]|VIT Main Gate|Boys Hostel Block [1-6]|Girls Hostel Gate [12])$/;
 const UPI_RE = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/;
+const AVATAR_COUNT = 15;
 
-const needsProfile = (user: { role: Role; name: string }) => user.role === Role.STUDENT && (!user.name || PLACEHOLDER_NAMES.has(user.name.trim()));
-const publicUser = (user: any) => ({
-  id: user.id,
-  phone: user.phone,
-  name: user.name,
-  role: user.role,
-  hostelBlock: user.hostelBlock,
-  kraveoCoins: user.kraveoCoins,
-  upiId: user.upiId,
-  createdAt: user.createdAt,
+const needsProfile = (u: { role: Role; name: string; phone?: string | null; avatarId?: number | null; isStudent?: boolean | null; hostelBlock?: string | null }) =>
+  u.role === Role.STUDENT &&
+  (!u.name || PLACEHOLDER_NAMES.has(u.name.trim()) || !u.phone || !u.avatarId || u.isStudent === null || u.isStudent === undefined || (u.isStudent === true && !u.hostelBlock));
+
+const publicUser = (u: any) => ({
+  id: u.id,
+  name: u.name,
+  email: u.email ?? null,
+  phone: u.phone ?? null,
+  role: u.role,
+  isStudent: u.isStudent ?? null,
+  hostelBlock: u.hostelBlock ?? null,
+  avatarId: u.avatarId ?? null,
+  kraveoCoins: u.kraveoCoins,
 });
 
-// Request SMS OTP. Rate limits + lockouts live in services/otpService.ts.
-apiRouter.post('/auth/send-otp', async (req: Request, res: Response) => {
-  const phone = canonicalPhone(req.body?.phone);
-  if (!phone) {
-    return res.status(400).json({ success: false, message: 'Enter a valid 10-digit Indian mobile number.' });
-  }
-
-  const gate = checkCanSend(phone);
-  if (!gate.ok) {
-    return res.status(gate.status).json({ success: false, message: gate.message, retryAfterSeconds: gate.retryAfterSeconds });
-  }
-
-  const meta = { resendAfterSeconds: RESEND_COOLDOWN_MS / 1000, expiresInSeconds: OTP_TTL_MS / 1000 };
-
-  // Demo numbers (explicit allow-list, off unless DEMO_MODE=true): fixed code, no SMS.
-  if (isDemoLogin(phone)) {
-    issueOtp(phone, demoOtp());
-    return res.json({ success: true, message: `Code sent to ${maskPhone(phone)}.`, ...meta });
-  }
-
-  const otp = issueOtp(phone);
-  const sent = await dispatchSmsOtp(phone, otp, 'STUDENT');
-  if (!sent.success) {
-    discardOtp(phone);
-    console.error(`❌ [OTP] SMS dispatch failed for ${maskPhone(phone)}: ${sent.error || 'unknown error'}`);
-    return res.status(503).json({ success: false, message: "We couldn't send the code right now. Please try again in a minute." });
-  }
-
-  return res.json({ success: true, message: `Code sent to ${maskPhone(phone)}.`, ...meta });
-});
-
-// Verify OTP -> log in (or self-register a STUDENT). Partner roles can never self-register.
-apiRouter.post('/auth/verify-otp', async (req: Request, res: Response) => {
+// Students: verify the Google ID token, find or create the account.
+apiRouter.post('/auth/google', async (req: Request, res: Response) => {
   try {
-    const phone = canonicalPhone(req.body?.phone);
-    const code = String(req.body?.otp ?? '').trim();
-    if (!phone || !/^\d{4}$/.test(code)) {
-      return res.status(400).json({ success: false, message: 'Enter your phone number and the 4-digit code.' });
+    const idToken = req.body?.idToken;
+    if (typeof idToken !== 'string' || idToken.length < 20) {
+      return res.status(400).json({ success: false, message: 'Google sign-in token is missing.' });
     }
 
-    const requestedRole = String(req.body?.role || 'STUDENT').toUpperCase();
-    if (!['STUDENT', 'VENDOR', 'DRIVER'].includes(requestedRole)) {
-      return res.status(403).json({ success: false, message: 'This role cannot sign in with a phone code.' });
+    let identity;
+    try {
+      identity = await verifyGoogleIdToken(idToken);
+    } catch (err) {
+      if (err instanceof GoogleAuthError) return res.status(err.status).json({ success: false, message: err.message });
+      throw err;
+    }
+    if (!identity.emailVerified) {
+      return res.status(401).json({ success: false, message: 'Your Google email is not verified.' });
     }
 
-    const verdict = checkOtp(phone, code);
-    if (!verdict.ok) {
-      return res.status(verdict.status).json({ success: false, message: verdict.message, attemptsLeft: verdict.attemptsLeft, retryAfterSeconds: verdict.retryAfterSeconds });
-    }
-
-    // Existing accounts may be stored as '+91 XXXXXXXXXX' (seed data) - match on the last 10 digits.
-    let user = await prisma.user.findFirst({ where: { phone: { endsWith: last10(phone) } } });
+    let user = await prisma.user.findFirst({ where: { OR: [{ googleSub: identity.sub }, { email: identity.email }] } });
     let isNewUser = false;
 
     if (user) {
-      if (user.role !== requestedRole) {
-        const message = user.role === 'STUDENT'
-          ? 'This number is a student account. Use the Kraveo customer app.'
-          : 'This number is a Kraveo partner account. Use the Kraveo partner app.';
-        return res.status(403).json({ success: false, message });
+      if (user.role !== Role.STUDENT) {
+        return res.status(403).json({ success: false, message: 'This Google account belongs to a Kraveo partner. Use the partner app.' });
+      }
+      if (user.googleSub !== identity.sub || user.email !== identity.email) {
+        user = await prisma.user.update({ where: { id: user.id }, data: { googleSub: identity.sub, email: identity.email } });
       }
     } else {
-      if (requestedRole !== 'STUDENT') {
-        return res.status(403).json({ success: false, message: 'This number is not registered as a Kraveo partner. Please contact Kraveo.' });
-      }
-      const suppliedName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
-      const suppliedHostel = typeof req.body?.hostelBlock === 'string' ? req.body.hostelBlock.trim() : '';
       user = await prisma.user.create({
-        data: {
-          phone,
-          role: Role.STUDENT,
-          name: NAME_RE.test(suppliedName) ? suppliedName : 'VIT Student',
-          hostelBlock: HOSTEL_RE.test(suppliedHostel) ? suppliedHostel : 'Block 1',
-        },
+        data: { email: identity.email, googleSub: identity.sub, name: identity.name.slice(0, 60), role: Role.STUDENT },
       });
       isNewUser = true;
     }
 
     const token = generateToken({ id: user.id, phone: user.phone, role: user.role });
+    return res.json({ success: true, message: isNewUser ? 'Welcome to Kraveo!' : 'Welcome back!', token, user: publicUser(user), isNewUser, needsProfile: needsProfile(user) });
+  } catch (err: any) {
+    console.error('google sign-in failed:', err);
+    return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
+  }
+});
+
+// Partners (vendor / driver): phone + password. Accounts are created by Kraveo only.
+apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
+  try {
+    const phone = canonicalPhone(req.body?.phone);
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    const role = String(req.body?.role || '').toUpperCase();
+    if (!phone || !password || !['VENDOR', 'DRIVER'].includes(role)) {
+      return res.status(400).json({ success: false, message: 'Enter your phone number and password.' });
+    }
+
+    const key = last10(phone);
+    const locked = isLocked(key);
+    if (locked) {
+      return res.status(429).json({ success: false, message: 'Too many wrong attempts. Try again later.', retryAfterSeconds: locked });
+    }
+
+    const user = await prisma.user.findFirst({ where: { phone: { endsWith: key }, role: { in: [Role.VENDOR, Role.DRIVER, Role.ADMIN, Role.STUDENT] } } });
+    // Always run one scrypt so unknown numbers and wrong passwords take the same time.
+    const ok = await verifyPassword(password, user?.passwordHash ?? (await getDummyHash()));
+    if (!user || !user.passwordHash || !ok) {
+      const retry = recordFailure(key);
+      if (retry) return res.status(429).json({ success: false, message: 'Too many wrong attempts. Try again in 15 minutes.', retryAfterSeconds: retry });
+      return res.status(401).json({ success: false, message: 'Wrong phone or password.' });
+    }
+    if (user.role !== role) {
+      return res.status(403).json({ success: false, message: 'This account is not registered for this app.' });
+    }
+    recordSuccess(key);
+
+    const vendor = role === 'VENDOR' ? await prisma.vendor.findFirst({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true } }) : null;
+    const driver = role === 'DRIVER' ? await prisma.driverPartner.findFirst({ where: { userId: user.id }, select: { id: true, runnerCode: true } }) : null;
+
+    const token = generateToken({ id: user.id, phone: user.phone, role: user.role });
     return res.json({
       success: true,
-      message: isNewUser ? 'Welcome to Kraveo!' : 'Welcome back!',
       token,
-      user: publicUser(user),
-      isNewUser,
-      needsProfile: needsProfile(user),
+      user: { id: user.id, name: user.name, phone: user.phone, role: user.role, avatarId: user.avatarId ?? null },
+      ...(vendor ? { vendor } : {}),
+      ...(driver ? { driver } : {}),
     });
   } catch (err: any) {
-    console.error('verify-otp failed:', err);
+    console.error('partner-login failed:', err);
     return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
 });
@@ -283,43 +284,66 @@ apiRouter.get('/auth/profile', requireAuth, async (req: AuthenticatedRequest, re
     if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (!user) return res.status(404).json({ success: false, message: 'User profile not found.' });
-
     return res.json({ success: true, user: publicUser(user), needsProfile: needsProfile(user) });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message || 'Error fetching profile' });
   }
 });
 
-// Update Authenticated User Profile (role, coins and phone can never be changed here)
+// Update profile (role, coins, email and google id can never be changed here)
 apiRouter.put('/auth/profile', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
-    const { name, hostelBlock, upiId, fcmToken } = req.body ?? {};
+    const current = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!current) return res.status(404).json({ success: false, message: 'User profile not found.' });
 
-    const updateData: Record<string, string> = {};
+    const { name, phone, isStudent, hostelBlock, avatarId, upiId, fcmToken } = req.body ?? {};
+    const isStudentAccount = current.role === Role.STUDENT;
+    const bad = (field: string, message: string) => res.status(400).json({ success: false, field, message });
+    const updateData: Record<string, any> = {};
+
     if (name !== undefined) {
       const cleaned = String(name).trim().replace(/\s+/g, ' ');
-      if (!NAME_RE.test(cleaned) || PLACEHOLDER_NAMES.has(cleaned)) {
-        return res.status(400).json({ success: false, field: 'name', message: 'Enter your full name (2-60 letters).' });
-      }
+      if (!NAME_RE.test(cleaned) || PLACEHOLDER_NAMES.has(cleaned)) return bad('name', 'Enter your full name (2-60 letters).');
       updateData.name = cleaned;
     }
-    if (hostelBlock !== undefined) {
-      const cleaned = String(hostelBlock).trim();
-      if (!HOSTEL_RE.test(cleaned)) {
-        return res.status(400).json({ success: false, field: 'hostelBlock', message: 'Choose one of the campus drop points.' });
+    if (avatarId !== undefined) {
+      if (!Number.isInteger(avatarId) || avatarId < 1 || avatarId > AVATAR_COUNT) return bad('avatarId', 'Choose one of the avatars.');
+      updateData.avatarId = avatarId;
+    }
+    if (isStudentAccount) {
+      if (phone !== undefined) {
+        const canon = canonicalPhone(phone);
+        if (!canon) return bad('phone', 'Enter a valid 10-digit Indian mobile number.');
+        updateData.phone = canon;
       }
-      updateData.hostelBlock = cleaned;
+      if (isStudent !== undefined) {
+        if (typeof isStudent !== 'boolean') return bad('isStudent', 'Tell us whether you are a student.');
+        updateData.isStudent = isStudent;
+        if (!isStudent) updateData.hostelBlock = null;
+      }
+      if (hostelBlock !== undefined) {
+        const finalIsStudent = updateData.isStudent ?? current.isStudent;
+        if (finalIsStudent !== true) return bad('hostelBlock', 'A hostel block is only needed for students.');
+        const cleaned = String(hostelBlock).trim();
+        if (!HOSTEL_RE.test(cleaned)) return bad('hostelBlock', 'Choose one of the campus drop points.');
+        updateData.hostelBlock = cleaned;
+      }
     }
     if (upiId !== undefined && upiId !== '') {
       const cleaned = String(upiId).trim();
-      if (!UPI_RE.test(cleaned)) return res.status(400).json({ success: false, field: 'upiId', message: 'Enter a valid UPI ID.' });
+      if (!UPI_RE.test(cleaned)) return bad('upiId', 'Enter a valid UPI ID.');
       updateData.upiId = cleaned;
     }
     if (typeof fcmToken === 'string' && fcmToken.length > 0 && fcmToken.length <= 4096) updateData.fcmToken = fcmToken;
 
-    const user = await prisma.user.update({ where: { id: req.user.id }, data: updateData });
-    return res.json({ success: true, message: 'Profile updated successfully.', user: publicUser(user), needsProfile: needsProfile(user) });
+    try {
+      const user = await prisma.user.update({ where: { id: req.user.id }, data: updateData });
+      return res.json({ success: true, message: 'Profile updated successfully.', user: publicUser(user), needsProfile: needsProfile(user) });
+    } catch (err: any) {
+      if (err?.code === 'P2002') return bad('phone', 'This phone number is already used by another account.');
+      throw err;
+    }
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message || 'Error updating profile' });
   }
@@ -345,11 +369,76 @@ apiRouter.delete('/auth/account', requireAuth, requireRole('STUDENT'), async (re
     }
     await prisma.user.update({
       where: { id: userId },
-      data: { name: 'Deleted user', phone: `deleted:${userId}`, hostelBlock: null, fcmToken: null, upiId: null, kraveoCoins: 0 },
+      data: { name: 'Deleted user', phone: null, email: null, googleSub: null, passwordHash: null, avatarId: null, isStudent: null, hostelBlock: null, fcmToken: null, upiId: null, kraveoCoins: 0 },
     });
     return res.json({ success: true, message: 'Your account has been deleted.' });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message || 'Could not delete the account.' });
+  }
+});
+
+// ----------------------------------------------------
+// ADMIN: partner accounts (vendor / driver). Kraveo creates these; there is no self sign-up.
+// ----------------------------------------------------
+apiRouter.post('/admin/partners', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { role, name, password, vendorId } = req.body ?? {};
+    const phone = canonicalPhone(req.body?.phone);
+    const bad = (field: string, message: string) => res.status(400).json({ success: false, field, message });
+    if (!['VENDOR', 'DRIVER'].includes(role)) return bad('role', 'Role must be VENDOR or DRIVER.');
+    const cleanedName = String(name ?? '').trim().replace(/\s+/g, ' ');
+    if (!NAME_RE.test(cleanedName.replace(/[()]/g, ''))) return bad('name', 'Enter the partner name.');
+    if (!phone) return bad('phone', 'Enter a valid 10-digit Indian mobile number.');
+    const problem = passwordProblem(password);
+    if (problem) return bad('password', problem);
+
+    if (await prisma.user.findFirst({ where: { phone: { endsWith: last10(phone) } } })) {
+      return res.status(409).json({ success: false, field: 'phone', message: 'This phone number already has an account.' });
+    }
+    if (role === 'VENDOR' && vendorId) {
+      const vendor = await prisma.vendor.findUnique({ where: { id: String(vendorId) } });
+      if (!vendor) return bad('vendorId', 'That restaurant does not exist.');
+      if (vendor.userId) return res.status(409).json({ success: false, field: 'vendorId', message: 'That restaurant already has an owner account.' });
+    }
+
+    const passwordHash = await hashPassword(password);
+    const user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({ data: { name: cleanedName, phone, role: role as Role, passwordHash } });
+      if (role === 'VENDOR' && vendorId) await tx.vendor.update({ where: { id: String(vendorId) }, data: { userId: created.id } });
+      if (role === 'DRIVER') {
+        const b = req.body ?? {};
+        await tx.driverPartner.create({
+          data: {
+            userId: created.id,
+            name: cleanedName,
+            phone,
+            studentRegNo: String(b.studentRegNo || 'N/A'),
+            runnerCode: String(b.runnerCode || `RUN-${Math.floor(1000 + Math.random() * 9000)}`),
+            avatarUrl: String(b.avatarUrl || ''),
+            vehicleType: String(b.vehicleType || 'Scooter'),
+            vehicleRegNo: String(b.vehicleRegNo || 'N/A'),
+            emergencyPhone: String(b.emergencyPhone || phone),
+          },
+        });
+      }
+      return created;
+    });
+    return res.status(201).json({ success: true, user: { id: user.id, name: user.name, phone: user.phone, role: user.role } });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message || 'Could not create the partner.' });
+  }
+});
+
+apiRouter.get('/admin/partners', requireAuth, requireRole('ADMIN'), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: { role: { in: [Role.VENDOR, Role.DRIVER] } },
+      select: { id: true, name: true, phone: true, role: true, createdAt: true, vendorsOwned: { select: { id: true, name: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    return res.json({ success: true, data: users });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message || 'Could not list partners.' });
   }
 });
 
@@ -727,13 +816,23 @@ apiRouter.get('/orders', requireAuth, async (req: AuthenticatedRequest, res: Res
       return res.status(403).json({ success: false, message: 'Forbidden.' });
     }
 
-    const dbOrders = await prisma.order.findMany({
+    const isAdmin = req.user?.role === Role.ADMIN;
+    const requested = Number.parseInt(String(req.query.limit ?? ''), 10);
+    const limit = Math.min(Number.isFinite(requested) && requested > 0 ? requested : isAdmin ? 100 : 50, 200);
+    const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : undefined;
+
+    const page = await prisma.order.findMany({
       where: whereClause,
       include: { items: true, vendor: true, customer: true, driver: true },
-      orderBy: { createdAt: 'desc' }
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
+    const hasMore = page.length > limit;
+    const dbOrders = hasMore ? page.slice(0, limit) : page;
+    const nextCursor = hasMore ? dbOrders[dbOrders.length - 1].id : null;
 
-    return res.json({ success: true, count: dbOrders.length, data: dbOrders.map((order) => sanitizeOrder(order, req.user!.role as Role)) });
+    return res.json({ success: true, count: dbOrders.length, nextCursor, data: dbOrders.map((order) => sanitizeOrder(order, req.user!.role as Role)) });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message || 'Error fetching orders' });
   }

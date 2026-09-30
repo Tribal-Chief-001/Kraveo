@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "seed:demo-partners": "node dist/utils/seedDemoPartners.js"
   },
   "dependencies": {
     "@aws-sdk/client-ec2": "^3.1106.0",
@@ -17,6 +18,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "firebase-admin": "^14.2.0",
+    "google-auth-library": "^10.9.1",
     "jsonwebtoken": "^9.0.2",
     "razorpay": "^2.9.4",
     "socket.io": "^4.7.5"

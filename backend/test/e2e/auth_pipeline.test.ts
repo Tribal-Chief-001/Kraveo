@@ -1,293 +1,324 @@
 /**
- * Login / account pipeline: phone OTP, lockouts, role gating, profile, logout, account deletion, demo mode.
- * Runs against a real PostgreSQL (see backend/prisma/README.md). Rate limits are switched on for this file.
+ * Auth v2: Google Sign-In for students, phone + password for partners, profile, logout, delete account,
+ * admin-created partner accounts, order pagination. Runs against a real PostgreSQL.
  */
-process.env.OTP_STRICT_LIMITS = 'true';
-
 import supertest from 'supertest';
 import { startTestServer, stopTestServer, TestServerInstance } from '../harness/app';
 import { prisma, seedTestDatabase, cleanTestOrders, cleanTestUsers } from '../harness/db';
-import { getAuthHeader } from '../harness/auth';
-import * as sms from '../../src/services/smsService';
-import { otpStore } from '../../src/routes/api';
-import {
-  __resetOtpState, canonicalPhone, checkCanSend, issueOtp, checkOtp,
-  MAX_WRONG_GUESSES, LOCKOUT_MS, RESEND_COOLDOWN_MS,
-} from '../../src/services/otpService';
+import { getAdminToken, getStudentToken, getAuthHeader } from '../harness/auth';
+import { setGoogleVerifier, GoogleAuthError } from '../../src/services/googleAuth';
+import { hashPassword, verifyPassword } from '../../src/services/password';
+import { __resetLoginLimiter } from '../../src/services/loginLimiter';
 
-describe('Auth pipeline (phone OTP -> account -> profile -> logout -> delete)', () => {
+const TOKEN = 't'.repeat(40);
+const adminHeader = () => getAuthHeader(getAdminToken('usr-5', '+91 9876543214'));
+
+describe('Auth v2 (Google students, password partners)', () => {
   let server: TestServerInstance;
   let request: ReturnType<typeof supertest>;
-  let spy: jest.SpyInstance;
 
-  const login = async (phone: string, role?: string, extra: Record<string, unknown> = {}) => {
-    const sent = await request.post('/api/auth/send-otp').send({ phone });
-    expect(sent.status).toBe(200);
-    const canon = canonicalPhone(phone)!;
-    const code = otpStore.get(canon)!.otp;
-    return request.post('/api/auth/verify-otp').send({ phone, otp: code, ...(role ? { role } : {}), ...extra });
+  const asGoogle = (email: string, sub: string, name = 'Aarav Mehta', verified = true) =>
+    setGoogleVerifier(async () => ({ sub, email, emailVerified: verified, name }));
+  const googleLogin = async (email: string, sub: string, name?: string) => {
+    asGoogle(email, sub, name);
+    return request.post('/api/auth/google').send({ idToken: TOKEN });
   };
-
-  const purgeAuthTestUsers = () =>
-    prisma.user.deleteMany({ where: { OR: [{ phone: { startsWith: '+91 9000' } }, { phone: { startsWith: 'deleted:' } }] } });
 
   beforeAll(async () => {
     await cleanTestOrders();
     await cleanTestUsers();
-    await purgeAuthTestUsers();
     await seedTestDatabase();
     server = await startTestServer(0);
     request = supertest(server.app);
   });
 
   afterAll(async () => {
+    setGoogleVerifier(null);
     await cleanTestOrders();
     await cleanTestUsers();
-    await purgeAuthTestUsers();
     await stopTestServer(server);
     await prisma.$disconnect();
   });
 
   beforeEach(() => {
-    __resetOtpState();
-    delete process.env.DEMO_MODE;
-    delete process.env.DEMO_LOGIN_PHONES;
-    delete process.env.DEMO_LOGIN_OTP;
-    spy = jest.spyOn(sms, 'dispatchSmsOtp').mockResolvedValue({ success: true, provider: 'test' });
+    __resetLoginLimiter();
   });
+  afterEach(() => setGoogleVerifier(null));
 
-  describe('phone normalisation', () => {
-    test.each([
-      ['9876543210', '+91 9876543210'],
-      ['+91 98765 43210', '+91 9876543210'],
-      ['09876543210', '+91 9876543210'],
-      ['+919876543210', '+91 9876543210'],
-    ])('%s -> %s', (raw, expected) => expect(canonicalPhone(raw)).toBe(expected));
-
-    test.each(['12345', '1234567890', '5876543210', 'abcdefghij', '', null, undefined, 9876543210])('rejects %p', (raw) =>
-      expect(canonicalPhone(raw as any)).toBeNull());
-
-    test('API rejects an invalid number with 400', async () => {
-      const res = await request.post('/api/auth/send-otp').send({ phone: '12345' });
-      expect(res.status).toBe(400);
-    });
-
-    test('a seeded account stored as "+91 XXXXXXXXXX" is found from a bare 10-digit login', async () => {
-      const res = await login('9876543210', 'STUDENT');
-      expect(res.status).toBe(200);
-      expect(res.body.user.id).toBe('usr-1');
-      expect(res.body.isNewUser).toBe(false);
+  describe('removed phone-OTP login', () => {
+    test('send-otp and verify-otp are gone', async () => {
+      expect((await request.post('/api/auth/send-otp').send({ phone: '9000000001' })).status).toBe(404);
+      expect((await request.post('/api/auth/verify-otp').send({ phone: '9000000001', otp: '1234' })).status).toBe(404);
     });
   });
 
-  describe('sending codes', () => {
-    test('30s cooldown between sends, then 429 with retryAfterSeconds', async () => {
-      expect((await request.post('/api/auth/send-otp').send({ phone: '9000000001' })).status).toBe(200);
-      const again = await request.post('/api/auth/send-otp').send({ phone: '9000000001' });
-      expect(again.status).toBe(429);
-      expect(again.body.retryAfterSeconds).toBeGreaterThan(0);
+  describe('POST /auth/google', () => {
+    test('missing token -> 400', async () => {
+      expect((await request.post('/api/auth/google').send({})).status).toBe(400);
     });
 
-    test('max 5 sends per hour per number (unit, explicit clock)', () => {
-      const phone = canonicalPhone('9000000002')!;
-      const t0 = 1_000_000;
-      for (let i = 0; i < 5; i++) {
-        expect(checkCanSend(phone, t0 + i * (RESEND_COOLDOWN_MS + 1)).ok).toBe(true);
-        issueOtp(phone, undefined, t0 + i * (RESEND_COOLDOWN_MS + 1));
-      }
-      const blocked = checkCanSend(phone, t0 + 5 * (RESEND_COOLDOWN_MS + 1));
-      expect(blocked.ok).toBe(false);
+    test('token that Google rejects -> 401', async () => {
+      setGoogleVerifier(async () => { throw new GoogleAuthError(401, 'nope'); });
+      const res = await request.post('/api/auth/google').send({ idToken: TOKEN });
+      expect(res.status).toBe(401);
     });
 
-    test('SMS provider failure -> 503, code is discarded and the send is not counted', async () => {
-      spy.mockResolvedValue({ success: false, provider: 'test', error: 'boom' });
-      const res = await request.post('/api/auth/send-otp').send({ phone: '9000000003' });
+    test('server without GOOGLE_WEB_CLIENT_ID -> 503 (not a crash)', async () => {
+      const saved = process.env.GOOGLE_WEB_CLIENT_ID;
+      delete process.env.GOOGLE_WEB_CLIENT_ID;
+      const res = await request.post('/api/auth/google').send({ idToken: TOKEN });
+      if (saved) process.env.GOOGLE_WEB_CLIENT_ID = saved;
       expect(res.status).toBe(503);
-      expect(otpStore.get(canonicalPhone('9000000003')!)).toBeUndefined();
-      spy.mockResolvedValue({ success: true, provider: 'test' });
-      expect((await request.post('/api/auth/send-otp').send({ phone: '9000000003' })).status).toBe(200);
+    });
+
+    test('unverified Google email -> 401', async () => {
+      asGoogle('unverified@kraveo.test', 'sub-unv', 'Nobody', false);
+      expect((await request.post('/api/auth/google').send({ idToken: TOKEN })).status).toBe(401);
+      expect(await prisma.user.findUnique({ where: { email: 'unverified@kraveo.test' } })).toBeNull();
+    });
+
+    test('first login creates a STUDENT that still needs a profile; second login is not new', async () => {
+      const first = await googleLogin('first@kraveo.test', 'sub-first', 'Riya Kapoor');
+      expect(first.status).toBe(200);
+      expect(first.body.isNewUser).toBe(true);
+      expect(first.body.needsProfile).toBe(true);
+      expect(first.body.user).toMatchObject({ role: 'STUDENT', email: 'first@kraveo.test', name: 'Riya Kapoor', phone: null, isStudent: null, avatarId: null });
+      expect(Object.keys(first.body.user).sort()).toEqual(['avatarId', 'email', 'hostelBlock', 'id', 'isStudent', 'kraveoCoins', 'name', 'phone', 'role']);
+
+      const second = await googleLogin('first@kraveo.test', 'sub-first', 'Riya Kapoor');
+      expect(second.body.isNewUser).toBe(false);
+      expect(second.body.user.id).toBe(first.body.user.id);
+    });
+
+    test('a Google account that belongs to a partner/admin is refused', async () => {
+      await prisma.user.update({ where: { id: 'usr-3' }, data: { email: 'vendor.owner@kraveo.test' } });
+      const res = await googleLogin('vendor.owner@kraveo.test', 'sub-vendor');
+      expect(res.status).toBe(403);
+      await prisma.user.update({ where: { id: 'usr-3' }, data: { email: null } });
+    });
+
+    test('an existing account is found by email and linked to the Google id', async () => {
+      await prisma.user.create({ data: { name: 'Pre Created', email: 'linked@kraveo.test', role: 'STUDENT' } });
+      const res = await googleLogin('linked@kraveo.test', 'sub-linked');
+      expect(res.status).toBe(200);
+      expect(res.body.isNewUser).toBe(false);
+      expect((await prisma.user.findUnique({ where: { email: 'linked@kraveo.test' } }))?.googleSub).toBe('sub-linked');
     });
   });
 
-  describe('brute force protection', () => {
-    test('5 wrong guesses lock the number; a resend cannot reset the counter', async () => {
-      const phone = '9000000004';
-      const canon = canonicalPhone(phone)!;
-      await request.post('/api/auth/send-otp').send({ phone });
-      const real = otpStore.get(canon)!.otp;
-      const wrong = real === '0000' ? '1111' : '0000';
-      for (let i = 0; i < MAX_WRONG_GUESSES - 1; i++) {
-        const r = await request.post('/api/auth/verify-otp').send({ phone, otp: wrong });
-        expect(r.status).toBe(400);
-        expect(r.body.attemptsLeft).toBe(MAX_WRONG_GUESSES - 1 - i);
-      }
-      const locked = await request.post('/api/auth/verify-otp').send({ phone, otp: wrong });
-      expect(locked.status).toBe(429);
-      // even the correct code no longer works, and a fresh code cannot be requested during the lockout
-      expect(otpStore.get(canon)).toBeUndefined();
-      expect((await request.post('/api/auth/send-otp').send({ phone })).status).toBe(429);
-    });
-
-    test('wrong-guess counter survives re-sending a code (unit, explicit clock)', () => {
-      const phone = canonicalPhone('9000000005')!;
-      const t0 = 5_000_000;
-      issueOtp(phone, '4321', t0);
-      for (let i = 0; i < 3; i++) expect(checkOtp(phone, '0000', t0 + i).ok).toBe(false);
-      issueOtp(phone, '4321', t0 + 60_000); // "resend"
-      const r1 = checkOtp(phone, '0000', t0 + 60_001);
-      expect(r1.ok).toBe(false);
-      expect((r1 as any).attemptsLeft).toBe(1); // 3 + 1 wrong so far -> one left, not four
-      const r2 = checkOtp(phone, '0000', t0 + 60_002);
-      expect((r2 as any).status).toBe(429);
-      const still = checkOtp(phone, '4321', t0 + LOCKOUT_MS - 1);
-      expect(still.ok).toBe(false);
-    });
-
-    test('expired code is rejected', () => {
-      const phone = canonicalPhone('9000000006')!;
-      issueOtp(phone, '4321', 1000);
-      expect(checkOtp(phone, '4321', 1000 + 6 * 60 * 1000).ok).toBe(false);
-    });
-  });
-
-  describe('role gating (was: any caller could register as ADMIN)', () => {
-    test('a brand-new number asking for ADMIN / VENDOR / DRIVER is refused, no user row is created', async () => {
-      for (const role of ['ADMIN', 'VENDOR', 'DRIVER']) {
-        const phone = `90000100${role.length}${role === 'ADMIN' ? 1 : role === 'VENDOR' ? 2 : 3}`.slice(0, 10);
-        await request.post('/api/auth/send-otp').send({ phone });
-        const code = otpStore.get(canonicalPhone(phone)!)!.otp;
-        const res = await request.post('/api/auth/verify-otp').send({ phone, otp: code, role });
-        expect(res.status).toBe(403);
-        expect(await prisma.user.findFirst({ where: { phone: { endsWith: phone } } })).toBeNull();
-      }
-    });
-
-    test('an existing partner can sign in only as its own role', async () => {
-      expect((await login('9876543212', 'VENDOR')).status).toBe(200);
-      __resetOtpState();
-      expect((await login('9876543212', 'STUDENT')).status).toBe(403);
-      __resetOtpState();
-      expect((await login('9876543213', 'DRIVER')).status).toBe(200);
-    });
-
-    test('an existing admin account cannot be entered through the phone flow', async () => {
-      expect((await login('9876543214', 'STUDENT')).status).toBe(403);
-      __resetOtpState();
-      expect((await login('9876543214', 'ADMIN')).status).toBe(403);
-    });
-  });
-
-  describe('account lifecycle', () => {
-    const phone = '9000000010';
+  describe('profile (name + phone -> student? -> hostel -> avatar)', () => {
     let token: string;
     let userId: string;
+    const put = (body: Record<string, unknown>) => request.put('/api/auth/profile').set(getAuthHeader(token)).send(body);
 
-    test('first login creates a STUDENT that still needs a profile', async () => {
-      const res = await login(phone);
-      expect(res.status).toBe(200);
-      expect(res.body.isNewUser).toBe(true);
-      expect(res.body.needsProfile).toBe(true);
-      expect(res.body.user.role).toBe('STUDENT');
-      expect(res.body.user.phone).toBe('+91 9000000010');
-      expect(res.body.user.fcmToken).toBeUndefined(); // never leaked
+    beforeAll(async () => {
+      const res = await googleLogin('profile@kraveo.test', 'sub-profile', 'Kabir Singh');
       token = res.body.token;
       userId = res.body.user.id;
     });
 
-    test('profile validation: bad name / bad hostel are rejected with the offending field', async () => {
-      const badName = await request.put('/api/auth/profile').set(getAuthHeader(token)).send({ name: 'A' });
-      expect(badName.status).toBe(400);
-      expect(badName.body.field).toBe('name');
-      const placeholder = await request.put('/api/auth/profile').set(getAuthHeader(token)).send({ name: 'VIT Student' });
-      expect(placeholder.status).toBe(400);
-      const badHostel = await request.put('/api/auth/profile').set(getAuthHeader(token)).send({ hostelBlock: 'Roof' });
-      expect(badHostel.status).toBe(400);
-      expect(badHostel.body.field).toBe('hostelBlock');
+    test.each([
+      [{ name: 'A' }, 'name'],
+      [{ name: 'VIT Student' }, 'name'],
+      [{ name: 'x'.repeat(61) }, 'name'],
+      [{ phone: '12345' }, 'phone'],
+      [{ phone: '5876543210' }, 'phone'],
+      [{ avatarId: 0 }, 'avatarId'],
+      [{ avatarId: 16 }, 'avatarId'],
+      [{ avatarId: '3' }, 'avatarId'],
+      [{ isStudent: 'yes' }, 'isStudent'],
+      [{ hostelBlock: 'Block 2' }, 'hostelBlock'], // not a student yet
+    ])('rejects %j on field %s', async (body, field) => {
+      const res = await put(body as Record<string, unknown>);
+      expect(res.status).toBe(400);
+      expect(res.body.field).toBe(field);
     });
 
-    test('completing the profile clears needsProfile; role/coins/phone cannot be changed through it', async () => {
-      const res = await request.put('/api/auth/profile').set(getAuthHeader(token))
-        .send({ name: '  Aarav   Mehta ', hostelBlock: 'Block 3', role: 'ADMIN', kraveoCoins: 9999, phone: '+91 1111111111' });
+    test('student path: complete profile clears needsProfile', async () => {
+      const a = await put({ name: '  Kabir   Singh ', phone: '+91 98765 11111' });
+      expect(a.status).toBe(200);
+      expect(a.body.needsProfile).toBe(true);
+      expect(a.body.user.phone).toBe('+91 9876511111');
+      expect(a.body.user.name).toBe('Kabir Singh');
+
+      const b = await put({ isStudent: true });
+      expect(b.body.needsProfile).toBe(true); // hostel still missing
+
+      expect((await put({ hostelBlock: 'Roof' })).status).toBe(400);
+      const c = await put({ hostelBlock: 'Block 3', avatarId: 7 });
+      expect(c.status).toBe(200);
+      expect(c.body.needsProfile).toBe(false);
+      expect(c.body.user).toMatchObject({ isStudent: true, hostelBlock: 'Block 3', avatarId: 7 });
+    });
+
+    test('non-student path: hostel is cleared and not required', async () => {
+      const res = await put({ isStudent: false });
       expect(res.status).toBe(200);
+      expect(res.body.user.hostelBlock).toBeNull();
       expect(res.body.needsProfile).toBe(false);
-      expect(res.body.user.name).toBe('Aarav Mehta');
-      expect(res.body.user.hostelBlock).toBe('Block 3');
-      const row = await prisma.user.findUnique({ where: { id: userId } });
-      expect(row?.role).toBe('STUDENT');
-      expect(row?.kraveoCoins).toBe(0);
-      expect(row?.phone).toBe('+91 9000000010');
+      expect((await put({ hostelBlock: 'Block 3' })).status).toBe(400);
     });
 
-    test('GET /auth/profile returns the public shape', async () => {
+    test('phone numbers are unique across accounts', async () => {
+      const other = await googleLogin('other@kraveo.test', 'sub-other', 'Other Person');
+      const res = await request.put('/api/auth/profile').set(getAuthHeader(other.body.token)).send({ phone: '9876511111' });
+      expect(res.status).toBe(400);
+      expect(res.body.field).toBe('phone');
+    });
+
+    test('role, coins, email and google id cannot be changed through the profile', async () => {
+      await put({ role: 'ADMIN', kraveoCoins: 9999, email: 'evil@kraveo.test', googleSub: 'evil' });
+      const row = await prisma.user.findUnique({ where: { id: userId } });
+      expect(row).toMatchObject({ role: 'STUDENT', kraveoCoins: 0, email: 'profile@kraveo.test', googleSub: 'sub-profile' });
+    });
+
+    test('GET /auth/profile returns the public shape and never leaks secrets', async () => {
       const res = await request.get('/api/auth/profile').set(getAuthHeader(token));
       expect(res.status).toBe(200);
-      expect(res.body.needsProfile).toBe(false);
-      expect(Object.keys(res.body.user).sort()).toEqual(['createdAt', 'hostelBlock', 'id', 'kraveoCoins', 'name', 'phone', 'role', 'upiId']);
+      expect(JSON.stringify(res.body)).not.toMatch(/passwordHash|googleSub|fcmToken/);
     });
 
     test('logout clears the push token', async () => {
-      await request.put('/api/auth/profile').set(getAuthHeader(token)).send({ fcmToken: 'fcm-abc' });
+      await put({ fcmToken: 'fcm-abc' });
       expect((await prisma.user.findUnique({ where: { id: userId } }))?.fcmToken).toBe('fcm-abc');
-      const res = await request.post('/api/auth/logout').set(getAuthHeader(token));
-      expect(res.status).toBe(200);
+      expect((await request.post('/api/auth/logout').set(getAuthHeader(token))).status).toBe(200);
       expect((await prisma.user.findUnique({ where: { id: userId } }))?.fcmToken).toBeNull();
       expect((await request.post('/api/auth/logout')).status).toBe(401);
     });
 
-    test('account deletion is blocked while an order is in progress, then anonymises the row', async () => {
+    test('delete account: blocked while an order is live, then anonymised; the same Google account can sign up again', async () => {
       const vendor = await prisma.vendor.findFirstOrThrow();
       const order = await prisma.order.create({ data: { customerId: userId, vendorId: vendor.id, totalAmount: 100, dropoffHostel: 'Block 3', status: 'PREPARING', paymentStatus: 'PAID' } });
-      const blocked = await request.delete('/api/auth/account').set(getAuthHeader(token));
-      expect(blocked.status).toBe(409);
+      expect((await request.delete('/api/auth/account').set(getAuthHeader(token))).status).toBe(409);
 
       await prisma.order.update({ where: { id: order.id }, data: { status: 'DELIVERED' } });
-      const ok = await request.delete('/api/auth/account').set(getAuthHeader(token));
-      expect(ok.status).toBe(200);
+      expect((await request.delete('/api/auth/account').set(getAuthHeader(token))).status).toBe(200);
       const row = await prisma.user.findUnique({ where: { id: userId } });
-      expect(row?.name).toBe('Deleted user');
-      expect(row?.phone).toBe(`deleted:${userId}`);
-      expect(await prisma.order.findUnique({ where: { id: order.id } })).not.toBeNull(); // history keeps its FK
-    });
+      expect(row).toMatchObject({ name: 'Deleted user', phone: null, email: null, googleSub: null });
+      expect(await prisma.order.findUnique({ where: { id: order.id } })).not.toBeNull();
 
-    test('the same number can sign up again afterwards as a fresh account', async () => {
-      __resetOtpState();
-      const res = await login(phone);
-      expect(res.status).toBe(200);
-      expect(res.body.isNewUser).toBe(true);
-      expect(res.body.user.id).not.toBe(userId);
-    });
-
-    test('partners cannot use the student delete endpoint', async () => {
-      const vendorLogin = await login('9876543212', 'VENDOR');
-      const res = await request.delete('/api/auth/account').set(getAuthHeader(vendorLogin.body.token));
-      expect(res.status).toBe(403);
+      const again = await googleLogin('profile@kraveo.test', 'sub-profile', 'Kabir Singh');
+      expect(again.body.isNewUser).toBe(true);
+      expect(again.body.user.id).not.toBe(userId);
     });
   });
 
-  describe('demo mode (pilot demos without an SMS provider)', () => {
-    test('off by default: a demo number gets a random code, not 1234', async () => {
-      process.env.DEMO_LOGIN_PHONES = '9000000020';
-      await request.post('/api/auth/send-otp').send({ phone: '9000000020' });
-      const code = otpStore.get(canonicalPhone('9000000020')!)!.otp;
-      expect(spy).toHaveBeenCalled(); // real SMS path used
-      const guess = code === '1234' ? '4321' : '1234';
-      expect((await request.post('/api/auth/verify-otp').send({ phone: '9000000020', otp: guess })).status).toBe(400);
+  describe('admin creates partners; partners log in with phone + password', () => {
+    const phone = '9000000201';
+
+    test('only ADMIN can create or list partners', async () => {
+      const body = { role: 'VENDOR', name: 'Test Owner', phone, password: 'Sup3rSecret!' };
+      expect((await request.post('/api/admin/partners').send(body)).status).toBe(401);
+      expect((await request.post('/api/admin/partners').set(getAuthHeader(getStudentToken())).send(body)).status).toBe(403);
+      expect((await request.get('/api/admin/partners').set(getAuthHeader(getStudentToken()))).status).toBe(403);
     });
 
-    test('DEMO_MODE=true: only allow-listed numbers get the fixed code and no SMS is sent', async () => {
-      process.env.DEMO_MODE = 'true';
-      process.env.DEMO_LOGIN_PHONES = '9000000021, 9000000022';
-      process.env.DEMO_LOGIN_OTP = '2468';
-      const send = await request.post('/api/auth/send-otp').send({ phone: '9000000021' });
-      expect(send.status).toBe(200);
-      expect(spy).not.toHaveBeenCalled();
-      const ok = await request.post('/api/auth/verify-otp').send({ phone: '9000000021', otp: '2468' });
-      expect(ok.status).toBe(200);
+    test('validation: bad role / name / phone / short password / duplicate phone', async () => {
+      const ok = { role: 'VENDOR', name: 'Test Owner', phone, password: 'Sup3rSecret!' };
+      const post = (b: object) => request.post('/api/admin/partners').set(adminHeader()).send(b);
+      expect((await post({ ...ok, role: 'ADMIN' })).body.field).toBe('role');
+      expect((await post({ ...ok, name: '' })).body.field).toBe('name');
+      expect((await post({ ...ok, phone: '123' })).body.field).toBe('phone');
+      expect((await post({ ...ok, password: 'short' })).body.field).toBe('password');
+      expect((await post({ ...ok, phone: '9876543212' })).status).toBe(409); // seeded vendor already owns it
+    });
 
-      // a number that is NOT on the list is unaffected
-      await request.post('/api/auth/send-otp').send({ phone: '9000000023' });
-      expect(spy).toHaveBeenCalledTimes(1);
-      expect((await request.post('/api/auth/verify-otp').send({ phone: '9000000023', otp: '2468' })).status).toBe(400);
+    test('creating a vendor links it to a restaurant; a second owner for the same restaurant is refused', async () => {
+      const vendor = await prisma.vendor.findFirstOrThrow({ where: { userId: null } }).catch(async () =>
+        prisma.vendor.create({ data: { name: 'Link Test Dhaba', category: 'Test', bannerImage: '', address: 'x' } }));
+      const res = await request.post('/api/admin/partners').set(adminHeader()).send({ role: 'VENDOR', name: 'Test Owner', phone, password: 'Sup3rSecret!', vendorId: vendor.id });
+      expect(res.status).toBe(201);
+      expect((await prisma.vendor.findUnique({ where: { id: vendor.id } }))?.userId).toBe(res.body.user.id);
+      expect(JSON.stringify(res.body)).not.toMatch(/passwordHash|Sup3rSecret/);
+
+      const dup = await request.post('/api/admin/partners').set(adminHeader()).send({ role: 'VENDOR', name: 'Second Owner', phone: '9000000202', password: 'Sup3rSecret!', vendorId: vendor.id });
+      expect(dup.status).toBe(409);
+    });
+
+    test('vendor logs in with the right password and gets its restaurant', async () => {
+      const res = await request.post('/api/auth/partner-login').send({ phone: '+91 90000 00201', password: 'Sup3rSecret!', role: 'VENDOR' });
+      expect(res.status).toBe(200);
+      expect(res.body.user.role).toBe('VENDOR');
+      expect(res.body.vendor.id).toBeDefined();
+      const profile = await request.get('/api/auth/profile').set(getAuthHeader(res.body.token));
+      expect(profile.body.user.id).toBe(res.body.user.id);
+    });
+
+    test('wrong password and unknown phone give the identical 401 message', async () => {
+      const wrong = await request.post('/api/auth/partner-login').send({ phone, password: 'nope-nope-nope', role: 'VENDOR' });
+      const unknown = await request.post('/api/auth/partner-login').send({ phone: '9000000299', password: 'nope-nope-nope', role: 'VENDOR' });
+      expect(wrong.status).toBe(401);
+      expect(unknown.status).toBe(401);
+      expect(wrong.body.message).toBe(unknown.body.message);
+    });
+
+    test('right password but the wrong app role -> 403; students have no password login', async () => {
+      const wrongRole = await request.post('/api/auth/partner-login').send({ phone, password: 'Sup3rSecret!', role: 'DRIVER' });
+      expect(wrongRole.status).toBe(403);
+      const student = await request.post('/api/auth/partner-login').send({ phone: '9876543210', password: 'anything-at-all', role: 'VENDOR' });
+      expect(student.status).toBe(401);
+    });
+
+    test('5 wrong passwords lock the phone for 15 minutes, even for the right password', async () => {
+      let last;
+      for (let i = 0; i < 5; i++) last = await request.post('/api/auth/partner-login').send({ phone, password: `wrong-pass-${i}`, role: 'VENDOR' });
+      expect(last!.status).toBe(429);
+      expect(last!.body.retryAfterSeconds).toBeGreaterThan(800);
+      const right = await request.post('/api/auth/partner-login').send({ phone, password: 'Sup3rSecret!', role: 'VENDOR' });
+      expect(right.status).toBe(429);
+    });
+
+    test('driver account gets a DriverPartner profile', async () => {
+      const res = await request.post('/api/admin/partners').set(adminHeader()).send({ role: 'DRIVER', name: 'Test Runner', phone: '9000000203', password: 'Sup3rSecret!' });
+      expect(res.status).toBe(201);
+      const driver = await prisma.driverPartner.findFirst({ where: { userId: res.body.user.id } });
+      expect(driver?.runnerCode).toMatch(/^RUN-\d{4}$/);
+      __resetLoginLimiter();
+      const login = await request.post('/api/auth/partner-login').send({ phone: '9000000203', password: 'Sup3rSecret!', role: 'DRIVER' });
+      expect(login.status).toBe(200);
+      expect(login.body.driver.runnerCode).toBe(driver?.runnerCode);
+    });
+
+    test('GET /admin/partners never exposes password hashes', async () => {
+      const res = await request.get('/api/admin/partners').set(adminHeader());
+      expect(res.status).toBe(200);
+      expect(res.body.data.length).toBeGreaterThan(0);
+      expect(JSON.stringify(res.body)).not.toMatch(/passwordHash|scrypt/);
+    });
+  });
+
+  describe('password hashing', () => {
+    test('unique salt per hash, verifies correct password only, rejects junk formats', async () => {
+      const a = await hashPassword('correct horse battery');
+      const b = await hashPassword('correct horse battery');
+      expect(a).not.toBe(b);
+      expect(a.startsWith('scrypt$')).toBe(true);
+      expect(await verifyPassword('correct horse battery', a)).toBe(true);
+      expect(await verifyPassword('correct horse batterx', a)).toBe(false);
+      expect(await verifyPassword('x', null)).toBe(false);
+      expect(await verifyPassword('x', 'plaintext')).toBe(false);
+    });
+  });
+
+  describe('orders pagination', () => {
+    test('customer list pages with limit/cursor, no duplicates, nextCursor null at the end', async () => {
+      const res = await googleLogin('pager@kraveo.test', 'sub-pager', 'Pager Person');
+      const vendor = await prisma.vendor.findFirstOrThrow();
+      for (let i = 0; i < 5; i++) {
+        await prisma.order.create({ data: { customerId: res.body.user.id, vendorId: vendor.id, totalAmount: 100 + i, dropoffHostel: 'Block 1', createdAt: new Date(Date.now() - i * 60_000) } });
+      }
+      const header = getAuthHeader(res.body.token);
+      const p1 = await request.get('/api/orders?limit=2').set(header);
+      expect(p1.body.data).toHaveLength(2);
+      expect(p1.body.nextCursor).toBeTruthy();
+      const p2 = await request.get(`/api/orders?limit=2&cursor=${p1.body.nextCursor}`).set(header);
+      const p3 = await request.get(`/api/orders?limit=2&cursor=${p2.body.nextCursor}`).set(header);
+      expect(p3.body.data).toHaveLength(1);
+      expect(p3.body.nextCursor).toBeNull();
+      const ids = [...p1.body.data, ...p2.body.data, ...p3.body.data].map((o: any) => o.id);
+      expect(new Set(ids).size).toBe(5);
+      const times = [...p1.body.data, ...p2.body.data, ...p3.body.data].map((o: any) => +new Date(o.createdAt));
+      expect([...times].sort((x, y) => y - x)).toEqual(times); // newest first
     });
   });
 });

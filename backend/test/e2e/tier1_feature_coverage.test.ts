@@ -5,7 +5,7 @@ import { startTestServer, stopTestServer, TestServerInstance } from '../harness/
 import { prisma, seedTestDatabase, cleanTestOrders, cleanTestUsers } from '../harness/db';
 import { getStudentToken, getVendorToken, getDriverToken, getAdminToken, getAuthHeader } from '../harness/auth';
 import { connectTestSocket, waitForSocketEvent, disconnectTestSocket } from '../harness/socket';
-import { otpStore } from '../../src/routes/api';
+import { setGoogleVerifier } from '../../src/services/googleAuth';
 
 describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Features)', () => {
   let serverInstance: TestServerInstance;
@@ -46,31 +46,20 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
   // =========================================================================
   describe('Feature 1: Database Persistence & Query', () => {
     test('T1_DB_01: User Creation & Persistence Query in PostgreSQL', async () => {
-      const phone = '+91 9999000111';
-      const sendRes = await request.post('/api/auth/send-otp').send({ phone, role: 'STUDENT' });
-      expect(sendRes.status).toBe(200);
-      expect(sendRes.body.success).toBe(true);
-
-      const realOtp = otpStore.get(phone)?.otp;
-      expect(realOtp).toBeDefined();
-
-      const verifyRes = await request.post('/api/auth/verify-otp').send({
-        phone,
-        otp: realOtp,
-        role: 'STUDENT',
-        name: 'Test Persistent Student',
-        hostelBlock: 'Boys Hostel Block 2'
-      });
-      expect(verifyRes.status).toBe(200);
-      expect(verifyRes.body.success).toBe(true);
+      setGoogleVerifier(async () => ({ sub: 'sub-t1-db01', email: 'persist.student@kraveo.test', emailVerified: true, name: 'Test Persistent Student' }));
+      const res = await request.post('/api/auth/google').send({ idToken: 'x'.repeat(40) });
+      setGoogleVerifier(null);
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.isNewUser).toBe(true);
 
       // Directly query PostgreSQL DB via Prisma ORM
-      const dbUser = await prisma.user.findUnique({ where: { phone } });
+      const dbUser = await prisma.user.findUnique({ where: { email: 'persist.student@kraveo.test' } });
       expect(dbUser).not.toBeNull();
-      expect(dbUser?.phone).toBe(phone);
+      expect(dbUser?.googleSub).toBe('sub-t1-db01');
       expect(dbUser?.name).toBe('Test Persistent Student');
       expect(dbUser?.role).toBe('STUDENT');
-      expect(dbUser?.hostelBlock).toBe('Boys Hostel Block 2');
+      expect(dbUser?.phone).toBeNull(); // collected later in the profile step
     });
 
     test('T1_DB_02: Vendor & Menu Relational Database Query', async () => {
@@ -562,24 +551,16 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
   // FEATURE 4: Removal of Universal OTPs & JWT/RBAC Auth Enforcement
   // =========================================================================
   describe('Feature 4: Removal of Universal OTPs & JWT/RBAC Auth Enforcement', () => {
-    test('T1_AUTH_01: Complete SMS OTP & JWT Token Issue Flow', async () => {
-      const phone = '+91 9876500112';
-      const sendRes = await request.post('/api/auth/send-otp').send({ phone, role: 'STUDENT' });
-      expect(sendRes.status).toBe(200);
-      const realOtp = otpStore.get(phone)?.otp;
-      expect(realOtp).toBeDefined();
+    test('T1_AUTH_01: Google Sign-In & JWT Token Issue Flow', async () => {
+      setGoogleVerifier(async () => ({ sub: 'sub-t1-auth01', email: 'auth.flow@kraveo.test', emailVerified: true, name: 'Auth Flow Student' }));
+      const res = await request.post('/api/auth/google').send({ idToken: 'y'.repeat(40) });
+      setGoogleVerifier(null);
 
-      const verifyRes = await request.post('/api/auth/verify-otp').send({
-        phone,
-        otp: realOtp,
-        role: 'STUDENT',
-        name: 'Auth Flow Student'
-      });
-
-      expect(verifyRes.status).toBe(200);
-      expect(verifyRes.body.success).toBe(true);
-      expect(verifyRes.body.token).toBeDefined();
-      expect(verifyRes.body.user.phone).toBe(phone);
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.token).toBeDefined();
+      expect(res.body.user.email).toBe('auth.flow@kraveo.test');
+      expect(res.body.needsProfile).toBe(true);
     });
 
     test('T1_AUTH_02: Authenticated Bearer Token Profile Access', async () => {
@@ -647,18 +628,14 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
       expect(res.status).toBe(401);
       expect(res.body.success).toBe(false);
 
-      // 2. Static OTP rejection
-      const phone = '+91 9876599999';
-      await request.post('/api/auth/send-otp').send({ phone, role: 'STUDENT' });
-      const badOtpRes = await request.post('/api/auth/verify-otp').send({
-        phone,
-        otp: '4829'
-      });
-      expect(badOtpRes.status).toBe(400);
-      expect(badOtpRes.body.success).toBe(false);
+      // 2. Phone-OTP login no longer exists
+      const sendRes = await request.post('/api/auth/send-otp').send({ phone: '+91 9876599999' });
+      expect(sendRes.status).toBe(404);
+      const verifyRes = await request.post('/api/auth/verify-otp').send({ phone: '+91 9876599999', otp: '4829' });
+      expect(verifyRes.status).toBe(404);
 
       // 3. Removed /auth/login rejection (404)
-      const loginRes = await request.post('/api/auth/login').send({ phone });
+      const loginRes = await request.post('/api/auth/login').send({ phone: '+91 9876599999' });
       expect(loginRes.status).toBe(404);
     });
 

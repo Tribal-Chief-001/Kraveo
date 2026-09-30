@@ -41,16 +41,21 @@ enum DutyStatus {
 }
 
 model User {
-  id          String   @id @default(uuid())
-  phone       String   @unique
-  name        String
-  role        Role     @default(STUDENT)
-  hostelBlock String?  @default("Boys Hostel Block 1")
-  kraveoCoins Int      @default(0)
-  upiId       String?
-  fcmToken    String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(uuid())
+  phone        String?  @unique
+  email        String?  @unique
+  googleSub    String?  @unique
+  passwordHash String?
+  avatarId     Int?
+  isStudent    Boolean?
+  name         String
+  role         Role     @default(STUDENT)
+  hostelBlock  String?  @default("Boys Hostel Block 1")
+  kraveoCoins  Int      @default(0)
+  upiId        String?
+  fcmToken     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   ordersPlaced    Order[]        @relation("CustomerOrders")
   ordersDriven    Order[]        @relation("DriverOrders")
@@ -122,6 +127,11 @@ model Order {
   items    OrderItem[]
   payments Payment[]
   review   ReviewRecord?
+
+  @@index([customerId, createdAt])
+  @@index([vendorId, status])
+  @@index([driverId, status])
+  @@index([status, createdAt])
 }
 
 model OrderItem {
@@ -134,6 +144,8 @@ model OrderItem {
 
   order    Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
   menuItem MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
 }
 
 model Payment {
@@ -146,6 +158,8 @@ model Payment {
   createdAt         DateTime      @default(now())
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
 }
 
 model DriverPartner {
@@ -186,10 +200,10 @@ model ReviewRecord {
   coinsEarned  Int      @default(10)
   createdAt    DateTime @default(now())
 
-  order    Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  customer User    @relation("CustomerReviews", fields: [customerId], references: [id], onDelete: Cascade)
-  vendor   Vendor  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
-  driver   User?   @relation("DriverReviews", fields: [driverId], references: [id], onDelete: SetNull)
+  order    Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer User   @relation("CustomerReviews", fields: [customerId], references: [id], onDelete: Cascade)
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  driver   User?  @relation("DriverReviews", fields: [driverId], references: [id], onDelete: SetNull)
 }
 
 model DriverLocation {

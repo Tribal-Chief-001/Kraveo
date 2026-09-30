@@ -41,3 +41,8 @@ rootkey.csv
 ANTIGRAVITY_FULL_CHAT_TRANSCRIPT.md
 KRAVEO_CHATGPT_CODEX_FULL_CHAT_TRANSCRIPT.md
 *FULL_CHAT_TRANSCRIPT*.md
+
+# Local credential notes (never commit)
+*.local.md
+*.local.txt
+DEMO_ACCOUNTS*

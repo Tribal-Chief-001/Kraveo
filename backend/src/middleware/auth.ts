@@ -8,7 +8,7 @@ dotenv.config();
 export interface AuthenticatedRequest extends Request {
   user?: {
     id: string;
-    phone: string;
+    phone?: string | null;
     role: UserRole;
   };
 }
@@ -21,7 +21,7 @@ const getJwtSecret = (): string => {
 };
 
 // Generates real signed JWT tokens with 30-day expiration
-export const generateToken = (payload: { id: string; phone: string; role: UserRole }): string => {
+export const generateToken = (payload: { id: string; phone?: string | null; role: UserRole }): string => {
   return jwt.sign(payload, getJwtSecret(), { expiresIn: '30d' });
 };
 
@@ -39,7 +39,7 @@ export const requireAuth = (req: AuthenticatedRequest, res: Response, next: Next
   const token = authHeader.split(' ')[1];
 
   try {
-    const decoded = jwt.verify(token, getJwtSecret()) as { id: string; phone: string; role: UserRole };
+    const decoded = jwt.verify(token, getJwtSecret()) as { id: string; phone?: string | null; role: UserRole };
     req.user = decoded;
     return next();
   } catch (error) {
@@ -51,7 +51,7 @@ export const requireAuth = (req: AuthenticatedRequest, res: Response, next: Next
 };
 
 export const authenticateJwt = requireAuth;
-export const verifyToken = (token: string) => jwt.verify(token, getJwtSecret()) as { id: string; phone: string; role: UserRole };
+export const verifyToken = (token: string) => jwt.verify(token, getJwtSecret()) as { id: string; phone?: string | null; role: UserRole };
 
 // Role-Based Access Control (RBAC) middleware
 export const requireRole = (...allowedRoles: UserRole[]) => {

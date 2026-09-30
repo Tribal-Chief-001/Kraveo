@@ -1,59 +1,43 @@
-# Kraveo Auth & Account Pipeline (v1, 2026-09-30)
+# Kraveo Auth & Account Pipeline (v2, 2026-09-30)
 
-## 1. Who can sign in and how
-| Actor | How the account is created | Login |
+Endpoint contract: `Docs/15_auth_v2_contract.md`. This page explains the moving parts and the decisions.
+
+## Who signs in how
+| Actor | Account created by | Sign-in |
 |---|---|---|
-| Student (customer app) | Self-registers with phone + OTP | Phone OTP |
-| Restaurant partner (vendor app) | Created by Kraveo ops (admin dashboard / DB) | Phone OTP, role VENDOR |
-| Delivery partner (driver app) | Created by Kraveo ops | Phone OTP, role DRIVER |
-| Admin (dashboard) | `ADMIN_PASSCODE` on the server | Passcode (no phone flow) |
+| Student / any customer | Themselves | **Google Sign-In** (any Gmail, not restricted to VIT mail) |
+| Restaurant partner | Kraveo (admin) | **Phone + password** |
+| Delivery partner | Kraveo (admin) | **Phone + password** |
+| Admin dashboard | `ADMIN_PASSCODE` on the server | passcode |
 
-**Rule:** a phone number can only ever self-register as STUDENT. `role` in the request is only used to check that the caller is using the right app; an unknown number asking for VENDOR/DRIVER/ADMIN gets 403 and no row is created. (Before this change any caller could register as ADMIN.)
+Phone-OTP/SMS login was removed: no SMS provider, no DLT registration, no OTP brute-force surface.
 
-## 2. Student journey
-1. **Enter phone** (10 digits, starts 6-9) -> `POST /auth/send-otp`.
-2. **Enter 4-digit code** -> `POST /auth/verify-otp`. Response: `token` (JWT, 30 days), `user`, `isNewUser`, `needsProfile`.
-3. **First time only - "Almost there"**: full name + drop point (hostel block/gate) -> `PUT /auth/profile`. Cannot be skipped (`needsProfile` stays true while the name is the placeholder "VIT Student").
-4. **Me tab**: name, masked phone, coins, drop point (editable), Log out, Delete account.
-5. **Logout**: `POST /auth/logout` (clears the push token) + delete the token on the phone.
-6. **Delete account**: `DELETE /auth/account`. Blocked (409) while an order is in progress. Otherwise the row is anonymised (name "Deleted user", phone `deleted:<id>`), orders/payments keep their foreign key. The same number can sign up again as a fresh account.
+## Customer sign-up order
+Google -> full name (prefilled, editable) + phone number -> "Are you a student?" -> yes: hostel block / no: nothing (the drop point is asked at checkout) -> choose an avatar -> Home.
+The phone is not OTP-verified (drivers call it at the gate). Profile pictures are **not** Google photos: the user picks one of 15 built-in avatars; the server stores only `avatarId` (1..15) and every app draws the artwork itself (no image upload, no server load).
 
-## 3. What we store per student (table `User`)
-`phone` (unique, `+91 XXXXXXXXXX`), `name`, `hostelBlock`, `kraveoCoins`, `role`, `fcmToken` (push, set by the app later), `upiId` (optional), `createdAt`. Nothing else is collected in v1 on purpose (fewer fields = more completed sign-ups). Candidates for later (needs a migration): VIT registration number, VIT email.
-Orders live in `Order`/`OrderItem`/`Payment`, linked to the user by `customerId`.
+## Data per customer (`User`)
+`email` (unique), `googleSub` (unique), `name`, `phone` (unique, optional until the profile step), `isStudent`, `hostelBlock`, `avatarId`, `kraveoCoins`, `fcmToken`, `createdAt`. Orders link by `customerId`.
+Partners use the same table: `phone` + `passwordHash` (scrypt, salted; never returned by any endpoint). A vendor owns a restaurant through `Vendor.userId`; a driver has a `DriverPartner` row.
 
-## 4. OTP rules (`backend/src/services/otpService.ts`)
-- 4-digit code, 5 min validity, stored **in server memory** (single PM2 instance; move to Postgres/Redis before clustering).
-- Resend cooldown 30 s; max 5 codes per number per hour; global cap 400 codes/hour (protects the SMS bill).
-- 5 wrong guesses lock the number for 15 min. Requesting a new code does **not** reset the counter.
-- Numbers are normalised (`98765 43210`, `+919876543210`, `09876543210` all map to `+91 9876543210`); existing accounts stored as `+91 XXXXXXXXXX` are matched on their last 10 digits.
-- Phone numbers are masked in responses and logs; the SMS body is logged only outside production.
+## Security rules
+- The Google ID token is verified server-side (`google-auth-library`) against `GOOGLE_WEB_CLIENT_ID`; the email must be verified. The account is matched by Google id / email. A Google account whose email belongs to a partner/admin is refused.
+- Partner login: same 401 message for unknown phone and wrong password, constant-cost hashing, 5 wrong passwords lock the phone for 15 minutes (in-memory; single PM2 instance).
+- `role` can never be chosen by the caller. Partners cannot self-register. Profile updates cannot change role, email, Google id or coins.
+- Logout clears the push token (JWTs are stateless, 30 days). Delete account anonymises the row (students only, blocked while an order is live).
+- Database indexes were added for the order lists; `GET /orders` is paginated (`limit`, `cursor`).
 
-## 5. Is OTP "live"? (honest status)
-- **Code path: yes. Real SMS: no** until an SMS provider key is set on the server.
-- In `NODE_ENV=production` with no provider, `send-otp` now returns **503** ("couldn't send the code") instead of pretending success. Previously it only printed the code in `pm2 logs`.
-- Provider options (see `smsService.ts`): Fast2SMS `FAST2SMS_API_KEY` with `FAST2SMS_ROUTE=q` (Quick SMS, no DLT, about Rs 5/SMS) or `otp` (service route, cheaper, fixed templates) - confirm current rates/limits on Fast2SMS before relying on them; MSG91 / Twilio need DLT/sender setup. Nothing was tested against a real provider.
+## Server configuration
+- `GOOGLE_WEB_CLIENT_ID` = the **Web** OAuth client id of the Firebase/Google project (from Firebase: Authentication -> Google provider, or `google-services.json` -> `oauth_client` with `client_type: 3`). Comma-separate several ids if needed. Without it `/auth/google` answers 503.
+- Create partners: `POST /admin/partners`, or on the server `npm run seed:demo-partners -- /path/out.txt` (demo vendor/driver; passwords go only to that file).
 
-## 6. Demo mode (for live demos before SMS exists)
-Off by default. On the server `.env`:
-```
-DEMO_MODE=true
-DEMO_LOGIN_PHONES=9000000021,9000000022
-DEMO_LOGIN_OTP=2468        # optional, default 1234
-```
-Only the listed numbers skip SMS and accept the fixed code. Every other number behaves normally. The server prints a warning at startup while it is on. **Turn it off after the demo.**
+## One-time Google / Firebase setup (owner)
+1. Firebase console -> project `kraveo` -> Authentication -> Sign-in method -> enable **Google**.
+2. Project settings -> Your apps: add three Android apps `site.kraveo.customer`, `site.kraveo.vendor`, `site.kraveo.driver` with the SHA-1 of the signing key (debug keystore SHA-1 of the build machine for now; a real release keystore is needed before Play Store).
+3. Download the three new `google-services.json` and replace `apps/*/android/app/google-services.json`.
+4. Google Cloud -> OAuth consent screen: add test users while the app is in "Testing".
 
-## 7. Endpoints
-| Method | Path | Notes |
-|---|---|---|
-| POST | /auth/send-otp | 200, 400 bad number, 429 cooldown/limit (`retryAfterSeconds`), 503 SMS down |
-| POST | /auth/verify-otp | 200, 400 wrong/expired (`attemptsLeft`), 429 locked, 403 wrong app/role |
-| GET | /auth/profile | `{user, needsProfile}` (never returns `fcmToken`) |
-| PUT | /auth/profile | validates `name` (2-60 letters), `hostelBlock` (campus list), `upiId`; ignores role/coins/phone |
-| POST | /auth/logout | clears `fcmToken` |
-| DELETE | /auth/account | students only, 409 if order in progress |
-
-## 8. Known gaps
-- JWT is stateless for 30 days: logout cannot revoke a stolen token (add a token version later).
-- Admin-login rate limit keys on `req.ip`; behind Nginx/Vercel every caller may share one IP (`trust proxy` not configured).
-- Push tokens are not sent by any app yet (no Firebase client), so `fcmToken` stays empty.
+## Known gaps
+- JWT cannot be revoked before it expires (add a token version later).
+- Admin-login lockout keys on `req.ip` (configure `trust proxy`).
+- No push notifications yet (no Firebase client in the apps).

@@ -62,7 +62,7 @@ describe('Adversarial Security & Concurrency Stress Test Suite', () => {
         id: 'usr-driver-2',
         userId: driverUser2.id,
         name: 'Rival Runner',
-        phone: driverUser2.phone,
+        phone: driverUser2.phone ?? "+91 9876543299",
         studentRegNo: '22BCE10099',
         runnerCode: 'RUN-9999',
         avatarUrl: 'https://images.unsplash.com/photo-1534528741775',

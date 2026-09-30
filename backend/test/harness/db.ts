@@ -114,14 +114,14 @@ export const seedTestDatabase = async () => {
     update: {
       userId: driverUser.id,
       name: 'Vikram Singh',
-      phone: driverUser.phone,
+      phone: driverUser.phone ?? "+91 9876543213",
       dutyStatus: DutyStatus.ONLINE
     },
     create: {
       id: 'usr-4',
       userId: driverUser.id,
       name: 'Vikram Singh',
-      phone: driverUser.phone,
+      phone: driverUser.phone ?? "+91 9876543213",
       studentRegNo: '21BCG10045',
       runnerCode: 'RUN-8042',
       avatarUrl: 'https://images.unsplash.com/photo-1534528741775',
@@ -144,7 +144,7 @@ export const cleanTestOrders = async () => {
 
 export const cleanTestUsers = async () => {
   await prisma.user.deleteMany({
-    where: { phone: { startsWith: '+91 9999' } }
+    where: { OR: [{ phone: { startsWith: '+91 9999' } }, { email: { endsWith: '@kraveo.test' } }, { phone: { startsWith: '+91 9000' } }] }
   });
 };
 
