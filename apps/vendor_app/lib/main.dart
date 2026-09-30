@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
 import 'screens/vendor_home_screen.dart';
 
 void main() {
@@ -13,17 +14,10 @@ class KraveoVendorApp extends StatelessWidget {
     return MaterialApp(
       title: 'FC Night Mess | Kraveo Vendor',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        fontFamily: 'Plus Jakarta Sans',
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF00450D),
-          primary: const Color(0xFF00450D),
-          secondary: const Color(0xFFFDD400),
-          surface: const Color(0xFFFCF9F8),
-        ),
-        scaffoldBackgroundColor: const Color(0xFFFCF9F8),
-      ),
+      theme: KraveoTheme.vendor(),
+      // The vendor theme already renders type ~12% larger; cap the system font scale so
+      // huge accessibility settings enlarge text without breaking the fixed 64px targets.
+      builder: (context, child) => MediaQuery.withClampedTextScaling(maxScaleFactor: 1.3, child: child ?? const SizedBox.shrink()),
       home: const VendorHomeScreen(),
     );
   }

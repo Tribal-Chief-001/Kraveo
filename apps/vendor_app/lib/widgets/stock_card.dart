@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
 import '../models/dish_model.dart';
+import 'ui/ui.dart';
 
 class StockCard extends StatelessWidget {
   final DishModel dish;
@@ -13,190 +16,240 @@ class StockCard extends StatelessWidget {
     required this.onUpdatePrice,
   });
 
-  void _showPriceEditDialog(BuildContext context) {
-    final textController = TextEditingController(text: dish.price.toStringAsFixed(0));
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: Text(
-            'Edit Price: ${dish.name}',
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF1B1C1C)),
-          ),
-          content: TextField(
-            controller: textController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            autofocus: true,
-            decoration: InputDecoration(
-              labelText: 'Price (₹)',
-              prefixText: '₹ ',
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('CANCEL', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF00450D),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              onPressed: () {
-                final double? parsed = double.tryParse(textController.text);
-                if (parsed != null && parsed > 0) {
-                  onUpdatePrice(parsed);
-                }
-                Navigator.pop(context);
-              },
-              child: const Text('SAVE PRICE', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          ],
-        );
-      },
+  void _showPriceEditSheet(BuildContext context) {
+    showKSheet<void>(
+      context,
+      builder: (ctx) => _PriceEditSheet(dish: dish, onSave: onUpdatePrice),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final k = context.k;
+    final inStock = dish.inStock;
+    final hindi = hindiCategory(dish.category);
+
+    return AnimatedContainer(
+      duration: KMotion.base,
+      curve: KMotion.emphasized,
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: dish.inStock ? const Color(0xFF00450D) : const Color(0xFFBA1A1A),
-          width: 2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: inStock ? k.surface : Color.alphaBlend(KraveoPalette.danger.withValues(alpha: 0.06), k.surface),
+        borderRadius: KRadius.card,
+        border: Border.all(color: inStock ? k.line : KraveoPalette.danger.withValues(alpha: 0.55), width: inStock ? 1.5 : 2),
+        boxShadow: KShadow.soft(k.shadowTint),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(14.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Category Badge & Quick Edit Icon
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFCF9F8),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFE5E2E1)),
-                  ),
-                  child: Text(
-                    dish.category.toUpperCase(),
-                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.grey),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            _DishPhoto(imageUrl: dish.imageUrl, dimmed: !inStock),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  dish.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: KraveoType.titleLg.copyWith(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w800,
+                    height: 1.2,
+                    color: inStock ? k.ink : k.inkMuted,
+                    decoration: inStock ? null : TextDecoration.lineThrough,
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.edit_note_rounded, size: 24, color: Color(0xFF00450D)),
-                  onPressed: () => _showPriceEditDialog(context),
-                  tooltip: 'Edit Price',
+                const SizedBox(height: 4),
+                Text(
+                  hindi.isEmpty ? dish.category : '${dish.category} · $hindi',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14),
                 ),
-              ],
+              ]),
             ),
-            const SizedBox(height: 8),
+          ]),
+          const SizedBox(height: 14),
 
-            // Dish Name
-            Text(
-              dish.name,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-                color: dish.inStock ? const Color(0xFF1B1C1C) : Colors.grey,
-                decoration: dish.inStock ? null : TextDecoration.lineThrough,
-              ),
+          // Price stepper: big - / + around a tappable price
+          Row(children: [
+            _StepButton(
+              key: const ValueKey('price-minus'),
+              icon: LucideIcons.minus,
+              semanticLabel: 'Lower price by 10 rupees',
+              enabled: dish.price > 10,
+              onTap: () {
+                if (dish.price > 10) {
+                  onUpdatePrice(dish.price - 10);
+                }
+              },
             ),
-            const Spacer(),
-
-            // Price & Large 48x48px Touch Stepper Buttons (+10 / -10)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                SizedBox(
-                  width: 44,
-                  height: 44,
-                  child: IconButton(
-                    onPressed: () {
-                      if (dish.price > 10) {
-                        onUpdatePrice(dish.price - 10);
-                      }
-                    },
-                    icon: const Icon(Icons.remove_circle_outline, color: Color(0xFFBA1A1A), size: 28),
-                    tooltip: '-10 Price',
-                  ),
-                ),
-                InkWell(
-                  onTap: () => _showPriceEditDialog(context),
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
-                    child: Text(
-                      '₹${dish.price.toStringAsFixed(0)}',
-                      style: const TextStyle(
-                        color: Color(0xFF00450D),
-                        fontWeight: FontWeight.w900,
-                        fontSize: 20,
-                      ),
+            Expanded(
+              child: Semantics(
+                button: true,
+                label: 'Price ${formatRupees(dish.price)}. Double tap to type a new price.',
+                excludeSemantics: true,
+                child: KPressable(
+                  onTap: () => _showPriceEditSheet(context),
+                  scale: 0.97,
+                  child: Container(
+                    constraints: const BoxConstraints(minHeight: 64),
+                    alignment: Alignment.center,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text(formatRupees(dish.price), style: KraveoType.displayMd.copyWith(fontSize: 34, color: inStock ? k.brand : k.inkMuted)),
+                        const SizedBox(width: 8),
+                        Icon(LucideIcons.pencil, size: 18, color: k.inkFaint),
+                      ]),
                     ),
                   ),
                 ),
-                SizedBox(
-                  width: 44,
-                  height: 44,
-                  child: IconButton(
-                    onPressed: () {
-                      onUpdatePrice(dish.price + 10);
-                    },
-                    icon: const Icon(Icons.add_circle_outline, color: Color(0xFF00450D), size: 28),
-                    tooltip: '+10 Price',
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-
-            // Instant IN STOCK / SOLD OUT Toggle Button with 56px height & bilingual text
-            SizedBox(
-              height: 54,
-              child: ElevatedButton.icon(
-                onPressed: onToggleStock,
-                icon: Icon(
-                  dish.inStock ? Icons.check_circle : Icons.block,
-                  color: Colors.white,
-                  size: 20,
-                ),
-                label: Text(
-                  dish.inStock ? 'IN STOCK / उपलब्ध' : 'SOLD OUT / खत्म',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 12,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: dish.inStock ? const Color(0xFF00450D) : const Color(0xFFBA1A1A),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                  elevation: 2,
-                ),
               ),
             ),
-          ],
+            _StepButton(
+              key: const ValueKey('price-plus'),
+              icon: LucideIcons.plus,
+              semanticLabel: 'Raise price by 10 rupees',
+              onTap: () => onUpdatePrice(dish.price + 10),
+            ),
+          ]),
+          const SizedBox(height: 14),
+
+          // The one big IN STOCK / SOLD OUT switch
+          VStockSwitch(inStock: inStock, onToggle: onToggleStock, dishName: dish.name),
+        ],
+      ),
+    );
+  }
+}
+
+class _StepButton extends StatelessWidget {
+  const _StepButton({super.key, required this.icon, required this.semanticLabel, required this.onTap, this.enabled = true});
+  final IconData icon;
+  final String semanticLabel;
+  final VoidCallback onTap;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: semanticLabel,
+      excludeSemantics: true,
+      onTap: enabled ? onTap : null,
+      child: Opacity(
+        opacity: enabled ? 1 : 0.4,
+        child: KPressable(
+          onTap: enabled ? onTap : null,
+          child: Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              color: k.brandSoft,
+              borderRadius: BorderRadius.circular(KRadius.lg),
+              border: Border.all(color: k.brand.withValues(alpha: 0.35), width: 1.5),
+            ),
+            child: Icon(icon, size: 30, color: k.brand),
+          ),
         ),
       ),
+    );
+  }
+}
+
+class _DishPhoto extends StatelessWidget {
+  const _DishPhoto({required this.imageUrl, required this.dimmed});
+  final String? imageUrl;
+  final bool dimmed;
+
+  // Luminance-only colour matrix -> black & white for sold-out dishes.
+  static const _grey = ColorFilter.matrix(<double>[
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0, 0, 0, 1, 0,
+  ]);
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final placeholder = Container(
+      color: k.brandSoft,
+      alignment: Alignment.center,
+      child: Icon(LucideIcons.utensils, size: 32, color: k.brand),
+    );
+    final url = imageUrl;
+    Widget photo = (url == null || url.isEmpty)
+        ? placeholder
+        : Image.network(url, fit: BoxFit.cover, errorBuilder: (_, __, ___) => placeholder);
+    if (dimmed) {
+      photo = Opacity(opacity: 0.55, child: ColorFiltered(colorFilter: _grey, child: photo));
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(KRadius.lg),
+      child: SizedBox(width: 76, height: 76, child: photo),
+    );
+  }
+}
+
+class _PriceEditSheet extends StatefulWidget {
+  const _PriceEditSheet({required this.dish, required this.onSave});
+  final DishModel dish;
+  final Function(double newPrice) onSave;
+
+  @override
+  State<_PriceEditSheet> createState() => _PriceEditSheetState();
+}
+
+class _PriceEditSheetState extends State<_PriceEditSheet> {
+  late final TextEditingController _controller = TextEditingController(text: widget.dish.price.toStringAsFixed(0));
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final double? parsed = double.tryParse(_controller.text);
+    if (parsed != null && parsed > 0) {
+      widget.onSave(parsed);
+    }
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 20 + MediaQuery.viewInsetsOf(context).bottom),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('Change price', style: KraveoType.headline.copyWith(color: k.ink)),
+        Text('दाम बदलें', style: KraveoType.titleLg.copyWith(color: k.inkMuted)),
+        const SizedBox(height: 6),
+        Text(widget.dish.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 16)),
+        const SizedBox(height: 16),
+        TextField(
+          key: const ValueKey('price-field'),
+          controller: _controller,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          style: KraveoType.displayMd.copyWith(color: k.ink, fontSize: 36),
+          decoration: InputDecoration(
+            prefixIcon: Padding(
+              padding: const EdgeInsets.only(left: 18, right: 6),
+              child: Icon(LucideIcons.indianRupee, size: 30, color: k.brand),
+            ),
+            prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+            hintText: '0',
+          ),
+        ),
+        const SizedBox(height: 20),
+        KButton(label: 'Save price', sublabel: 'दाम सेव करें', icon: LucideIcons.check, large: true, onPressed: _save),
+      ]),
     );
   }
 }

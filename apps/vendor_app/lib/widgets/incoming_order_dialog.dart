@@ -1,7 +1,14 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
 import '../models/order_model.dart';
 import '../services/audio_alert_service.dart';
+import 'ui/ui.dart';
 
+/// THE most important screen in the app: a full-screen takeover with a pulsing ring, the
+/// order total in giant numerals, the customer's note, the items, prep-time picks and
+/// two huge buttons. Alarm/audio and the accept/decline callbacks are unchanged.
 class IncomingOrderDialog extends StatefulWidget {
   final OrderModel? order;
   final Function(OrderModel acceptedOrder) onAccept;
@@ -20,9 +27,9 @@ class IncomingOrderDialog extends StatefulWidget {
 
 class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
-  late Animation<double> _scaleAnimation;
 
   int _selectedPrepTimeMinutes = 15;
+  bool _confirmingDecline = false;
   late OrderModel _order;
 
   @override
@@ -31,11 +38,7 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
 
     _pulseController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 800),
-    )..repeat(reverse: true);
-
-    _scaleAnimation = Tween<double>(begin: 0.98, end: 1.02).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+      duration: const Duration(milliseconds: 2400),
     );
 
     // Initialize order data or use mock fallback with unique timestamp ID
@@ -53,6 +56,18 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
       customerNote: 'Make it extra spicy with extra curd please!',
       status: OrderStatus.placed,
     );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Honour the system "reduce motion" setting: hold the ring still instead of pulsing.
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+      _pulseController.stop();
+      _pulseController.value = 0.25;
+    } else if (!_pulseController.isAnimating) {
+      _pulseController.repeat();
+    }
   }
 
   @override
@@ -77,263 +92,283 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
 
   @override
   Widget build(BuildContext context) {
+    final k = context.k;
     return PopScope(
       canPop: false,
-      child: Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-        child: AnimatedBuilder(
-        animation: _scaleAnimation,
-        builder: (context, child) {
-          return Transform.scale(
-            scale: _scaleAnimation.value,
-            child: child,
-          );
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: const Color(0xFFFDD400), width: 4),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFFFDD400).withValues(alpha: 0.4),
-                blurRadius: 24,
-                spreadRadius: 4,
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+      child: Dialog.fullscreen(
+        backgroundColor: k.bg,
+        child: LayoutBuilder(builder: (context, c) {
+          // On a short screen (phone held sideways) everything scrolls together so the
+          // buttons can never be pushed off-screen; otherwise the buttons stay pinned.
+          final compact = c.maxHeight < 540;
+          if (compact) {
+            return SingleChildScrollView(
+              child: Column(children: [
+                _buildHeader(k),
+                Padding(padding: const EdgeInsets.fromLTRB(KSpace.gutter, 14, KSpace.gutter, 14), child: _buildBody(k)),
+                _buildActionPanel(k),
+              ]),
+            );
+          }
+          return Column(
             children: [
-              // Emergency Header Alert Banner
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
-                decoration: const BoxDecoration(
-                  color: Color(0xFFFDD400),
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(24),
-                    topRight: Radius.circular(24),
-                  ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: const [
-                        Icon(Icons.notifications_active, color: Color(0xFF1B1C1C), size: 28),
-                        SizedBox(width: 10),
-                        Text(
-                          'NEW ORDER / नया ऑर्डर',
-                          style: TextStyle(
-                            color: Color(0xFF1B1C1C),
-                            fontWeight: FontWeight.w900,
-                            fontSize: 18,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                    Text(
-                      _order.id,
-                      style: const TextStyle(
-                        color: Color(0xFF1B1C1C),
-                        fontWeight: FontWeight.w900,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ],
+              _buildHeader(k),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(KSpace.gutter, 14, KSpace.gutter, 14),
+                  children: [_buildBody(k)],
                 ),
               ),
-
-              Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Student Dropoff Location
-                    Row(
-                      children: [
-                        const Icon(Icons.location_on, color: Color(0xFF00450D), size: 22),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _order.studentName,
-                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Color(0xFF1B1C1C)),
-                              ),
-                              Text(
-                                _order.studentLocation,
-                                style: const TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Text(
-                          '₹${_order.totalAmount.toStringAsFixed(0)}',
-                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFF00450D)),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 14),
-                    const Divider(),
-
-                    // Order Items Checklist List
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 180),
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: _order.items.length,
-                        itemBuilder: (context, index) {
-                          final item = _order.items[index];
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4.0),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF00450D),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    '${item.quantity}x',
-                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 14),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    item.name,
-                                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF1B1C1C)),
-                                  ),
-                                ),
-                                Text(
-                                  '₹${(item.quantity * item.unitPrice).toStringAsFixed(0)}',
-                                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-
-                    // Customer Special Request Note
-                    if (_order.customerNote != null && _order.customerNote!.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFDAD6),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFBA1A1A)),
-                        ),
-                        child: Text(
-                          'Note: "${_order.customerNote}"',
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF93000A)),
-                        ),
-                      ),
-                    ],
-
-                    const SizedBox(height: 16),
-
-                    // Select Preparation Time ETA
-                    const Text(
-                      'Select Prep Time / समय चुनें:',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Color(0xFF1B1C1C)),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [10, 15, 20, 30].map((timeOption) {
-                        final isSelected = _selectedPrepTimeMinutes == timeOption;
-                        return Expanded(
-                          child: GestureDetector(
-                            onTap: () => setState(() => _selectedPrepTimeMinutes = timeOption),
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(horizontal: 3),
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                              decoration: BoxDecoration(
-                                color: isSelected ? const Color(0xFF00450D) : const Color(0xFFFCF9F8),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: isSelected ? const Color(0xFF00450D) : const Color(0xFFE5E2E1),
-                                  width: 1.5,
-                                ),
-                              ),
-                              child: Text(
-                                '$timeOption Mins',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 12,
-                                  color: isSelected ? Colors.white : const Color(0xFF1B1C1C),
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    // Giant 64px Touch Target Buttons (DECLINE / ACCEPT)
-                    Row(
-                      children: [
-                        Expanded(
-                          flex: 1,
-                          child: SizedBox(
-                            height: 64, // 64px Standard Touch Target
-                            child: OutlinedButton(
-                              onPressed: _handleDecline,
-                              style: OutlinedButton.styleFrom(
-                                side: const BorderSide(color: Color(0xFFBA1A1A), width: 2),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                              ),
-                              child: const Text(
-                                'DECLINE\nअस्वीकार',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: Color(0xFFBA1A1A), fontWeight: FontWeight.w900, fontSize: 13),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          flex: 2,
-                          child: SizedBox(
-                            height: 64, // 64px Standard Touch Target
-                            child: ElevatedButton.icon(
-                              onPressed: _handleAccept,
-                              icon: const Icon(Icons.check_circle, color: Colors.white, size: 26),
-                              label: const Text(
-                                'ACCEPT ORDER\nस्वीकार करें',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF00450D),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
+              _buildActionPanel(k),
             ],
+          );
+        }),
+      ),
+    );
+  }
+
+  Widget _buildBody(KraveoTokens k) {
+    return VMaxWidth(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (_order.customerNote != null && _order.customerNote!.isNotEmpty) ...[
+          VNoteCallout(note: _order.customerNote!, compact: true),
+          const SizedBox(height: 10),
+        ],
+        VSectionLabel(english: 'Items', hindi: 'सामान', count: _order.items.length),
+        _buildItems(k),
+      ]),
+    );
+  }
+
+  // ---------------------------------------------------------------- header
+
+  Widget _buildHeader(KraveoTokens k) {
+    return Semantics(
+      liveRegion: true,
+      label: 'New order ${_order.id}, total ${formatRupees(_order.totalAmount)}',
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 14),
+        decoration: BoxDecoration(
+          color: k.brand,
+          borderRadius: const BorderRadius.vertical(bottom: Radius.circular(KRadius.xxl)),
+        ),
+        child: VMaxWidth(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(color: k.onBrand.withValues(alpha: 0.16), shape: BoxShape.circle),
+                child: Icon(LucideIcons.bellRing, size: 24, color: k.onBrand),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('New order', maxLines: 1, style: KraveoType.headline.copyWith(color: k.onBrand)),
+                    Text('नया ऑर्डर', maxLines: 1, style: KraveoType.titleMd.copyWith(color: k.onBrand.withValues(alpha: 0.9))),
+                  ]),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(color: k.onBrand.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(KRadius.pill)),
+                child: Text(_order.id, maxLines: 1, style: KraveoType.titleMd.copyWith(color: k.onBrand)),
+              ),
+            ]),
+            SizedBox(
+              height: 112,
+              width: double.infinity,
+              child: ClipRect(
+                child: Stack(alignment: Alignment.center, children: [
+                  Positioned.fill(child: CustomPaint(painter: _RipplePainter(_pulseController, k.onBrand))),
+                  AnimatedBuilder(
+                    animation: _pulseController,
+                    builder: (context, child) => Transform.scale(scale: 1 + 0.03 * math.sin(_pulseController.value * math.pi * 2), child: child),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Text('Order total  ·  कुल राशि', maxLines: 1, style: KraveoType.label.copyWith(color: k.onBrand.withValues(alpha: 0.9), fontSize: 13)),
+                        Text(formatRupees(_order.totalAmount), style: KraveoType.displayLg.copyWith(fontSize: 68, height: 1.05, color: k.accent)),
+                      ]),
+                    ),
+                  ),
+                ]),
+              ),
+            ),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(LucideIcons.mapPin, size: 18, color: k.onBrand.withValues(alpha: 0.9)),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  '${_order.studentName} · ${_order.studentLocation}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: KraveoType.titleMd.copyWith(color: k.onBrand.withValues(alpha: 0.95), fontSize: 15),
+                ),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------- body
+
+  Widget _buildItems(KraveoTokens k) {
+    return KCard(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      child: Column(children: [
+        for (var i = 0; i < _order.items.length; i++) ...[
+          if (i > 0) Divider(height: 1, color: k.line),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(children: [
+              Container(
+                constraints: const BoxConstraints(minWidth: 64, minHeight: 52),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(color: k.brandSoft, borderRadius: BorderRadius.circular(KRadius.md)),
+                child: Text('${_order.items[i].quantity}×', style: KraveoType.headline.copyWith(fontSize: 30, color: k.brand)),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(_order.items[i].name, maxLines: 3, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink, fontSize: 21, fontWeight: FontWeight.w700)),
+              ),
+              const SizedBox(width: 10),
+              Text(formatRupees(_order.items[i].totalPrice), style: KraveoType.titleMd.copyWith(color: k.inkMuted)),
+            ]),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  // ---------------------------------------------------------------- actions
+
+  Widget _buildActionPanel(KraveoTokens k) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(KSpace.gutter, 10, KSpace.gutter, 12),
+      decoration: BoxDecoration(
+        color: k.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(KRadius.xxl)),
+        boxShadow: KShadow.lift(k.shadowTint),
+      ),
+      child: VMaxWidth(
+        child: AnimatedSize(
+          duration: KMotion.base,
+          curve: KMotion.emphasized,
+          alignment: Alignment.bottomCenter,
+          child: AnimatedSwitcher(
+            duration: KMotion.fast,
+            child: _confirmingDecline ? _buildDeclineConfirm(k) : _buildMainActions(k),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
+
+  Widget _buildMainActions(KraveoTokens k) {
+    return Column(
+      key: const ValueKey('main-actions'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 6),
+          child: Text.rich(TextSpan(children: [
+            TextSpan(text: 'Ready in', style: KraveoType.titleMd.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
+            TextSpan(text: '   कितनी देर में', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
+          ])),
+        ),
+        Row(children: [
+          for (final t in const [10, 15, 20, 30]) ...[
+            if (t != 10) const SizedBox(width: 8),
+            Expanded(
+              child: VChoiceChip(
+                label: '$t',
+                sublabel: 'min',
+                numeral: true,
+                selected: _selectedPrepTimeMinutes == t,
+                semanticLabel: '$t minutes',
+                onTap: () => setState(() => _selectedPrepTimeMinutes = t),
+              ),
+            ),
+          ],
+        ]),
+        const SizedBox(height: 10),
+        LayoutBuilder(builder: (context, c) {
+          final wide = c.maxWidth >= 480;
+          return Row(children: [
+            Expanded(
+              flex: wide ? 2 : 1,
+              child: KButton(
+                label: 'Decline',
+                sublabel: 'मना करें',
+                kind: KButtonKind.ghost,
+                large: true,
+                onPressed: () => setState(() => _confirmingDecline = true),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: wide ? 3 : 1,
+              child: KButton(
+                label: 'Accept',
+                sublabel: 'स्वीकार करें',
+                large: true,
+                onPressed: _handleAccept,
+              ),
+            ),
+          ]);
+        }),
+      ],
+    );
+  }
+
+  Widget _buildDeclineConfirm(KraveoTokens k) {
+    return Column(
+      key: const ValueKey('decline-confirm'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('Decline this order?', textAlign: TextAlign.center, style: KraveoType.headlineSm.copyWith(color: k.ink)),
+        Text('क्या यह ऑर्डर मना करना है?', textAlign: TextAlign.center, style: KraveoType.titleMd.copyWith(color: k.inkMuted)),
+        const SizedBox(height: 14),
+        KButton(label: 'Go back', sublabel: 'वापस जाएं', large: true, onPressed: () => setState(() => _confirmingDecline = false)),
+        const SizedBox(height: 10),
+        KButton(label: 'Yes, decline', sublabel: 'हाँ, मना करें', kind: KButtonKind.danger, large: true, onPressed: _handleDecline),
+      ],
+    );
+  }
 }
+
+/// Three sonar rings that expand and fade behind the order total.
+class _RipplePainter extends CustomPainter {
+  _RipplePainter(this.animation, this.color) : super(repaint: animation);
+  final Animation<double> animation;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final minR = size.height * 0.30;
+    final maxR = math.max(size.width, size.height) * 0.55;
+    for (var i = 0; i < 3; i++) {
+      final t = (animation.value + i / 3) % 1.0;
+      final paint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..color = color.withValues(alpha: (1 - t) * 0.30);
+      canvas.drawCircle(center, minR + (maxR - minR) * Curves.easeOut.transform(t), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_RipplePainter old) => old.color != color || old.animation != animation;
 }

@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../config/api_config.dart';
-import '../services/audio_alert_service.dart';
 import '../services/permission_service.dart';
 import '../services/vendor_api_service.dart';
 import '../services/order_queue_service.dart';
@@ -11,6 +12,7 @@ import '../models/dish_model.dart';
 import 'kitchen_queue.dart';
 import 'stock_manager.dart';
 import 'sales_analytics.dart';
+import '../widgets/ui/ui.dart';
 
 class VendorHomeScreen extends StatefulWidget {
   const VendorHomeScreen({super.key});
@@ -198,8 +200,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     if (!isStoreOpen) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('🔴 Store is CLOSED. Open store to accept incoming orders.'),
-          backgroundColor: Color(0xFFBA1A1A),
+          content: Text('Store is CLOSED. Open the store to get orders.  ·  दुकान बंद है, पहले खोलें'),
         ),
       );
       return;
@@ -233,8 +234,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Order ${acceptedOrder.id} Accepted! Added to Kitchen Queue.'),
-            backgroundColor: const Color(0xFF00450D),
+            content: Text('Order ${acceptedOrder.id} accepted!  ·  किचन में जुड़ गया'),
             duration: const Duration(seconds: 4),
           ),
         );
@@ -242,193 +242,195 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     );
   }
 
-  void _toggleStoreStatusWithConfirmation(bool newValue) {
-    showDialog(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          newValue ? 'Open Store? / दुकान चालू करें?' : 'Close Store? / दुकान बंद करें?',
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-        ),
-        content: Text(
-          newValue
-              ? 'Are you sure you want to open Sharma Dhaba for new campus orders?'
-              : 'Are you sure you want to pause incoming orders for Sharma Dhaba?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text('CANCEL', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: newValue ? const Color(0xFF00450D) : const Color(0xFFBA1A1A),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: () {
-              Navigator.pop(dialogCtx);
-              setState(() => isStoreOpen = newValue);
+  /// Opening is instant (it is always safe). Closing asks first, because a mis-tap would
+  /// silently stop new orders in the middle of a rush.
+  Future<void> _toggleStoreStatusWithConfirmation(bool newValue) async {
+    if (!newValue) {
+      final confirmed = await showConfirmSheet(
+        context,
+        icon: LucideIcons.powerOff,
+        title: 'Close the store?',
+        hindiTitle: 'दुकान बंद करें?',
+        message: 'You will stop getting new orders until you open again.\nनए ऑर्डर आना बंद हो जाएंगे।',
+        safeLabel: 'Keep open',
+        safeSublabel: 'खुला रखें',
+        confirmLabel: 'Yes, close store',
+        confirmSublabel: 'हाँ, बंद करें',
+      );
+      if (!confirmed || !mounted) return;
+    }
 
-              // Sync status to backend
-              VendorApiService.toggleStoreStatus('ven-1', isStoreOpen);
+    setState(() => isStoreOpen = newValue);
 
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(isStoreOpen ? '🟢 Store is now OPEN for orders' : '🔴 Store is now CLOSED'),
-                  duration: const Duration(seconds: 2),
-                ),
-              );
-            },
-            child: Text(
-              newValue ? 'CONFIRM OPEN' : 'CONFIRM CLOSE',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-            ),
-          ),
-        ],
+    // Sync status to backend
+    VendorApiService.toggleStoreStatus('ven-1', isStoreOpen);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(isStoreOpen ? 'Store is now OPEN for orders  ·  दुकान खुली' : 'Store is now CLOSED  ·  दुकान बंद'),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
 
   void _callCampusAdminSupport() {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
+      SnackBar(
         content: Row(
           children: [
-            Icon(Icons.phone_in_talk, color: Color(0xFFFDD400)),
-            SizedBox(width: 10),
-            Text('Calling Kraveo Campus Ops Helpline: +91 98765 43214', style: TextStyle(fontWeight: FontWeight.bold)),
+            Icon(LucideIcons.phone, color: context.k.onBrand),
+            const SizedBox(width: 10),
+            const Expanded(child: Text('Kraveo Campus Ops helpline: +91 98765 43214')),
           ],
         ),
-        backgroundColor: Color(0xFF00450D),
-        duration: Duration(seconds: 4),
+        duration: const Duration(seconds: 4),
       ),
+    );
+  }
+
+  void _openHelpSheet() {
+    showKSheet<void>(
+      context,
+      builder: (sheetContext) {
+        final k = sheetContext.k;
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 24),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text('Need help?', style: KraveoType.headline.copyWith(color: k.ink)),
+            Text('मदद चाहिए?', style: KraveoType.titleLg.copyWith(color: k.inkMuted)),
+            const SizedBox(height: 16),
+            KCard(
+              color: k.brandSoft,
+              elevated: false,
+              child: Row(children: [
+                Icon(LucideIcons.headset, size: 30, color: k.brand),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Kraveo Campus Ops', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
+                    FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text('+91 98765 43214', style: KraveoType.headlineSm.copyWith(color: k.ink))),
+                  ]),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 16),
+            KButton(
+              label: 'Call helpline',
+              sublabel: 'मदद के लिए फ़ोन',
+              icon: LucideIcons.phoneCall,
+              large: true,
+              onPressed: () {
+                Navigator.of(sheetContext).pop();
+                _callCampusAdminSupport();
+              },
+            ),
+            const SizedBox(height: 12),
+            KButton(
+              label: 'Test the order alarm',
+              sublabel: 'अलार्म जाँचें',
+              icon: LucideIcons.bellRing,
+              kind: KButtonKind.tonal,
+              large: true,
+              onPressed: () {
+                Navigator.of(sheetContext).pop();
+                _triggerIncomingOrderAlert();
+              },
+            ),
+          ]),
+        );
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final k = context.k;
     final activeCount = _orders.where((o) => o.status == OrderStatus.preparing || o.status == OrderStatus.readyForPickup).length;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFFCF9F8),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0.5,
-        title: Row(
+      body: SafeArea(
+        bottom: false,
+        child: Column(
           children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF00450D),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.storefront, color: Color(0xFFFDD400), size: 20),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  Text(
-                    'FC Night Mess',
-                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 17, color: Color(0xFF1B1C1C)),
-                    overflow: TextOverflow.ellipsis,
+            // Top bar: which store + help
+            Padding(
+              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 6, 12, 0),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(color: k.brand, borderRadius: BorderRadius.circular(KRadius.md)),
+                    child: Icon(LucideIcons.store, color: k.onBrand, size: 24),
                   ),
-                  Text(
-                    'Sharma Dhaba • Campus Hub',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.grey),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('FC Night Mess', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
+                        Text('Sharma Dhaba · Campus Hub', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
+                      ],
+                    ),
+                  ),
+                  Semantics(
+                    button: true,
+                    label: 'Help and support',
+                    excludeSemantics: true,
+                    child: KPressable(
+                      onTap: _openHelpSheet,
+                      child: Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(color: k.brandSoft, shape: BoxShape.circle),
+                        child: Icon(LucideIcons.headset, size: 26, color: k.brand),
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
+            const SizedBox(height: 8),
 
-            // Master Store OPEN / CLOSED Switch with Confirmation Guard
-            Row(
-              children: [
-                Switch(
-                  value: isStoreOpen,
-                  activeThumbColor: const Color(0xFF00450D),
-                  onChanged: _toggleStoreStatusWithConfirmation,
+            // The store OPEN / CLOSED control - always visible
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: KSpace.gutter),
+              child: VMaxWidth(
+                child: VStoreStatusHero(
+                  isOpen: isStoreOpen,
+                  onTap: () => _toggleStoreStatusWithConfirmation(!isStoreOpen),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isStoreOpen ? const Color(0xFFE2F7E4) : const Color(0xFFFFDAD6),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: isStoreOpen ? const Color(0xFF00450D) : const Color(0xFFBA1A1A),
-                    ),
+              ),
+            ),
+
+            Expanded(
+              child: IndexedStack(
+                index: _currentIndex,
+                children: [
+                  KitchenQueueScreen(
+                    orders: _orders,
+                    onOrderUpdate: () => setState(() {}),
                   ),
-                  child: Text(
-                    isStoreOpen ? 'OPEN / चालू' : 'CLOSED / बंद',
-                    style: TextStyle(
-                      color: isStoreOpen ? const Color(0xFF00450D) : const Color(0xFFBA1A1A),
-                      fontWeight: FontWeight.w900,
-                      fontSize: 10,
-                    ),
+                  StockManagerScreen(
+                    dishes: _dishes,
+                    onDishListChanged: () => setState(() {}),
                   ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.headset_mic_rounded, color: Color(0xFF00450D)),
-                  tooltip: 'Call Kraveo Campus Ops Support',
-                  onPressed: _callCampusAdminSupport,
-                ),
-              ],
+                  SalesAnalyticsScreen(
+                    orders: _orders,
+                  ),
+                ],
+              ),
             ),
           ],
         ),
       ),
-      body: IndexedStack(
+      bottomNavigationBar: VBigNav(
         index: _currentIndex,
-        children: [
-          KitchenQueueScreen(
-            orders: _orders,
-            onOrderUpdate: () => setState(() {}),
-          ),
-          StockManagerScreen(
-            dishes: _dishes,
-            onDishListChanged: () => setState(() {}),
-          ),
-          SalesAnalyticsScreen(
-            orders: _orders,
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _triggerIncomingOrderAlert,
-        backgroundColor: const Color(0xFFBA1A1A),
-        icon: const Icon(Icons.ring_volume, color: Colors.white),
-        label: const Text(
-          'TEST INCOMING ALARM',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 0.5),
-        ),
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        selectedItemColor: const Color(0xFF00450D),
-        unselectedItemColor: Colors.grey,
-        selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
-        unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-        onTap: (index) => setState(() => _currentIndex = index),
+        onChanged: (index) => setState(() => _currentIndex = index),
         items: [
-          BottomNavigationBarItem(
-            icon: Badge(
-              label: Text('$activeCount'),
-              isLabelVisible: activeCount > 0,
-              backgroundColor: const Color(0xFFBA1A1A),
-              child: const Icon(Icons.soup_kitchen),
-            ),
-            label: 'Kitchen Queue',
-          ),
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.inventory_2),
-            label: 'Stock Manager',
-          ),
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.bar_chart_rounded),
-            label: 'Daily Earnings',
-          ),
+          VNavItem(icon: LucideIcons.chefHat, label: 'Orders', hindi: 'ऑर्डर', badge: activeCount),
+          const VNavItem(icon: LucideIcons.utensils, label: 'Menu', hindi: 'मेनू'),
+          const VNavItem(icon: LucideIcons.wallet, label: 'Earnings', hindi: 'कमाई'),
         ],
       ),
     );

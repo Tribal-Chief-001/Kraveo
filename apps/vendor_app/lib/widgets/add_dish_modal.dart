@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
 import '../models/dish_model.dart';
+import 'ui/ui.dart';
 
+/// Content of the "Add dish" bottom sheet. Present it with `showKSheet` (it supplies the
+/// rounded sheet + drag handle); this widget only lays out the form.
 class AddDishModal extends StatefulWidget {
   final Function(DishModel newDish) onDishAdded;
 
@@ -49,155 +54,111 @@ class _AddDishModalState extends State<AddDishModal> {
     }
   }
 
+  Widget _fieldLabel(KraveoTokens k, String en, String hi) => Padding(
+        padding: const EdgeInsets.only(left: 4, bottom: 8),
+        child: Text.rich(TextSpan(children: [
+          TextSpan(text: en, style: KraveoType.titleMd.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
+          TextSpan(text: '   $hi', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
+        ])),
+      );
+
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
-        left: 20,
-        right: 20,
-        top: 24,
-      ),
-      child: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: SingleChildScrollView(
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'ADD NEW MENU ITEM',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                        color: Color(0xFF00450D),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
+    final k = context.k;
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, 20 + MediaQuery.viewInsetsOf(context).bottom),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(children: [
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Add a dish', style: KraveoType.headline.copyWith(color: k.ink)),
+                  Text('नया व्यंजन जोड़ें', style: KraveoType.titleMd.copyWith(color: k.inkMuted)),
+                ]),
+              ),
+              Semantics(
+                button: true,
+                label: 'Close',
+                excludeSemantics: true,
+                child: KPressable(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(color: k.surfaceAlt, shape: BoxShape.circle),
+                    child: Icon(LucideIcons.x, size: 26, color: k.ink),
+                  ),
                 ),
-                const Divider(height: 20, color: Color(0xFFE5E2E1)),
-                const SizedBox(height: 8),
+              ),
+            ]),
+            const SizedBox(height: 18),
 
-                // Dish Name Input
-                TextFormField(
-                  controller: _nameController,
-                  decoration: InputDecoration(
-                    labelText: 'Dish Name',
-                    hintText: 'e.g. Butter Chicken / Paneer Tikka',
-                    prefixIcon: const Icon(Icons.restaurant_menu, color: Color(0xFF00450D)),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                  validator: (val) {
-                    if (val == null || val.trim().isEmpty) {
-                      return 'Please enter dish name';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Category Selection Dropdown
-                DropdownButtonFormField<String>(
-                  initialValue: _selectedCategory,
-                  decoration: InputDecoration(
-                    labelText: 'Category',
-                    prefixIcon: const Icon(Icons.category, color: Color(0xFF00450D)),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                  items: _categories.map((cat) {
-                    return DropdownMenuItem(
-                      value: cat,
-                      child: Text(cat, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    );
-                  }).toList(),
-                  onChanged: (val) {
-                    if (val != null) {
-                      setState(() => _selectedCategory = val);
-                    }
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Price Input
-                TextFormField(
-                  controller: _priceController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: InputDecoration(
-                    labelText: 'Price (₹)',
-                    hintText: '180',
-                    prefixIcon: const Icon(Icons.currency_rupee, color: Color(0xFF00450D)),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                  validator: (val) {
-                    if (val == null || val.trim().isEmpty) {
-                      return 'Please enter price';
-                    }
-                    final p = double.tryParse(val);
-                    if (p == null || p < 0) {
-                      return 'Enter a valid price';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Initial Stock Switch
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFCF9F8),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFE5E2E1)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'Initial Stock Availability:',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                      ),
-                      Switch(
-                        value: _inStock,
-                        activeThumbColor: const Color(0xFF00450D),
-                        onChanged: (val) => setState(() => _inStock = val),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-
-                // Submit Button
-                SizedBox(
-                  width: double.infinity,
-                  height: 54,
-                  child: ElevatedButton(
-                    onPressed: _submitForm,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF00450D),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    ),
-                    child: const Text(
-                      'ADD TO MENU',
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 1),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-              ],
+            _fieldLabel(k, 'Dish name', 'नाम'),
+            TextFormField(
+              controller: _nameController,
+              textCapitalization: TextCapitalization.words,
+              style: KraveoType.titleLg.copyWith(color: k.ink, fontSize: 20),
+              decoration: InputDecoration(
+                hintText: 'e.g. Butter Chicken',
+                prefixIcon: Icon(LucideIcons.utensils, color: k.brand),
+              ),
+              validator: (val) {
+                if (val == null || val.trim().isEmpty) {
+                  return 'Please enter dish name';
+                }
+                return null;
+              },
             ),
-          ),
+            const SizedBox(height: 18),
+
+            _fieldLabel(k, 'Category', 'प्रकार'),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final cat in _categories)
+                VChoiceChip(
+                  label: cat,
+                  sublabel: hindiCategory(cat),
+                  selected: _selectedCategory == cat,
+                  onTap: () => setState(() => _selectedCategory = cat),
+                ),
+            ]),
+            const SizedBox(height: 18),
+
+            _fieldLabel(k, 'Price', 'दाम'),
+            TextFormField(
+              controller: _priceController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: KraveoType.displayMd.copyWith(color: k.ink, fontSize: 30),
+              decoration: InputDecoration(
+                hintText: '180',
+                prefixIcon: Padding(
+                  padding: const EdgeInsets.only(left: 18, right: 6),
+                  child: Icon(LucideIcons.indianRupee, size: 26, color: k.brand),
+                ),
+                prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+              ),
+              validator: (val) {
+                if (val == null || val.trim().isEmpty) {
+                  return 'Please enter price';
+                }
+                final p = double.tryParse(val);
+                if (p == null || p < 0) {
+                  return 'Enter a valid price';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 18),
+
+            _fieldLabel(k, 'Available now?', 'अभी उपलब्ध है?'),
+            VStockSwitch(inStock: _inStock, onToggle: () => setState(() => _inStock = !_inStock), dishName: 'New dish'),
+            const SizedBox(height: 24),
+
+            KButton(label: 'Add to menu', sublabel: 'मेनू में जोड़ें', icon: LucideIcons.plus, large: true, onPressed: _submitForm),
+          ],
         ),
       ),
     );

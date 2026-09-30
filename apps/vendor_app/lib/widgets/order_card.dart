@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
 import '../models/order_model.dart';
 import '../services/vendor_api_service.dart';
+import 'ui/ui.dart';
 
 class OrderCard extends StatefulWidget {
   final OrderModel order;
@@ -46,332 +49,267 @@ class _OrderCardState extends State<OrderCard> {
     super.dispose();
   }
 
-  String _formatDuration(Duration d) {
-    if (d.isNegative) return '00:00 (LATE)';
-    final mins = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+  String _mmss(Duration d) {
+    final mins = d.inMinutes.toString().padLeft(2, '0');
     final secs = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$mins:$secs';
   }
 
+  /// green -> amber -> red as the promised time drains away.
+  Color _urgencyColor(double progress, bool late) {
+    if (late || progress < 0.15) return KraveoPalette.danger;
+    if (progress < 0.4) return KraveoPalette.warning;
+    return KraveoPalette.success;
+  }
+
+  void _markReady() {
+    setState(() {
+      widget.order.status = OrderStatus.readyForPickup;
+      for (var it in widget.order.items) {
+        it.isPrepared = true;
+      }
+    });
+    VendorApiService.updateOrderStatus(
+      widget.order.id.replaceAll('#', ''),
+      'READY_FOR_PICKUP',
+    );
+    widget.onStatusChanged();
+  }
+
+  Future<void> _handOver() async {
+    final ok = await showConfirmSheet(
+      context,
+      icon: LucideIcons.bike,
+      title: 'Hand over to runner?',
+      hindiTitle: 'क्या रनर को दे दिया?',
+      message: 'Order ${widget.order.id} will move to History.',
+      safeLabel: 'Not yet',
+      safeSublabel: 'अभी नहीं',
+      confirmLabel: 'Yes, handed over',
+      confirmSublabel: 'हाँ, दे दिया',
+      destructive: false,
+    );
+    if (!ok || !mounted) return;
+    setState(() {
+      widget.order.status = OrderStatus.pickedUp;
+    });
+    VendorApiService.updateOrderStatus(
+      widget.order.id.replaceAll('#', ''),
+      'PICKED_UP',
+    );
+    widget.onStatusChanged();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isPreparing = widget.order.status == OrderStatus.preparing;
-    final isReady = widget.order.status == OrderStatus.readyForPickup;
-    final isPickedUp = widget.order.status == OrderStatus.pickedUp || widget.order.status == OrderStatus.delivered;
+    final k = context.k;
+    final order = widget.order;
+    final isPreparing = order.status == OrderStatus.preparing;
+    final isReady = order.status == OrderStatus.readyForPickup;
+    final isPickedUp = order.status == OrderStatus.pickedUp || order.status == OrderStatus.delivered;
 
     final isLate = _remaining.isNegative && isPreparing;
+    final totalSecs = (order.prepTimeMinutes * 60).clamp(1, 1 << 30);
+    final progress = (_remaining.inSeconds / totalSecs).clamp(0.0, 1.0);
+    final urgency = _urgencyColor(progress, isLate);
+
+    final ringColor = isPreparing ? urgency : (isReady ? KStatus.ready.color : k.line);
+    final borderColor = isPreparing ? urgency : (isReady ? KStatus.ready.color : k.line);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: isLate
-              ? const Color(0xFFBA1A1A)
-              : isReady
-                  ? const Color(0xFFFDD400)
-                  : const Color(0xFF00450D),
-          width: 2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
+        color: k.surface,
+        borderRadius: KRadius.card,
+        border: Border.all(color: borderColor, width: isPickedUp ? 1.5 : 2.5),
+        boxShadow: KShadow.soft(k.shadowTint),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header: countdown ring + order number + who/where + status
+          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            Semantics(
+              label: isPreparing
+                  ? (isLate ? 'Late' : '${_remaining.inMinutes} minutes left')
+                  : isReady
+                      ? 'Ready for pickup'
+                      : 'Picked up',
+              excludeSemantics: true,
+              child: VCountdownRing(
+                size: 98,
+                progress: isPreparing ? progress : (isReady ? 1 : 0),
+                color: ringColor,
+                child: _ringCenter(k, isPreparing: isPreparing, isReady: isReady, isLate: isLate),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(order.id, style: KraveoType.headline.copyWith(color: k.ink)),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${order.studentName} · ${order.studentLocation}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: KraveoType.body.copyWith(color: k.inkMuted),
+                ),
+                const SizedBox(height: 8),
+                Wrap(spacing: 10, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                  KStatusPill(
+                    status: isPreparing ? KStatus.preparing : (isReady ? KStatus.ready : KStatus.pickedUp),
+                    label: isPreparing ? 'Cooking' : (isReady ? 'Ready' : 'Picked up'),
+                  ),
+                  Text(isPreparing ? 'बन रहा है' : (isReady ? 'तैयार' : 'सुपुर्द'), style: KraveoType.titleMd.copyWith(color: k.inkMuted)),
+                  Text(formatRupees(order.totalAmount), style: KraveoType.titleLg.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
+                ]),
+              ]),
+            ),
+          ]),
+
+          const SizedBox(height: 16),
+
+          // Items: big rows, tap to tick off
+          for (final item in order.items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _ItemRow(
+                item: item,
+                enabled: !isPickedUp,
+                onTap: () {
+                  setState(() {
+                    item.isPrepared = !item.isPrepared;
+                  });
+                  widget.onItemToggle();
+                },
+              ),
+            ),
+
+          if (order.customerNote != null && order.customerNote!.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            VNoteCallout(note: order.customerNote!, compact: true),
+          ],
+
+          const SizedBox(height: 14),
+
+          // ONE obvious action for this state
+          if (isPreparing)
+            KButton(
+              label: 'Mark ready',
+              sublabel: 'तैयार है',
+              icon: LucideIcons.circleCheck,
+              large: true,
+              onPressed: _markReady,
+            )
+          else if (isReady)
+            KButton(
+              label: 'Hand over to runner',
+              sublabel: 'सुपुर्द किया',
+              icon: LucideIcons.bike,
+              large: true,
+              onPressed: _handOver,
+            )
+          else
+            Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(minHeight: 64),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(color: k.surfaceAlt, borderRadius: BorderRadius.circular(KRadius.lg)),
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(LucideIcons.check, size: 22, color: k.inkMuted),
+                const SizedBox(width: 10),
+                Flexible(
+                  child: Text('Picked up by runner · सुपुर्द हो चुका है', textAlign: TextAlign.center, style: KraveoType.titleMd.copyWith(color: k.inkMuted)),
+                ),
+              ]),
+            ),
         ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(18.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Top Header: Order ID & Countdown Badge
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFCF9F8),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: const Color(0xFFE5E2E1)),
-                      ),
-                      child: const Icon(Icons.receipt_rounded, color: Color(0xFF00450D), size: 20),
-                    ),
-                    const SizedBox(width: 10),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          widget.order.id,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w900,
-                            fontSize: 17,
-                            color: Color(0xFF1B1C1C),
-                          ),
-                        ),
-                        Text(
-                          'ETA: ${widget.order.prepTimeMinutes} Mins',
-                          style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+    );
+  }
 
-                // Countdown Badge
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: isLate
-                        ? const Color(0xFFFFDAD6)
-                        : isReady
-                            ? const Color(0xFFFFF7D1)
-                            : const Color(0xFFE2F7E4),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: isLate
-                          ? const Color(0xFFBA1A1A)
-                          : isReady
-                              ? const Color(0xFF6F5C00)
-                              : const Color(0xFF00450D),
-                      width: 1.5,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        isLate
-                            ? Icons.warning_amber_rounded
-                            : isReady
-                                ? Icons.check_circle_outline
-                                : Icons.timer,
-                        size: 16,
-                        color: isLate
-                            ? const Color(0xFFBA1A1A)
-                            : isReady
-                                ? const Color(0xFF6F5C00)
-                                : const Color(0xFF00450D),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        isReady ? 'READY / तैयार' : _formatDuration(_remaining),
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 12,
-                          color: isLate
-                              ? const Color(0xFFBA1A1A)
-                              : isReady
-                                  ? const Color(0xFF6F5C00)
-                                  : const Color(0xFF00450D),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+  Widget _ringCenter(KraveoTokens k, {required bool isPreparing, required bool isReady, required bool isLate}) {
+    if (isPreparing && isLate) {
+      return Column(mainAxisSize: MainAxisSize.min, children: [
+        FittedBox(fit: BoxFit.scaleDown, child: Text('LATE', style: KraveoType.headlineSm.copyWith(color: kDangerDeep, fontSize: 20))),
+        FittedBox(fit: BoxFit.scaleDown, child: Text('देर', style: KraveoType.caption.copyWith(color: kDangerDeep, fontSize: 13))),
+      ]);
+    }
+    if (isPreparing) {
+      return Column(mainAxisSize: MainAxisSize.min, children: [
+        FittedBox(fit: BoxFit.scaleDown, child: Text(_mmss(_remaining), style: KraveoType.headlineSm.copyWith(color: k.ink, fontSize: 22))),
+        FittedBox(fit: BoxFit.scaleDown, child: Text('min left', style: KraveoType.caption.copyWith(color: k.inkMuted, fontSize: 11))),
+      ]);
+    }
+    return Icon(isReady ? LucideIcons.bellRing : LucideIcons.check, size: 34, color: isReady ? k.brand : k.inkFaint);
+  }
+}
+
+class _ItemRow extends StatelessWidget {
+  const _ItemRow({required this.item, required this.enabled, required this.onTap});
+  final OrderItem item;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final done = item.isPrepared;
+    return Semantics(
+      checked: done,
+      label: '${item.quantity} ${item.name}',
+      excludeSemantics: true,
+      onTap: enabled ? onTap : null,
+      child: KPressable(
+        onTap: enabled ? onTap : null,
+        scale: 0.985,
+        child: AnimatedContainer(
+          duration: KMotion.base,
+          curve: KMotion.emphasized,
+          constraints: const BoxConstraints(minHeight: 64),
+          padding: const EdgeInsets.fromLTRB(14, 8, 12, 8),
+          decoration: BoxDecoration(
+            color: done ? k.brandSoft : k.surfaceAlt,
+            borderRadius: BorderRadius.circular(KRadius.lg),
+            border: Border.all(color: done ? k.brand.withValues(alpha: 0.5) : Colors.transparent, width: 1.5),
+          ),
+          child: Row(children: [
+            SizedBox(
+              width: 52,
+              child: Text('${item.quantity}×', style: KraveoType.headline.copyWith(fontSize: 28, color: done ? k.brand : k.ink)),
             ),
-
-            const SizedBox(height: 14),
-
-            // Student Info & Location
-            Row(
-              children: [
-                const Icon(Icons.person, size: 18, color: Color(0xFF00450D)),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    '${widget.order.studentName} (${widget.order.studentLocation})',
-                    style: const TextStyle(
-                      color: Color(0xFF1B1C1C),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                Text(
-                  '₹${widget.order.totalAmount.toStringAsFixed(0)}',
-                  style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: Color(0xFF00450D)),
-                ),
-              ],
-            ),
-
-            const Divider(height: 24, color: Color(0xFFE5E2E1), thickness: 1.5),
-
-            // Preparation Checklist Header
-            Row(
-              children: const [
-                Icon(Icons.checklist_rtl_rounded, color: Color(0xFF00450D), size: 20),
-                SizedBox(width: 6),
-                Text(
-                  'Dish Preparation Checklist / सामग्री जाँच:',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: Colors.grey),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-
-            // Items Interactive Checklist (Non-dense 56px touch targets for greasy/gloved hands)
-            ...widget.order.items.map((item) {
-              return Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                decoration: BoxDecoration(
-                  color: item.isPrepared ? const Color(0xFFE2F7E4) : const Color(0xFFFCF9F8),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: item.isPrepared ? const Color(0xFF00450D) : const Color(0xFFE5E2E1),
-                    width: 1.5,
-                  ),
-                ),
-                child: Material(
-                  color: Colors.transparent,
-                  child: CheckboxListTile(
-                    dense: false, // Large 56px touch target standard
-                    activeColor: const Color(0xFF00450D),
-                    value: item.isPrepared,
-                    title: Row(
-                      children: [
-                        Text(
-                          '${item.quantity}x ',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w900,
-                            fontSize: 17,
-                            color: item.isPrepared ? const Color(0xFF00450D) : const Color(0xFF1B1C1C),
-                            decoration: item.isPrepared ? TextDecoration.lineThrough : null,
-                          ),
-                        ),
-                        Expanded(
-                          child: Text(
-                            item.name,
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                              color: item.isPrepared ? Colors.grey[700] : const Color(0xFF1B1C1C),
-                              decoration: item.isPrepared ? TextDecoration.lineThrough : null,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    onChanged: isPickedUp
-                        ? null
-                        : (bool? val) {
-                            setState(() {
-                              item.isPrepared = val ?? false;
-                            });
-                            widget.onItemToggle();
-                          },
-                  ),
-                ),
-              );
-            }).toList(),
-
-            // Customer Note Callout Box
-            if (widget.order.customerNote != null && widget.order.customerNote!.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFDAD6),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFFBA1A1A)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.info_outline, color: Color(0xFFBA1A1A), size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Special Request: "${widget.order.customerNote}"',
-                        style: const TextStyle(color: Color(0xFF93000A), fontSize: 13, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ],
+            Expanded(
+              child: Text(
+                item.name,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: KraveoType.titleLg.copyWith(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: done ? k.inkMuted : k.ink,
+                  decoration: done ? TextDecoration.lineThrough : null,
                 ),
               ),
-            ],
-
-            const SizedBox(height: 16),
-
-            // Action Button with Full 64px Touch Target & Bilingual Text
-            if (isPreparing)
-              SizedBox(
-                width: double.infinity,
-                height: 64, // 64px Standard Touch Target
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      widget.order.status = OrderStatus.readyForPickup;
-                      for (var it in widget.order.items) {
-                        it.isPrepared = true;
-                      }
-                    });
-                    VendorApiService.updateOrderStatus(
-                      widget.order.id.replaceAll('#', ''),
-                      'READY_FOR_PICKUP',
-                    );
-                    widget.onStatusChanged();
-                  },
-                  icon: const Icon(Icons.check_circle_outline, color: Colors.white, size: 26),
-                  label: const Text(
-                    'MARK READY FOR PICKUP / तैयार है',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 0.5),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF00450D),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                ),
-              )
-            else if (isReady)
-              SizedBox(
-                width: double.infinity,
-                height: 64, // 64px Standard Touch Target
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      widget.order.status = OrderStatus.pickedUp;
-                    });
-                    VendorApiService.updateOrderStatus(
-                      widget.order.id.replaceAll('#', ''),
-                      'PICKED_UP',
-                    );
-                    widget.onStatusChanged();
-                  },
-                  icon: const Icon(Icons.task_alt, color: Colors.black87, size: 26),
-                  label: const Text(
-                    'HAND OVER TO RUNNER / सुपुर्द किया',
-                    style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w900, fontSize: 15),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFDD400),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                ),
-              )
-            else
-              Container(
-                width: double.infinity,
-                height: 54,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFCF9F8),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFFE5E2E1)),
-                ),
-                child: const Center(
-                  child: Text(
-                    'PICKED UP BY RUNNER / सुपुर्द हो चुका है',
-                    style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w900, fontSize: 13),
-                  ),
-                ),
+            ),
+            const SizedBox(width: 10),
+            AnimatedContainer(
+              duration: KMotion.base,
+              curve: KMotion.spring,
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: done ? k.brand : Colors.transparent,
+                shape: BoxShape.circle,
+                border: Border.all(color: done ? k.brand : k.inkFaint, width: 2.5),
               ),
-          ],
+              child: done ? Icon(LucideIcons.check, size: 24, color: k.onBrand) : null,
+            ),
+          ]),
         ),
       ),
     );

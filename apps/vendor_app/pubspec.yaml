@@ -16,6 +16,9 @@ dependencies:
   shared_preferences: ^2.2.2
   socket_io_client: ^2.0.3+1
   wakelock_plus: ^1.2.8
+  kraveo_ui:
+    path: ../../packages/kraveo_ui
+  lucide_icons_flutter: ^3.1.20
 
 dev_dependencies:
   flutter_test:

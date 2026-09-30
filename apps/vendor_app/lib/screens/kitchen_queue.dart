@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
 import '../models/order_model.dart';
 import '../widgets/order_card.dart';
+import '../widgets/ui/ui.dart';
 
 class KitchenQueueScreen extends StatefulWidget {
   final List<OrderModel> orders;
@@ -19,9 +22,19 @@ class KitchenQueueScreen extends StatefulWidget {
 class _KitchenQueueScreenState extends State<KitchenQueueScreen> {
   int _selectedTab = 0; // 0 = Active Queue (Preparing & Ready), 1 = History/Completed
   String _searchQuery = '';
+  bool _searchOpen = false;
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final k = context.k;
+
     // Filter orders
     final activeOrders = widget.orders.where((o) => o.status == OrderStatus.preparing || o.status == OrderStatus.readyForPickup).toList();
     final completedOrders = widget.orders.where((o) => o.status == OrderStatus.pickedUp || o.status == OrderStatus.delivered || o.status == OrderStatus.cancelled).toList();
@@ -36,174 +49,134 @@ class _KitchenQueueScreenState extends State<KitchenQueueScreen> {
           o.studentLocation.toLowerCase().contains(q);
     }).toList();
 
-    final preparingCount = activeOrders.where((o) => o.status == OrderStatus.preparing).length;
-    final readyCount = activeOrders.where((o) => o.status == OrderStatus.readyForPickup).length;
+    // Most urgent first: the promised-by time never changes, so this order stays put
+    // under the cook's thumb while the countdowns tick.
+    final cooking = filteredList.where((o) => o.status == OrderStatus.preparing).toList()
+      ..sort((a, b) => a.targetCompletionTime.compareTo(b.targetCompletionTime));
+    final ready = filteredList.where((o) => o.status == OrderStatus.readyForPickup).toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    final history = filteredList.where((o) => o.status != OrderStatus.preparing && o.status != OrderStatus.readyForPickup).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFFCF9F8),
-      body: Column(
-        children: [
-          // Top Summary Banner & Filter Chips
-          Container(
-            color: Colors.white,
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: Column(
-              children: [
-                // Quick Summary Stats Bar
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF00450D).withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: const Color(0xFF00450D).withValues(alpha: 0.2)),
-                        ),
-                        child: Column(
-                          children: [
-                            const Text('PREPARING', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF00450D))),
-                            const SizedBox(height: 2),
-                            Text('$preparingCount', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Color(0xFF00450D))),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFDD400).withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: const Color(0xFFFDD400)),
-                        ),
-                        child: Column(
-                          children: [
-                            const Text('READY FOR PICKUP', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF6F5C00))),
-                            const SizedBox(height: 2),
-                            Text('$readyCount', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Color(0xFF6F5C00))),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.grey.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.grey.withValues(alpha: 0.3)),
-                        ),
-                        child: Column(
-                          children: [
-                            const Text('COMPLETED', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey)),
-                            const SizedBox(height: 2),
-                            Text('${completedOrders.length}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Colors.black87)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-
-                // Search Bar & Filter Toggle
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        onChanged: (val) => setState(() => _searchQuery = val),
-                        decoration: InputDecoration(
-                          hintText: 'Search order # / student...',
-                          prefixIcon: const Icon(Icons.search, size: 20, color: Colors.grey),
-                          contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
-                          filled: true,
-                          fillColor: const Color(0xFFFCF9F8),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: const BorderSide(color: Color(0xFFE5E2E1)),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    SegmentedButton<int>(
-                      segments: const [
-                        ButtonSegment(value: 0, label: Text('Active Queue', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                        ButtonSegment(value: 1, label: Text('History', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                      ],
-                      selected: {_selectedTab},
-                      onSelectionChanged: (set) => setState(() => _selectedTab = set.first),
-                      style: ButtonStyle(
-                        backgroundColor: WidgetStateProperty.resolveWith((states) {
-                          if (states.contains(WidgetState.selected)) {
-                            return const Color(0xFF00450D);
-                          }
-                          return Colors.white;
-                        }),
-                        foregroundColor: WidgetStateProperty.resolveWith((states) {
-                          if (states.contains(WidgetState.selected)) {
-                            return Colors.white;
-                          }
-                          return Colors.black87;
-                        }),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+    final children = <Widget>[];
+    var revealIndex = 0;
+    Widget card(OrderModel o) => KReveal(
+          key: ValueKey('reveal-${o.id}'),
+          index: revealIndex++,
+          child: OrderCard(
+            key: ValueKey(o.id),
+            order: o,
+            onStatusChanged: () {
+              setState(() {});
+              widget.onOrderUpdate();
+            },
+            onItemToggle: () {
+              setState(() {});
+            },
           ),
+        );
 
-          // Main Orders List
-          Expanded(
-            child: filteredList.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(32.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            _selectedTab == 0 ? Icons.soup_kitchen_outlined : Icons.history_toggle_off,
-                            size: 64,
-                            color: Colors.grey[400],
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            _selectedTab == 0 ? 'No Active Kitchen Orders' : 'No Order History Yet',
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1B1C1C)),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _selectedTab == 0
-                                ? 'New incoming orders will appear here automatically with loud alerts.'
-                                : 'Completed orders will be logged here.',
-                            style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
+    if (_selectedTab == 0) {
+      if (cooking.isNotEmpty) {
+        children.add(VSectionLabel(english: 'Cooking', hindi: 'बन रहे हैं', count: cooking.length));
+        children.addAll(cooking.map(card));
+      }
+      if (ready.isNotEmpty) {
+        children.add(VSectionLabel(english: 'Ready for pickup', hindi: 'तैयार', count: ready.length));
+        children.addAll(ready.map(card));
+      }
+    } else {
+      children.addAll(history.map(card));
+    }
+
+    return VMaxWidth(
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 8),
+            child: Row(children: [
+              Expanded(
+                child: VChoiceChip(
+                  label: 'Active',
+                  sublabel: 'चालू · ${activeOrders.length}',
+                  selected: _selectedTab == 0,
+                  onTap: () => setState(() => _selectedTab = 0),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: VChoiceChip(
+                  label: 'History',
+                  sublabel: 'पुराने · ${completedOrders.length}',
+                  selected: _selectedTab == 1,
+                  onTap: () => setState(() => _selectedTab = 1),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Semantics(
+                button: true,
+                label: _searchOpen ? 'Close search' : 'Search orders',
+                excludeSemantics: true,
+                child: KPressable(
+                  onTap: () => setState(() {
+                    _searchOpen = !_searchOpen;
+                    if (!_searchOpen) {
+                      _searchQuery = '';
+                      _searchController.clear();
+                    }
+                  }),
+                  child: Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      color: _searchOpen ? k.brandSoft : k.surface,
+                      borderRadius: BorderRadius.circular(KRadius.lg),
+                      border: Border.all(color: _searchOpen ? k.brand : k.line, width: 1.5),
+                    ),
+                    child: Icon(_searchOpen ? LucideIcons.x : LucideIcons.search, size: 26, color: k.brand),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+          AnimatedSize(
+            duration: KMotion.base,
+            curve: KMotion.emphasized,
+            alignment: Alignment.topCenter,
+            child: _searchOpen
+                ? Padding(
+                    padding: const EdgeInsets.fromLTRB(KSpace.gutter, 0, KSpace.gutter, 8),
+                    child: TextField(
+                      controller: _searchController,
+                      autofocus: true,
+                      onChanged: (val) => setState(() => _searchQuery = val),
+                      style: KraveoType.titleMd.copyWith(color: k.ink, fontSize: 18),
+                      decoration: InputDecoration(
+                        hintText: 'Search order or student  ·  खोजें',
+                        prefixIcon: Icon(LucideIcons.search, size: 22, color: k.inkFaint),
                       ),
                     ),
                   )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: filteredList.length,
-                    itemBuilder: (context, index) {
-                      final order = filteredList[index];
-                      return OrderCard(
-                        order: order,
-                        onStatusChanged: () {
-                          setState(() {});
-                          widget.onOrderUpdate();
-                        },
-                        onItemToggle: () {
-                          setState(() {});
-                        },
-                      );
-                    },
+                : const SizedBox(width: double.infinity),
+          ),
+          Expanded(
+            child: children.isEmpty
+                ? KEmptyState(
+                    icon: _selectedTab == 0 ? LucideIcons.chefHat : LucideIcons.history,
+                    title: _searchQuery.isNotEmpty
+                        ? 'No matching orders'
+                        : _selectedTab == 0
+                            ? 'No orders right now'
+                            : 'No history yet',
+                    message: _searchQuery.isNotEmpty
+                        ? 'Try a different name or order number.\nदूसरा नाम या नंबर आज़माएं।'
+                        : _selectedTab == 0
+                            ? 'New orders will ring loudly and show here.\nनया ऑर्डर आते ही अलार्म बजेगा।'
+                            : 'Finished orders will be listed here.\nपूरे हुए ऑर्डर यहाँ दिखेंगे।',
+                  )
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(KSpace.gutter, 4, KSpace.gutter, 24),
+                    children: children,
                   ),
           ),
         ],

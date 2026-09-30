@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
 import '../models/dish_model.dart';
 import '../widgets/stock_card.dart';
 import '../widgets/add_dish_modal.dart';
+import '../widgets/ui/ui.dart';
 import '../services/vendor_api_service.dart';
 
 class StockManagerScreen extends StatefulWidget {
@@ -18,9 +21,12 @@ class StockManagerScreen extends StatefulWidget {
   State<StockManagerScreen> createState() => _StockManagerScreenState();
 }
 
+enum _StockFilter { all, inStock, soldOut }
+
 class _StockManagerScreenState extends State<StockManagerScreen> {
   String _selectedCategory = 'All';
   String _searchQuery = '';
+  _StockFilter _stockFilter = _StockFilter.all;
 
   final List<String> _categories = [
     'All',
@@ -32,11 +38,9 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
   ];
 
   void _openAddDishModal() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
+    showKSheet<void>(
+      context,
+      builder: (sheetContext) {
         return AddDishModal(
           onDishAdded: (newDish) {
             setState(() {
@@ -49,7 +53,7 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
               price: newDish.price,
             );
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('${newDish.name} added to menu!')),
+              SnackBar(content: Text('${newDish.name} added to menu!  ·  मेनू में जुड़ गया')),
             );
           },
         );
@@ -59,6 +63,7 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final k = context.k;
     final totalDishes = widget.dishes.length;
     final inStockCount = widget.dishes.where((d) => d.inStock).length;
     final soldOutCount = widget.dishes.where((d) => !d.inStock).length;
@@ -66,201 +71,211 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
     final filteredDishes = widget.dishes.where((dish) {
       final matchesCategory = _selectedCategory == 'All' || dish.category == _selectedCategory;
       final matchesSearch = _searchQuery.isEmpty || dish.name.toLowerCase().contains(_searchQuery.toLowerCase());
-      return matchesCategory && matchesSearch;
+      final matchesStock = switch (_stockFilter) {
+        _StockFilter.all => true,
+        _StockFilter.inStock => dish.inStock,
+        _StockFilter.soldOut => !dish.inStock,
+      };
+      return matchesCategory && matchesSearch && matchesStock;
     }).toList();
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFFCF9F8),
-      body: Column(
-        children: [
-          // Top Summary Header & Search/Filter
-          Container(
-            color: Colors.white,
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: Column(
-              children: [
-                // Quick Stock Overview Pills
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF00450D).withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.inventory_2_outlined, size: 18, color: Color(0xFF00450D)),
-                            const SizedBox(width: 6),
-                            Text('TOTAL: $totalDishes', style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF00450D), fontSize: 13)),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF00450D),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.check_circle_outline, size: 18, color: Colors.white),
-                            const SizedBox(width: 6),
-                            Text('IN STOCK: $inStockCount', style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.white, fontSize: 13)),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFBA1A1A),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.block, size: 18, color: Colors.white),
-                            const SizedBox(width: 6),
-                            Text('SOLD OUT: $soldOutCount', style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.white, fontSize: 13)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
+    return Material(
+      color: Colors.transparent,
+      child: VMaxWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 32),
+          children: [
+            // Tap a tile to show only that group
+            Row(children: [
+              Expanded(
+                child: _CountTile(
+                  count: totalDishes,
+                  label: 'All',
+                  hindi: 'सभी',
+                  color: k.brand,
+                  selected: _stockFilter == _StockFilter.all,
+                  onTap: () => setState(() => _stockFilter = _StockFilter.all),
                 ),
-                const SizedBox(height: 12),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _CountTile(
+                  count: inStockCount,
+                  label: 'In stock',
+                  hindi: 'उपलब्ध',
+                  color: k.brand,
+                  selected: _stockFilter == _StockFilter.inStock,
+                  onTap: () => setState(() => _stockFilter = _stockFilter == _StockFilter.inStock ? _StockFilter.all : _StockFilter.inStock),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _CountTile(
+                  count: soldOutCount,
+                  label: 'Sold out',
+                  hindi: 'खत्म',
+                  color: kDangerDeep,
+                  selected: _stockFilter == _StockFilter.soldOut,
+                  onTap: () => setState(() => _stockFilter = _stockFilter == _StockFilter.soldOut ? _StockFilter.all : _StockFilter.soldOut),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 14),
 
-                // Search Box
-                TextField(
+            Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              Expanded(
+                child: TextField(
                   onChanged: (val) => setState(() => _searchQuery = val),
+                  style: KraveoType.titleMd.copyWith(color: k.ink, fontSize: 18),
                   decoration: InputDecoration(
-                    hintText: 'Search dish in menu...',
-                    prefixIcon: const Icon(Icons.search, size: 20, color: Colors.grey),
-                    contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
-                    filled: true,
-                    fillColor: const Color(0xFFFCF9F8),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: const BorderSide(color: Color(0xFFE5E2E1)),
-                    ),
+                    hintText: 'Search dish · खोजें',
+                    prefixIcon: Icon(LucideIcons.search, size: 22, color: k.inkFaint),
                   ),
                 ),
-                const SizedBox(height: 10),
+              ),
+              const SizedBox(width: 10),
+              _AddDishButton(onTap: _openAddDishModal),
+            ]),
+            const SizedBox(height: 12),
 
-                // Category Chips Scrollable List
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: _categories.map((cat) {
-                      final isSelected = _selectedCategory == cat;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8.0),
-                        child: ChoiceChip(
-                          showCheckmark: false,
-                          label: Text(
-                            cat,
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                              color: isSelected ? Colors.white : const Color(0xFF1B1C1C),
-                            ),
-                          ),
-                          selected: isSelected,
-                          selectedColor: const Color(0xFF00450D),
-                          backgroundColor: const Color(0xFFFCF9F8),
-                          side: BorderSide(
-                            color: isSelected ? const Color(0xFF00450D) : const Color(0xFFE5E2E1),
-                          ),
-                          onSelected: (sel) {
-                            if (sel) setState(() => _selectedCategory = cat);
-                          },
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ],
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              clipBehavior: Clip.none,
+              child: Row(
+                children: [
+                  for (final cat in _categories) ...[
+                    VChoiceChip(
+                      label: cat,
+                      sublabel: hindiCategory(cat),
+                      selected: _selectedCategory == cat,
+                      onTap: () => setState(() => _selectedCategory = cat),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                ],
+              ),
             ),
-          ),
+            const SizedBox(height: 18),
 
-          // Dishes GridView
-          Expanded(
-            child: filteredDishes.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(32.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.no_meals_outlined, size: 64, color: Colors.grey),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'No Dishes Found',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1B1C1C)),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Try adjusting your search query or add a new dish to the menu.',
-                            style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
+            if (filteredDishes.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 12),
+                child: KEmptyState(
+                  icon: LucideIcons.utensils,
+                  title: 'No dishes found',
+                  message: 'Try another search, or tap the yellow + button.\nदूसरा नाम खोजें या पीला + दबाएं।',
+                ),
+              )
+            else
+              for (var i = 0; i < filteredDishes.length; i++)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: KReveal(
+                    key: ValueKey('dish-${filteredDishes[i].id}'),
+                    index: i,
+                    child: StockCard(
+                      dish: filteredDishes[i],
+                      onToggleStock: () {
+                        final dish = filteredDishes[i];
+                        setState(() {
+                          dish.inStock = !dish.inStock;
+                        });
+                        widget.onDishListChanged();
+                        VendorApiService.updateDishStock(
+                          dish.id,
+                          isAvailable: dish.inStock,
+                        );
+                      },
+                      onUpdatePrice: (newPrice) {
+                        final dish = filteredDishes[i];
+                        setState(() {
+                          dish.price = newPrice;
+                        });
+                        widget.onDishListChanged();
+                        VendorApiService.updateDishStock(
+                          dish.id,
+                          price: newPrice,
+                        );
+                      },
                     ),
-                  )
-                : GridView.builder(
-                    padding: const EdgeInsets.all(16),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 2,
-                      childAspectRatio: 0.82,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                    ),
-                    itemCount: filteredDishes.length,
-                    itemBuilder: (context, index) {
-                      final dish = filteredDishes[index];
-                      return StockCard(
-                        dish: dish,
-                        onToggleStock: () {
-                          setState(() {
-                            dish.inStock = !dish.inStock;
-                          });
-                          widget.onDishListChanged();
-                          VendorApiService.updateDishStock(
-                            dish.id,
-                            isAvailable: dish.inStock,
-                          );
-                        },
-                        onUpdatePrice: (newPrice) {
-                          setState(() {
-                            dish.price = newPrice;
-                          });
-                          widget.onDishListChanged();
-                          VendorApiService.updateDishStock(
-                            dish.id,
-                            price: newPrice,
-                          );
-                        },
-                      );
-                    },
                   ),
-          ),
-        ],
+                ),
+          ],
+        ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openAddDishModal,
-        backgroundColor: const Color(0xFF00450D),
-        icon: const Icon(Icons.add, color: Colors.white),
-        label: const Text('ADD DISH', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+    );
+  }
+}
+
+class _CountTile extends StatelessWidget {
+  const _CountTile({required this.count, required this.label, required this.hindi, required this.color, required this.selected, required this.onTap});
+  final int count;
+  final String label;
+  final String hindi;
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '$label: $count. Tap to show only these.',
+      excludeSemantics: true,
+      onTap: onTap,
+      child: KPressable(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: KMotion.base,
+          curve: KMotion.emphasized,
+          constraints: const BoxConstraints(minHeight: 84),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? color : k.surface,
+            borderRadius: BorderRadius.circular(KRadius.lg),
+            border: Border.all(color: selected ? color : k.line, width: 1.5),
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            FittedBox(fit: BoxFit.scaleDown, child: Text('$count', style: KraveoType.displayMd.copyWith(fontSize: 32, height: 1.1, color: selected ? k.onBrand : color))),
+            FittedBox(fit: BoxFit.scaleDown, child: Text(label, maxLines: 1, style: KraveoType.titleMd.copyWith(fontSize: 14, fontWeight: FontWeight.w800, color: selected ? k.onBrand : k.ink))),
+            FittedBox(fit: BoxFit.scaleDown, child: Text(hindi, maxLines: 1, style: KraveoType.caption.copyWith(fontSize: 12, color: selected ? k.onBrand : k.inkMuted))),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// The one yellow highlight on the Menu tab: a big square "+" that opens the add-dish sheet.
+class _AddDishButton extends StatelessWidget {
+  const _AddDishButton({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Semantics(
+      button: true,
+      label: 'Add a new dish',
+      excludeSemantics: true,
+      onTap: onTap,
+      child: KPressable(
+        onTap: onTap,
+        child: Container(
+          width: 72,
+          height: 64,
+          decoration: BoxDecoration(
+            color: k.accent,
+            borderRadius: BorderRadius.circular(KRadius.lg),
+            boxShadow: KShadow.glow(k.accent).map((s) => s.copyWith(color: s.color.withValues(alpha: 0.30))).toList(),
+          ),
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(LucideIcons.plus, size: 28, color: k.onAccent),
+            Text('Add', style: KraveoType.caption.copyWith(color: k.onAccent, fontSize: 13, fontWeight: FontWeight.w800)),
+          ]),
+        ),
       ),
     );
   }
