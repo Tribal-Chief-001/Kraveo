@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.vendor_app"
+    namespace = "site.kraveo.vendor"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -15,7 +15,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.vendor_app"
+        applicationId = "site.kraveo.vendor"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

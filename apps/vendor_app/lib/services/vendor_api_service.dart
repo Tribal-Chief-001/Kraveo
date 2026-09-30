@@ -8,6 +8,18 @@ class VendorApiService {
   static const String _tokenPrefKey = 'kraveo_vendor_jwt_token';
   static String? _cachedToken;
 
+  /// Shown when the server rejects the saved token (HTTP 401) on an authenticated call.
+  static const String sessionExpiredMessage = 'Session expired. Please log in again.';
+
+  /// Set by the session gate. Called when any authenticated request comes back 401, so the
+  /// app can drop the dead token and return to the login screen.
+  static void Function()? onUnauthorized;
+
+  /// A 401 on an authenticated call means the JWT is expired or revoked.
+  static void _checkUnauthorized(http.Response response) {
+    if (response.statusCode == 401) onUnauthorized?.call();
+  }
+
   /// Retrieves stored JWT auth token from SharedPreferences or memory cache
   static Future<String?> getSavedToken() async {
     if (_cachedToken != null && _cachedToken!.isNotEmpty) {
@@ -28,6 +40,15 @@ class VendorApiService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_tokenPrefKey, token);
+    } catch (_) {}
+  }
+
+  /// Forgets the JWT (memory and disk). Called on logout and on session expiry.
+  static Future<void> clearToken() async {
+    _cachedToken = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_tokenPrefKey);
     } catch (_) {}
   }
 
@@ -56,6 +77,7 @@ class VendorApiService {
         body: jsonEncode({'status': newStatus}),
       ).timeout(const Duration(seconds: 5));
 
+      _checkUnauthorized(response);
       if (response.statusCode == 200) {
         debugPrint('🌐 [Vendor API] Successfully synced order $orderId status to $newStatus on AWS EC2 backend.');
         return true;
@@ -78,6 +100,7 @@ class VendorApiService {
         body: jsonEncode({'isAcceptingOrders': isAcceptingOrders}),
       ).timeout(const Duration(seconds: 5));
 
+      _checkUnauthorized(response);
       if (response.statusCode == 200) {
         debugPrint('🏪 [Vendor API] Successfully updated store status to ${isAcceptingOrders ? "OPEN" : "CLOSED"} on AWS backend.');
         return true;
@@ -104,6 +127,7 @@ class VendorApiService {
         body: jsonEncode(bodyMap),
       ).timeout(const Duration(seconds: 5));
 
+      _checkUnauthorized(response);
       if (response.statusCode == 200) {
         debugPrint('📦 [Vendor API] Dish $itemId stock/price updated successfully on backend.');
         return true;
@@ -122,6 +146,7 @@ class VendorApiService {
 
       final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
 
+      _checkUnauthorized(response);
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
         debugPrint('📡 [Vendor API] Fetched ${data.length} active orders from backend.');

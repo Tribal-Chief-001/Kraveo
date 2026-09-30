@@ -7,6 +7,8 @@ import '../config/api_config.dart';
 import '../services/permission_service.dart';
 import '../services/vendor_api_service.dart';
 import '../services/order_queue_service.dart';
+import '../session/session_controller.dart';
+import '../models/partner_session.dart';
 import '../models/order_model.dart';
 import '../models/dish_model.dart';
 import 'kitchen_queue.dart';
@@ -288,7 +290,33 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     );
   }
 
+  /// Asks first (a mis-tap would stop order alerts on this phone), then signs out. The session
+  /// gate swaps to the login screen once the controller reports signed-out.
+  Future<void> _confirmLogout() async {
+    final controller = SessionScope.maybeOf(context);
+    if (controller == null) return;
+    final confirmed = await showConfirmSheet(
+      context,
+      icon: LucideIcons.logOut,
+      title: 'Log out?',
+      hindiTitle: 'लॉग आउट करें?',
+      message: 'You will not get new order alerts on this phone until you log in again.\nदोबारा लॉग इन करने तक इस फ़ोन पर नए ऑर्डर नहीं आएंगे।',
+      safeLabel: 'Stay logged in',
+      safeSublabel: 'लॉग इन रहें',
+      confirmLabel: 'Yes, log out',
+      confirmSublabel: 'हाँ, लॉग आउट',
+    );
+    if (!confirmed || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Logging out…  ·  लॉग आउट हो रहा है'), duration: Duration(seconds: 6)));
+    await controller.logout();
+    messenger.hideCurrentSnackBar();
+  }
+
   void _openHelpSheet() {
+    final partner = SessionScope.maybeOf(context)?.session;
     showKSheet<void>(
       context,
       builder: (sheetContext) {
@@ -336,15 +364,41 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
                 _triggerIncomingOrderAlert();
               },
             ),
+            if (partner != null) ...[
+              const SizedBox(height: 20),
+              _AccountCard(partner: partner),
+              const SizedBox(height: 12),
+              KButton(
+                key: const ValueKey('logout-button'),
+                label: 'Log out',
+                sublabel: 'लॉग आउट',
+                icon: LucideIcons.logOut,
+                kind: KButtonKind.ghost,
+                large: true,
+                onPressed: () {
+                  Navigator.of(sheetContext).pop();
+                  _confirmLogout();
+                },
+              ),
+            ],
           ]),
         );
       },
     );
   }
 
+  /// Owner name under the restaurant name (or the phone when the account is named after it).
+  static String _headerSubtitle(PartnerSession? partner) {
+    if (partner == null) return 'Kraveo Restaurant Partner';
+    final owner = partner.name.trim();
+    if (owner.isNotEmpty && owner != partner.restaurantName) return owner;
+    return (partner.phone?.trim().isNotEmpty ?? false) ? partner.phone! : 'Kraveo Restaurant Partner';
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.k;
+    final partner = SessionScope.maybeOf(context)?.session;
     final activeCount = _orders.where((o) => o.status == OrderStatus.preparing || o.status == OrderStatus.readyForPickup).length;
 
     return Scaffold(
@@ -368,8 +422,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('FC Night Mess', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
-                        Text('Sharma Dhaba · Campus Hub', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
+                        Text(partner?.restaurantName ?? 'Your restaurant', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
+                        Text(_headerSubtitle(partner), maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
                       ],
                     ),
                   ),
@@ -433,6 +487,33 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
           const VNavItem(icon: LucideIcons.wallet, label: 'Earnings', hindi: 'कमाई'),
         ],
       ),
+    );
+  }
+}
+
+/// "Logged in as" card inside the help sheet: who is signed in on this phone.
+class _AccountCard extends StatelessWidget {
+  const _AccountCard({required this.partner});
+
+  final PartnerSession partner;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final phone = partner.phone?.trim() ?? '';
+    return KCard(
+      elevated: false,
+      child: Row(children: [
+        KAvatar(id: partner.avatarId, size: 48),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Logged in as · लॉग इन', style: KraveoType.label.copyWith(color: k.inkMuted, fontSize: 12.5)),
+            Text(partner.restaurantName, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
+            if (phone.isNotEmpty) Text(phone, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
+          ]),
+        ),
+      ]),
     );
   }
 }

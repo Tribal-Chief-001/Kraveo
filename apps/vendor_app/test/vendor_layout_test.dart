@@ -11,6 +11,7 @@ import 'package:vendor_app/screens/stock_manager.dart';
 import 'package:vendor_app/widgets/add_dish_modal.dart';
 import 'package:vendor_app/widgets/incoming_order_dialog.dart';
 import 'package:vendor_app/widgets/order_card.dart';
+import 'support/signed_in.dart';
 
 /// The vendor app must survive the smallest phone we support (360x640) at 1.3x system
 /// font scale: Flutter reports any RenderFlex overflow as a test failure, so simply
@@ -62,7 +63,9 @@ void main() {
     group('no overflow at 360x640, text x$scale', () {
       testWidgets('vendor home: Orders, Menu and Earnings tabs', (tester) async {
         smallPhone(tester, textScale: scale);
-        await tester.pumpWidget(const KraveoVendorApp());
+        mockSignedInPrefs();
+        await tester.pumpWidget(KraveoVendorApp(auth: SignedInAuth()));
+        await tester.pump();
         await tester.pump(const Duration(seconds: 1));
 
         expect(find.text('OPEN'), findsOneWidget);
@@ -165,7 +168,9 @@ void main() {
 
   testWidgets('closing the store asks first; opening does not', (tester) async {
     smallPhone(tester, textScale: 1.0);
-    await tester.pumpWidget(const KraveoVendorApp());
+    mockSignedInPrefs();
+    await tester.pumpWidget(KraveoVendorApp(auth: SignedInAuth()));
+    await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
     await tester.tap(find.text('OPEN'));
