@@ -34,6 +34,7 @@ const allowedOrigins = [
   // The deployed Super Admin portal uses this Vercel origin when the optional
   // CLIENT_URL/ADMIN_URL environment variables are not present on EC2.
   'https://kraveo.vercel.app',
+  'https://admin.kraveo.site',
   'http://localhost:3000',
   'http://localhost:5173',
 ]
