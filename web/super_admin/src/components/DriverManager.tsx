@@ -1,235 +1,173 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { Bike, ChevronRight, Clock, Phone, SearchX, Star, Users, Wallet, Zap } from 'lucide-react';
 import { DriverPartner } from '../types';
-import { Bike, Shield, Star, Clock, Phone, Award, Search, CheckCircle2, AlertCircle } from 'lucide-react';
+import { inr } from '../lib/tokens';
+import { AnimatedNumber } from './ui/AnimatedNumber';
+import { Avatar } from './ui/Avatar';
+import { Drawer } from './ui/Drawer';
+import { EmptyState } from './ui/EmptyState';
+import { KpiTile } from './ui/KpiTile';
+import { SkeletonCard } from './ui/Skeleton';
 
 interface DriverManagerProps {
   drivers: DriverPartner[];
   onToggleStatus?: (driverId: string) => void;
+  loading?: boolean;
+  query?: string;
+  onClearQuery?: () => void;
 }
 
-export const DriverManager: React.FC<DriverManagerProps> = ({ drivers }) => {
-  const [filter, setFilter] = useState<'ALL' | 'ONLINE' | 'IN_TRANSIT' | 'OFFLINE'>('ALL');
-  const [search, setSearch] = useState('');
-  const [selectedDriver, setSelectedDriver] = useState<DriverPartner | null>(null);
+type DutyFilter = 'ALL' | DriverPartner['dutyStatus'];
 
-  const filtered = drivers.filter((d) => {
-    const matchesFilter = filter === 'ALL' || d.dutyStatus === filter;
-    const matchesSearch = d.name.toLowerCase().includes(search.toLowerCase()) || 
-                          d.studentRegNo.toLowerCase().includes(search.toLowerCase()) ||
-                          d.runnerCode.toLowerCase().includes(search.toLowerCase());
-    return matchesFilter && matchesSearch;
-  });
+const DUTY: Record<DriverPartner['dutyStatus'], { label: string; dot: string; text: string; bg: string; live: boolean }> = {
+  ONLINE: { label: 'Online', dot: 'bg-kraveo-g400', text: 'text-kraveo-g300', bg: 'bg-kraveo-g400/15', live: true },
+  IN_TRANSIT: { label: 'In transit', dot: 'bg-kraveo-status-pickedUp', text: 'text-kraveo-status-pickedUp', bg: 'bg-kraveo-status-pickedUp/15', live: true },
+  OFFLINE: { label: 'Offline', dot: 'bg-kraveo-ink3', text: 'text-kraveo-ink2', bg: 'bg-kraveo-surface2', live: false },
+};
 
-  const activeCount = drivers.filter((d) => d.dutyStatus === 'ONLINE' || d.dutyStatus === 'IN_TRANSIT').length;
+const DutyPill: React.FC<{ status: DriverPartner['dutyStatus'] }> = ({ status }) => {
+  const d = DUTY[status] ?? DUTY.OFFLINE;
+  return (
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold ${d.bg} ${d.text}`}>
+      <span className={`k-dot ${d.dot} ${d.live ? 'k-dot-live' : ''}`} aria-hidden="true" />{d.label}
+    </span>
+  );
+};
+
+const dash = (value?: string): string => (value && value.trim() ? value : '-');
+
+const DetailRow: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+  <div className="k-inset px-4 py-3">
+    <p className="k-label">{label}</p>
+    <div className="mt-0.5 break-words text-sm font-bold text-kraveo-ink">{children}</div>
+  </div>
+);
+
+export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, loading = false, query = '', onClearQuery }) => {
+  const [filter, setFilter] = useState<DutyFilter>('ALL');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedDriver = drivers.find((d) => d.id === selectedId) ?? null;
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return drivers.filter((d) => {
+      const matchesFilter = filter === 'ALL' || d.dutyStatus === filter;
+      const matchesSearch = !q || d.name.toLowerCase().includes(q) || d.studentRegNo.toLowerCase().includes(q) || d.runnerCode.toLowerCase().includes(q);
+      return matchesFilter && matchesSearch;
+    });
+  }, [drivers, filter, query]);
+
+  const counts = useMemo(() => ({
+    ALL: drivers.length,
+    ONLINE: drivers.filter((d) => d.dutyStatus === 'ONLINE').length,
+    IN_TRANSIT: drivers.filter((d) => d.dutyStatus === 'IN_TRANSIT').length,
+    OFFLINE: drivers.filter((d) => d.dutyStatus === 'OFFLINE').length,
+  }), [drivers]);
+
+  const hasData = drivers.length > 0;
+  const activeCount = counts.ONLINE + counts.IN_TRANSIT;
   const totalPayoutToday = drivers.reduce((sum, d) => sum + d.totalEarningsToday, 0);
   const totalOrdersToday = drivers.reduce((sum, d) => sum + d.ordersToday, 0);
+  const timed = drivers.filter((d) => d.avgCompletionTimeMinutes > 0);
+  const avgCompletion = timed.length ? timed.reduce((sum, d) => sum + d.avgCompletionTimeMinutes, 0) / timed.length : null;
+  const initialLoad = loading && !hasData;
 
   return (
-    <div className="space-y-6">
-      {/* Top Header & Summary Cards */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <Bike className="w-5 h-5 text-[#fdd400]" /> Delivery Partner & Runner Ops Dashboard
-          </h2>
-          <p className="text-xs text-gray-400">Track registered delivery partners, earnings, completion speeds, and campus gate clearance</p>
-        </div>
+    <div className="space-y-5">
+      <section aria-label="Runner summary" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+        <KpiTile index={0} loading={initialLoad} label="On duty" icon={Users}
+          value={<><AnimatedNumber value={hasData ? activeCount : null} />{hasData && <span className="text-xl text-kraveo-ink3"> / {drivers.length}</span>}</>}
+          note={hasData ? `${counts.IN_TRANSIT} delivering now` : 'No runners registered'} />
+        <KpiTile index={1} loading={initialLoad} label="Trips today" icon={Zap} tone="text-kraveo-status-pickedUp" toneBg="bg-kraveo-status-pickedUp/15"
+          value={<AnimatedNumber value={hasData ? totalOrdersToday : null} />} note="Completed by all runners" />
+        <KpiTile index={2} loading={initialLoad} label="Payouts today" icon={Wallet} tone="text-kraveo-status-ready" toneBg="bg-kraveo-status-ready/15"
+          value={<AnimatedNumber value={hasData ? totalPayoutToday : null} prefix={'₹'} />} note="Sum of runner earnings" />
+        <KpiTile index={3} loading={initialLoad} label="Avg completion" icon={Clock} tone="text-kraveo-status-atGate" toneBg="bg-kraveo-status-atGate/15"
+          value={<AnimatedNumber value={avgCompletion} decimals={1} suffix={avgCompletion === null ? '' : ' min'} />} note={avgCompletion === null ? 'No completed trips reported' : `Across ${timed.length} runner${timed.length === 1 ? '' : 's'}`} />
+      </section>
+
+      <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 scrollbar-none sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0" role="group" aria-label="Filter by duty status">
+        {([['ALL', 'All runners'], ['ONLINE', 'Online'], ['IN_TRANSIT', 'In transit'], ['OFFLINE', 'Offline']] as const).map(([id, label]) => (
+          <button key={id} className="k-chip" aria-pressed={filter === id} onClick={() => setFilter(id)}>
+            {label}
+            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-extrabold tabular-nums ${filter === id ? 'bg-kraveo-g400/25' : 'bg-kraveo-line/70'}`}>{counts[id]}</span>
+          </button>
+        ))}
       </div>
 
-      {/* Metric Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="stitch-card p-4 rounded-2xl border border-[#242f46] space-y-1">
-          <div className="text-[11px] font-bold text-gray-400 uppercase">Active Runners on Duty</div>
-          <div className="text-2xl font-extrabold text-white flex items-center justify-between">
-            <span>{activeCount} / {drivers.length}</span>
-            <span className="flex h-3 w-3 relative">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
-            </span>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 2xl:grid-cols-3">
+        {initialLoad && Array.from({ length: 6 }).map((_, index) => <SkeletonCard key={index} lines={2} />)}
+        {!initialLoad && !hasData && <div className="k-card sm:col-span-2 2xl:col-span-3"><EmptyState icon={Bike} title="No runners yet" description="Runner partners appear here once they register through the driver app." /></div>}
+        {!initialLoad && hasData && filtered.length === 0 && (
+          <div className="k-card sm:col-span-2 2xl:col-span-3">
+            <EmptyState icon={SearchX} title="No runners match" description="Nothing matches the current filter and search." action={<button className="k-btn-ghost" onClick={() => { setFilter('ALL'); onClearQuery?.(); }}>Clear filters</button>} />
           </div>
-          <p className="text-[11px] text-[#91d78a]">Available for dispatch</p>
-        </div>
-
-        <div className="stitch-card p-4 rounded-2xl border border-[#242f46] space-y-1">
-          <div className="text-[11px] font-bold text-gray-400 uppercase">Deliveries Completed Today</div>
-          <div className="text-2xl font-extrabold text-[#fdd400]">
-            {totalOrdersToday} trips
-          </div>
-          <p className="text-[11px] text-gray-400">Hostel gate handshakes</p>
-        </div>
-
-        <div className="stitch-card p-4 rounded-2xl border border-[#242f46] space-y-1">
-          <div className="text-[11px] font-bold text-gray-400 uppercase">Total Runner Payouts Today</div>
-          <div className="text-2xl font-extrabold text-emerald-400">
-            ₹{totalPayoutToday}
-          </div>
-          <p className="text-[11px] text-emerald-400">Flat ₹40 per delivery</p>
-        </div>
-
-        <div className="stitch-card p-4 rounded-2xl border border-[#242f46] space-y-1">
-          <div className="text-[11px] font-bold text-gray-400 uppercase">Avg Delivery Speed</div>
-          <div className="text-2xl font-extrabold text-white flex items-center gap-1.5">
-            <Clock className="w-5 h-5 text-sky-400" /> 18.2 mins
-          </div>
-          <p className="text-[11px] text-sky-400">Dhaba to Hostel Gate</p>
-        </div>
-      </div>
-
-      {/* Filter & Search Bar */}
-      <div className="flex flex-col md:flex-row items-center justify-between gap-4 bg-[#151c2c] p-3 rounded-2xl border border-[#242f46]">
-        <div className="flex items-center gap-2">
-          {(['ALL', 'ONLINE', 'IN_TRANSIT', 'OFFLINE'] as const).map((st) => (
-            <button
-              key={st}
-              onClick={() => setFilter(st)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all ${
-                filter === st
-                  ? 'bg-[#00450d] text-white border border-[#91d78a]/40 shadow-md'
-                  : 'bg-[#1b1c1c] text-gray-400 hover:text-white border border-[#242f46]'
-              }`}
-            >
-              {st === 'ALL' ? 'ALL RUNNERS' : st.replace('_', ' ')}
-            </button>
-          ))}
-        </div>
-
-        <div className="relative w-full md:w-64">
-          <Search className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by Name, Reg No, or Runner ID..."
-            className="w-full bg-[#1b1c1c] border border-[#242f46] rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-[#fdd400]"
-          />
-        </div>
-      </div>
-
-      {/* Drivers Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {filtered.map((d) => (
-          <div 
-            key={d.id} 
-            onClick={() => setSelectedDriver(d)}
-            className="stitch-card rounded-2xl p-5 border border-[#242f46] space-y-4 hover:border-[#fdd400]/50 cursor-pointer transition-all"
+        )}
+        {filtered.map((d, index) => (
+          <div
+            key={d.id}
+            role="button"
+            tabIndex={0}
+            aria-label={`Open details for ${d.name}`}
+            onClick={() => setSelectedId(d.id)}
+            onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedId(d.id); } }}
+            className="k-card k-card-hover k-reveal cursor-pointer p-5 text-left"
+            style={{ ['--i' as string]: Math.min(index, 10) }}
           >
-            {/* Header / Avatar */}
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-3">
-                <img 
-                  src={d.avatarUrl} 
-                  alt={d.name} 
-                  className="w-12 h-12 rounded-full object-cover border-2 border-[#fdd400]"
-                />
-                <div>
-                  <h3 className="font-extrabold text-white text-base leading-snug">{d.name}</h3>
-                  <p className="text-xs text-[#fdd400] font-bold">VIT Reg: {d.studentRegNo}</p>
-                </div>
+            <div className="flex items-start gap-3.5">
+              <Avatar name={d.name} imageUrl={d.avatarUrl} size="lg" />
+              <div className="min-w-0 flex-1">
+                <h3 className="truncate font-display text-lg font-bold leading-tight text-kraveo-ink">{d.name}</h3>
+                <p className="truncate text-xs text-kraveo-ink3">{d.studentRegNo ? `Reg ${d.studentRegNo}` : 'Reg no. not provided'}</p>
+                <div className="mt-2"><DutyPill status={d.dutyStatus} /></div>
               </div>
-
-              <span className={`px-2.5 py-1 rounded-xl text-[10px] font-black border ${
-                d.dutyStatus === 'ONLINE' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' :
-                d.dutyStatus === 'IN_TRANSIT' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
-                'bg-gray-500/10 text-gray-400 border-gray-500/30'
-              }`}>
-                {d.dutyStatus.replace('_', ' ')}
-              </span>
+              <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-kraveo-ink3" aria-hidden="true" />
             </div>
-
-            {/* Runner Code & Vehicle Details */}
-            <div className="bg-[#1b1c1c] p-3 rounded-xl border border-[#242f46] space-y-1 text-xs">
-              <div className="flex justify-between text-gray-300">
-                <span className="text-gray-500">Runner Pass Code:</span>
-                <span className="font-mono font-bold text-[#fdd400]">{d.runnerCode}</span>
-              </div>
-              <div className="flex justify-between text-gray-300">
-                <span className="text-gray-500">Vehicle Registered:</span>
-                <span className="font-bold text-white">{d.vehicleType}</span>
-              </div>
-              <div className="flex justify-between text-gray-300">
-                <span className="text-gray-500">Emergency Phone:</span>
-                <span className="font-mono text-emerald-400">{d.emergencyPhone}</span>
-              </div>
-            </div>
-
-            {/* Performance Stats Metrics Bar */}
-            <div className="grid grid-cols-3 gap-2 pt-2 border-t border-[#242f46] text-center">
-              <div className="bg-[#1b1c1c] p-2 rounded-xl">
-                <div className="text-[10px] text-gray-500 font-bold">Trips Today</div>
-                <div className="text-sm font-extrabold text-white">{d.ordersToday}</div>
-              </div>
-              <div className="bg-[#1b1c1c] p-2 rounded-xl">
-                <div className="text-[10px] text-gray-500 font-bold">Payout</div>
-                <div className="text-sm font-extrabold text-emerald-400">₹{d.totalEarningsToday}</div>
-              </div>
-              <div className="bg-[#1b1c1c] p-2 rounded-xl">
-                <div className="text-[10px] text-gray-500 font-bold">Rating</div>
-                <div className="text-sm font-extrabold text-[#fdd400] flex items-center justify-center gap-0.5">
-                  <Star className="w-3 h-3 fill-[#fdd400]" /> {d.rating}
-                </div>
+            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <div className="k-inset px-2 py-2.5"><p className="k-label !text-[10px]">Trips</p><p className="k-num text-lg text-kraveo-ink">{d.ordersToday}</p></div>
+              <div className="k-inset px-2 py-2.5"><p className="k-label !text-[10px]">Payout</p><p className="k-num text-lg text-kraveo-ink">{inr(d.totalEarningsToday)}</p></div>
+              <div className="k-inset px-2 py-2.5"><p className="k-label !text-[10px]">Rating</p>
+                <p className="k-num flex items-center justify-center gap-1 text-lg text-kraveo-ink">
+                  {d.rating > 0 ? <><Star className="h-3.5 w-3.5 fill-kraveo-yellow text-kraveo-yellow" aria-hidden="true" />{d.rating.toFixed(1)}</> : <span className="text-kraveo-ink3">New</span>}
+                </p>
               </div>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Detailed Driver Modal Inspector Drawer */}
-      {selectedDriver && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="stitch-card bg-[#151c2c] border border-[#242f46] rounded-2xl w-full max-w-lg p-6 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-[#242f46] pb-3">
-              <div className="flex items-center gap-3">
-                <img src={selectedDriver.avatarUrl} className="w-12 h-12 rounded-full border-2 border-[#fdd400]" />
-                <div>
-                  <h3 className="text-lg font-bold text-white">{selectedDriver.name}</h3>
-                  <p className="text-xs text-[#fdd400]">Runner Code: {selectedDriver.runnerCode}</p>
-                </div>
-              </div>
-              <button onClick={() => setSelectedDriver(null)} className="text-gray-400 hover:text-white font-extrabold text-lg">
-                ✕
-              </button>
+      <Drawer
+        open={Boolean(selectedDriver)}
+        onClose={() => setSelectedId(null)}
+        title={selectedDriver?.name ?? 'Runner'}
+        subtitle={selectedDriver?.runnerCode ? `Runner code ${selectedDriver.runnerCode}` : 'Runner details'}
+        icon={Bike}
+        footer={<button onClick={() => setSelectedId(null)} className="k-btn-ghost mb-1 w-full">Close</button>}
+      >
+        {selectedDriver && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-4 pb-2">
+              <Avatar name={selectedDriver.name} imageUrl={selectedDriver.avatarUrl} size="lg" />
+              <div><DutyPill status={selectedDriver.dutyStatus} /><p className="mt-2 text-xs text-kraveo-ink3">Joined {new Date(selectedDriver.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</p></div>
             </div>
-
-            <div className="space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-[#1b1c1c] p-3 rounded-xl border border-[#242f46]">
-                  <span className="text-gray-500 block">VIT Student Reg No</span>
-                  <span className="font-bold text-white text-sm">{selectedDriver.studentRegNo}</span>
-                </div>
-                <div className="bg-[#1b1c1c] p-3 rounded-xl border border-[#242f46]">
-                  <span className="text-gray-500 block">Payout UPI Address</span>
-                  <span className="font-mono text-emerald-400 text-sm">{selectedDriver.upiId}</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-[#1b1c1c] p-3 rounded-xl border border-[#242f46]">
-                  <span className="text-gray-500 block">Avg Completion Speed</span>
-                  <span className="font-bold text-sky-400 text-sm">{selectedDriver.avgCompletionTimeMinutes} mins</span>
-                </div>
-                <div className="bg-[#1b1c1c] p-3 rounded-xl border border-[#242f46]">
-                  <span className="text-gray-500 block">On-Time Success Rate</span>
-                  <span className="font-bold text-emerald-400 text-sm">{selectedDriver.onTimeRatePercent}%</span>
-                </div>
-              </div>
-
-              <div className="bg-[#1b1c1c] p-3 rounded-xl border border-[#242f46]">
-                <span className="text-gray-500 block">Vehicle Registration & Plate</span>
-                <span className="font-bold text-white">{selectedDriver.vehicleType} ({selectedDriver.vehicleRegNo})</span>
-              </div>
+            <div className="grid grid-cols-2 gap-3">
+              <DetailRow label="Avg completion">{selectedDriver.avgCompletionTimeMinutes > 0 ? `${selectedDriver.avgCompletionTimeMinutes} min` : '-'}</DetailRow>
+              <DetailRow label="On-time rate">{selectedDriver.onTimeRatePercent > 0 ? `${selectedDriver.onTimeRatePercent}%` : '-'}</DetailRow>
+              <DetailRow label="Trips today">{selectedDriver.ordersToday}</DetailRow>
+              <DetailRow label="Earned today">{inr(selectedDriver.totalEarningsToday)}</DetailRow>
             </div>
-
-            <div className="pt-2 flex justify-end">
-              <button
-                onClick={() => setSelectedDriver(null)}
-                className="px-5 py-2 bg-[#00450d] text-white font-bold rounded-xl text-xs hover:bg-[#1b5e20] border border-[#91d78a]/30"
-              >
-                Close Inspector
-              </button>
-            </div>
+            <DetailRow label="Student reg no.">{dash(selectedDriver.studentRegNo)}</DetailRow>
+            <DetailRow label="Phone">
+              {selectedDriver.phone ? <a className="inline-flex items-center gap-1.5 text-kraveo-g300 hover:underline" href={`tel:${selectedDriver.phone}`}><Phone className="h-3.5 w-3.5" aria-hidden="true" />{selectedDriver.phone}</a> : '-'}
+            </DetailRow>
+            <DetailRow label="Emergency phone">
+              {selectedDriver.emergencyPhone ? <a className="inline-flex items-center gap-1.5 text-kraveo-g300 hover:underline" href={`tel:${selectedDriver.emergencyPhone}`}><Phone className="h-3.5 w-3.5" aria-hidden="true" />{selectedDriver.emergencyPhone}</a> : '-'}
+            </DetailRow>
+            <DetailRow label="Vehicle">{selectedDriver.vehicleType}{selectedDriver.vehicleRegNo !== 'Not registered' ? ` (${selectedDriver.vehicleRegNo})` : ''}</DetailRow>
+            <DetailRow label="Payout UPI"><span className="font-mono">{dash(selectedDriver.upiId)}</span></DetailRow>
           </div>
-        </div>
-      )}
+        )}
+      </Drawer>
     </div>
   );
 };

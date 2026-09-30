@@ -1,78 +1,162 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Bike, MapPinned, PanelLeftClose, PanelLeftOpen, ShoppingBag, Store, TrendingUp, X } from 'lucide-react';
 import { TabType } from '../types';
-import { MapPin, ShoppingBag, Store, TrendingUp, Cpu, Bike } from 'lucide-react';
+import { LogoBadge, LogoMark } from './ui/Logo';
 
 interface SidebarProps {
   activeTab: TabType;
   setActiveTab: (tab: TabType) => void;
+  isLiveConnected: boolean;
+  mobileOpen: boolean;
+  onCloseMobile: () => void;
+  /** Optional live counters shown on nav items (only rendered when > 0). */
+  badges?: Partial<Record<TabType, number>>;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
-  const navItems = [
-    { id: 'map', label: 'Live Map Console', icon: MapPin },
-    { id: 'orders', label: 'Order Command Matrix', icon: ShoppingBag },
-    { id: 'vendors', label: 'Dhabas & Menus', icon: Store },
-    { id: 'drivers', label: 'Driver Partners', icon: Bike },
-    { id: 'analytics', label: 'Campus Analytics', icon: TrendingUp },
-  ];
+const NAV_ITEMS: Array<{ id: TabType; label: string; hint: string; icon: React.ElementType }> = [
+  { id: 'map', label: 'Live map', hint: 'Dispatch and runner positions', icon: MapPinned },
+  { id: 'orders', label: 'Orders', hint: 'Every order and its status', icon: ShoppingBag },
+  { id: 'vendors', label: 'Vendors', hint: 'Dhabas and availability', icon: Store },
+  { id: 'drivers', label: 'Drivers', hint: 'Runner partners and duty', icon: Bike },
+  { id: 'analytics', label: 'Analytics', hint: 'Campus delivery numbers', icon: TrendingUp },
+];
+
+const COLLAPSE_KEY = 'kraveo_admin_sidebar_collapsed';
+
+const readCollapsed = (): boolean => {
+  try { return window.localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; }
+};
+
+interface BodyProps extends Pick<SidebarProps, 'activeTab' | 'setActiveTab' | 'isLiveConnected' | 'badges'> {
+  expanded: boolean;
+  onNavigate?: () => void;
+}
+
+const SidebarBody: React.FC<BodyProps> = ({ activeTab, setActiveTab, isLiveConnected, badges, expanded, onNavigate }) => (
+  <>
+    <nav aria-label="Primary" className="flex-1 space-y-1 px-3 py-2">
+      {expanded && <p className="k-label px-3 pb-2 pt-1">Operations</p>}
+      {NAV_ITEMS.map((item, index) => {
+        const Icon = item.icon;
+        const isActive = activeTab === item.id;
+        const count = badges?.[item.id] ?? 0;
+        return (
+          <button
+            key={item.id}
+            onClick={() => { setActiveTab(item.id); onNavigate?.(); }}
+            aria-label={item.label}
+            aria-current={isActive ? 'page' : undefined}
+            title={expanded ? undefined : item.label}
+            style={{ ['--i' as string]: index }}
+            className={`k-reveal group relative flex w-full items-center gap-3 rounded-k-sm px-3 py-2.5 text-left text-sm font-bold transition-all duration-fast ease-emphasized ${expanded ? '' : 'justify-center'} ${isActive ? 'bg-kraveo-g400/15 text-kraveo-g300' : 'text-kraveo-ink2 hover:bg-kraveo-surface2 hover:text-kraveo-ink'}`}
+          >
+            {isActive && <span className="absolute -left-3 top-2 h-[calc(100%-1rem)] w-1 rounded-r-full bg-kraveo-g400" aria-hidden="true" />}
+            <Icon className={`h-5 w-5 shrink-0 transition-transform duration-base ease-spring ${isActive ? 'scale-110' : 'group-hover:scale-105'}`} aria-hidden="true" />
+            {expanded && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
+            {count > 0 && (
+              expanded
+                ? <span className="rounded-full bg-kraveo-g400/20 px-2 py-0.5 text-[11px] font-extrabold tabular-nums text-kraveo-g300">{count}</span>
+                : <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-kraveo-g400" aria-hidden="true" />
+            )}
+            {!expanded && (
+              <span role="tooltip" className="pointer-events-none absolute left-full z-50 ml-3 hidden whitespace-nowrap rounded-k-sm border border-kraveo-line bg-kraveo-surface2 px-3 py-1.5 text-xs font-bold text-kraveo-ink shadow-k-lift group-hover:block group-focus-visible:block">
+                {item.label}{count > 0 ? ` (${count})` : ''}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </nav>
+
+    <div className="px-3 pb-3">
+      <div className={`flex items-center gap-3 rounded-k-md border border-kraveo-line bg-kraveo-night/60 p-3 ${expanded ? '' : 'justify-center'}`} role="status" aria-live="polite" title={isLiveConnected ? 'Live connection active' : 'Live connection lost'}>
+        <span className="relative flex h-2.5 w-2.5 shrink-0" aria-hidden="true">
+          {isLiveConnected && <span className="absolute inset-0 animate-ring-out rounded-full bg-kraveo-g400" />}
+          <span className={`relative h-2.5 w-2.5 rounded-full ${isLiveConnected ? 'bg-kraveo-g400' : 'bg-kraveo-danger'}`} />
+        </span>
+        {expanded ? (
+          <div className="min-w-0">
+            <p className={`text-xs font-bold ${isLiveConnected ? 'text-kraveo-ink' : 'text-kraveo-danger'}`}>{isLiveConnected ? 'Live connection' : 'Disconnected'}</p>
+            <p className="truncate text-[11px] text-kraveo-ink3">{isLiveConnected ? 'Receiving order and runner updates' : 'Trying to reconnect to the server'}</p>
+          </div>
+        ) : <span className="sr-only">{isLiveConnected ? 'Live connection active' : 'Live connection lost'}</span>}
+      </div>
+    </div>
+  </>
+);
+
+export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isLiveConnected, mobileOpen, onCloseMobile, badges }) => {
+  const [collapsed, setCollapsed] = useState<boolean>(readCollapsed);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  const toggleCollapsed = () => {
+    setCollapsed((current) => {
+      const next = !current;
+      try { window.localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0'); } catch { /* preference is optional */ }
+      return next;
+    });
+  };
+
+  // Mobile drawer: Esc to close, lock page scroll, move focus in.
+  useEffect(() => {
+    if (!mobileOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onCloseMobile(); };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [mobileOpen, onCloseMobile]);
 
   return (
-    <aside className="flex w-full flex-col justify-between border-b border-[#242f46] bg-[#1b1c1c] p-3 lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:border-b-0 lg:border-r lg:p-4">
-      <div>
-        {/* Kraveo Logo Brand */}
-        <div className="mb-3 flex items-center space-x-3 border-b border-[#242f46] px-2 py-2 sm:mb-6 sm:py-3">
-          <img 
-            src="/logo-bgremove.png" 
-            alt="Kraveo" 
-            className="h-12 w-auto object-contain drop-shadow-md" 
-          />
-          <div>
-            <p className="text-[10px] uppercase font-extrabold text-[#91d78a] tracking-wider">Ops Console</p>
-            <p className="text-[10px] uppercase font-bold text-gray-400 tracking-widest">VIT Bhopal</p>
-          </div>
+    <>
+      {/* Desktop icon rail */}
+      <aside
+        aria-label="Sidebar"
+        className={`sticky top-0 hidden h-screen shrink-0 flex-col border-r border-kraveo-line bg-kraveo-surface transition-[width] duration-base ease-emphasized lg:flex ${collapsed ? 'w-[76px]' : 'w-64'}`}
+      >
+        <div className={`flex h-[72px] items-center border-b border-kraveo-line ${collapsed ? 'justify-center px-2' : 'px-4'}`}>
+          {collapsed ? <LogoMark size={44} /> : (
+            <div className="flex min-w-0 items-center gap-3">
+              <LogoMark size={44} />
+              <div className="min-w-0">
+                <p className="truncate font-display text-base font-extrabold leading-tight tracking-tight text-kraveo-ink">Kraveo</p>
+                <p className="truncate text-[11px] font-semibold text-kraveo-ink3">Ops console · VIT Bhopal</p>
+              </div>
+            </div>
+          )}
         </div>
+        <SidebarBody activeTab={activeTab} setActiveTab={setActiveTab} isLiveConnected={isLiveConnected} badges={badges} expanded={!collapsed} />
+        <div className="border-t border-kraveo-line p-3">
+          <button
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!collapsed}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className={`flex w-full items-center gap-3 rounded-k-sm px-3 py-2.5 text-sm font-bold text-kraveo-ink3 transition-colors hover:bg-kraveo-surface2 hover:text-kraveo-ink ${collapsed ? 'justify-center' : ''}`}
+          >
+            {collapsed ? <PanelLeftOpen className="h-5 w-5" aria-hidden="true" /> : <PanelLeftClose className="h-5 w-5" aria-hidden="true" />}
+            {!collapsed && <span>Collapse</span>}
+          </button>
+        </div>
+      </aside>
 
-        {/* Navigation Section */}
-        <div className="space-y-1.5">
-          <p className="mb-2 hidden px-3 text-[10px] font-bold uppercase tracking-widest text-gray-400 sm:block">Core Operations</p>
-          <div className="flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1.5">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id as TabType)}
-                aria-label={item.label}
-                className={`flex min-w-max items-center space-x-2 rounded-xl px-3 py-2.5 text-xs font-bold tracking-wide transition-all duration-200 lg:w-full lg:space-x-3 lg:py-3 ${
-                  isActive
-                    ? 'bg-gradient-to-r from-[#00450d] to-[#1b5e20] text-white shadow-md shadow-[#00450d]/40 border border-[#91d78a]/30'
-                    : 'text-gray-400 hover:text-white hover:bg-[#151c2c]'
-                }`}
-              >
-                <Icon className={`w-5 h-5 ${isActive ? 'text-[#fdd400]' : 'text-gray-400'}`} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-          </div>
+      {/* Mobile drawer */}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-[60] lg:hidden">
+          <div className="absolute inset-0 animate-fade-in bg-black/70 backdrop-blur-sm" onClick={onCloseMobile} aria-hidden="true" />
+          <aside role="dialog" aria-modal="true" aria-label="Navigation" className="absolute inset-y-0 left-0 flex w-[280px] max-w-[85vw] animate-slide-in-left flex-col border-r border-kraveo-line bg-kraveo-surface shadow-k-lift">
+            <div className="flex h-[72px] items-center justify-between gap-3 border-b border-kraveo-line px-4">
+              <LogoBadge imgClassName="h-9" />
+              <button ref={closeRef} aria-label="Close navigation" onClick={onCloseMobile} className="k-icon-btn"><X className="h-4 w-4" aria-hidden="true" /></button>
+            </div>
+            <SidebarBody activeTab={activeTab} setActiveTab={setActiveTab} isLiveConnected={isLiveConnected} badges={badges} expanded onNavigate={onCloseMobile} />
+          </aside>
         </div>
-      </div>
-
-      {/* System Engine Card */}
-      <div className="mt-3 hidden space-y-2 rounded-xl border border-[#242f46] bg-[#151c2c] p-3 lg:block">
-        <div className="flex items-center justify-between text-xs text-gray-400">
-          <span className="flex items-center gap-1.5 font-semibold text-white">
-            <Cpu className="w-4 h-4 text-[#fdd400]" /> Engine
-          </span>
-          <span className="text-[10px] text-[#91d78a] font-mono font-bold bg-[#00450d] px-2 py-0.5 rounded-full">
-            ONLINE
-          </span>
-        </div>
-        <div className="text-[11px] text-gray-400 leading-tight">
-          Monitoring Highway Dhabas & Hostel Drop-off Gates.
-        </div>
-      </div>
-    </aside>
+      )}
+    </>
   );
 };

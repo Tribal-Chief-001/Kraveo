@@ -10,6 +10,10 @@ import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { AdminProfile, DriverPartner, DriverPin, Order, OrderStatus, TabType, Vendor, normalizeOrder } from './types';
 import { ApiError, apiService, clearAuthToken, getAuthToken, isAuthenticated as hasSession, SOCKET_URL } from './services/api';
 import { LoginScreen } from './components/LoginScreen';
+import { LogoMark } from './components/ui/Logo';
+import { useToast } from './components/ui/Toast';
+import { ORDER_STATUS_LABEL } from './lib/tokens';
+import { RefreshCw, X } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [isAuth, setIsAuth] = useState(false);
@@ -17,6 +21,9 @@ export const App: React.FC = () => {
   const [adminProfile, setAdminProfile] = useState<AdminProfile | undefined>();
   const [activeTab, setActiveTab] = useState<TabType>('map');
   const [isLiveConnected, setIsLiveConnected] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const toast = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [orders, setOrders] = useState<Order[]>([]);
@@ -115,6 +122,7 @@ export const App: React.FC = () => {
       const updated = await apiService.updateOrderStatus(orderId, status, otpCode);
       setOrders((current) => current.map((order) => order.id === orderId ? updated : order));
       setErrorMessage('');
+      toast.success('Order updated', `Now ${ORDER_STATUS_LABEL[updated.status] ?? updated.status}.`);
     } catch (error) {
       setOrders(previous);
       handleAuthFailure(error);
@@ -130,6 +138,7 @@ export const App: React.FC = () => {
     try {
       const updated = await apiService.toggleVendorStatus(vendorId, nextStatus);
       setVendors((current) => current.map((vendor) => vendor.id === vendorId ? updated : vendor));
+      toast.success(updated.isAcceptingOrders ? 'Vendor is open' : 'Vendor is closed', `${updated.name} is ${updated.isAcceptingOrders ? 'now accepting' : 'no longer accepting'} orders.`);
     } catch (error) {
       setVendors(previous);
       handleAuthFailure(error);
@@ -153,6 +162,7 @@ export const App: React.FC = () => {
     try {
       const updated = await apiService.reassignOrderDriver(orderId, driverId);
       setOrders((current) => current.map((order) => order.id === orderId ? updated : order));
+      toast.success(driverId ? 'Runner assigned' : 'Runner unassigned', updated.driverName ? `${updated.driverName} is on this order.` : undefined);
     } catch (error) {
       setOrders(previous);
       handleAuthFailure(error);
@@ -167,33 +177,72 @@ export const App: React.FC = () => {
     setVendors([]);
     setDriverPartners([]);
     setDrivers([]);
+    setSearchQuery('');
+    setMobileNavOpen(false);
   };
 
+  const handleSelectTab = useCallback((tab: TabType) => {
+    setActiveTab(tab);
+    setSearchQuery('');
+  }, []);
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
+
   if (authChecking) {
-    return <div className="min-h-screen bg-[#0B0F19] text-gray-300 flex items-center justify-center text-sm">Verifying admin session…</div>;
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-kraveo-night" role="status" aria-live="polite">
+        <div className="animate-scale-in"><LogoMark size={64} /></div>
+        <p className="flex items-center gap-2 text-sm font-semibold text-kraveo-ink2"><RefreshCw className="h-4 w-4 animate-spin text-kraveo-g400" aria-hidden="true" />Verifying admin session…</p>
+      </div>
+    );
   }
 
   if (!isAuth) {
     return <LoginScreen onLoginSuccess={(profile) => { setAdminProfile(profile); setIsAuth(true); }} />;
   }
 
+  const activeOrderCount = orders.filter((order) => order.status !== 'DELIVERED' && order.status !== 'CANCELLED').length;
+  const clearQuery = () => setSearchQuery('');
+
   return (
-    <div className="min-h-screen bg-[#0B0F19] text-gray-100 lg:flex">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+    <div className="min-h-screen bg-kraveo-night text-kraveo-ink lg:flex">
+      <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[90] focus:rounded-k-sm focus:bg-kraveo-g400 focus:px-4 focus:py-2 focus:text-sm focus:font-bold focus:text-kraveo-g950">Skip to content</a>
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={handleSelectTab}
+        isLiveConnected={isLiveConnected}
+        mobileOpen={mobileNavOpen}
+        onCloseMobile={closeMobileNav}
+        badges={{ orders: activeOrderCount }}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header activeTab={activeTab} isLiveConnected={isLiveConnected} isLoading={isLoading} adminProfile={adminProfile} onRefresh={fetchBackendData} onLogout={handleLogout} />
+        <Header
+          activeTab={activeTab}
+          isLiveConnected={isLiveConnected}
+          isLoading={isLoading}
+          adminProfile={adminProfile}
+          onRefresh={fetchBackendData}
+          onLogout={handleLogout}
+          onOpenMenu={() => setMobileNavOpen(true)}
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+        />
         {errorMessage && (
-          <div role="alert" className="mx-4 mt-4 flex items-center justify-between gap-4 rounded-xl border border-red-500/40 bg-red-950/40 px-4 py-3 text-xs text-red-200 lg:mx-6">
-            <span>{errorMessage}</span>
-            <button className="font-bold text-white underline" onClick={fetchBackendData}>Retry</button>
+          <div role="alert" className="mx-4 mt-4 flex animate-fade-in items-center justify-between gap-3 rounded-k-md border border-kraveo-danger/30 bg-kraveo-danger/10 px-4 py-3 text-sm text-kraveo-ink sm:mx-6">
+            <span className="min-w-0">{errorMessage}</span>
+            <span className="flex shrink-0 items-center gap-1">
+              <button className="k-btn-ghost !min-h-[36px] !px-3 text-xs" onClick={fetchBackendData}>Retry</button>
+              <button aria-label="Dismiss error" className="k-icon-btn !h-9 !w-9" onClick={() => setErrorMessage('')}><X className="h-4 w-4" aria-hidden="true" /></button>
+            </span>
           </div>
         )}
-        <main className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
-          {activeTab === 'map' && <LiveCommandCenter drivers={drivers} orders={orders} driverPartners={driverPartners} onReassignDriver={handleReassignDriver} />}
-          {activeTab === 'orders' && <OrdersTable orders={orders} onStatusChange={handleStatusChange} />}
-          {activeTab === 'vendors' && <VendorManager vendors={vendors} onToggleVendor={handleToggleVendor} onAddVendor={handleAddVendor} />}
-          {activeTab === 'drivers' && <DriverManager drivers={driverPartners} />}
-          {activeTab === 'analytics' && <AnalyticsPanel />}
+        <main id="main" tabIndex={-1} className="min-w-0 flex-1 p-4 pb-10 outline-none sm:p-6 sm:pb-12">
+          <div key={activeTab} className="animate-fade-up">
+            {activeTab === 'map' && <LiveCommandCenter drivers={drivers} orders={orders} driverPartners={driverPartners} onReassignDriver={handleReassignDriver} loading={isLoading} query={searchQuery} />}
+            {activeTab === 'orders' && <OrdersTable orders={orders} onStatusChange={handleStatusChange} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'vendors' && <VendorManager vendors={vendors} onToggleVendor={handleToggleVendor} onAddVendor={handleAddVendor} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'drivers' && <DriverManager drivers={driverPartners} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'analytics' && <AnalyticsPanel />}
+          </div>
         </main>
       </div>
     </div>
