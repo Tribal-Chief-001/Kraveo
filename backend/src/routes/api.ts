@@ -7,12 +7,13 @@ import { prisma } from '../db';
 import { createRazorpayOrder, verifyRazorpayPaymentSignature, verifyRazorpayWebhookSignature } from '../services/paymentService';
 import { triggerDhabaAlarmPushNotification, triggerStudentArrivalNotification, sendPushNotification } from '../services/notificationService';
 import { dispatchSmsOtp } from '../services/smsService';
+import { otpStore, canonicalPhone, last10, maskPhone, checkCanSend, issueOtp, discardOtp, checkOtp, isDemoLogin, demoOtp, RESEND_COOLDOWN_MS, OTP_TTL_MS } from '../services/otpService';
 import { randomInt, timingSafeEqual } from 'crypto';
 
 export const apiRouter = Router();
 
 const adminLoginAttempts = new Map<string, { count: number; resetAt: number }>();
-const secureOtp = () => randomInt(1000, 10000).toString();
+const secureOtp = () => randomInt(1000, 10000).toString(); // gate-handshake codes
 
 const sanitizeOrder = (order: any, role: Role) => {
   if (role === Role.ADMIN) return order;
@@ -87,102 +88,116 @@ apiRouter.get('/drivers/:id', requireAuth, requireRole('DRIVER', 'ADMIN'), async
 // ----------------------------------------------------
 // AUTH & SMS OTP ENDPOINTS
 // ----------------------------------------------------
-export const otpStore = new Map<string, { otp: string; expiresAt: number; attempts: number }>();
+// Re-exported so the e2e suite can read the code it just triggered (SMS is not available in tests).
+export { otpStore };
 
-// Clean expired OTPs periodically to prevent memory leaks
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of otpStore.entries()) {
-    if (now >= value.expiresAt) {
-      otpStore.delete(key);
-    }
-  }
-}, 60000);
+const PLACEHOLDER_NAMES = new Set(['VIT Student', 'Dhaba Owner', 'Delivery Partner']);
+const NAME_RE = /^[\p{L}][\p{L}\s.'\-]{1,59}$/u;
+const HOSTEL_RE = /^(Block [1-6]|Girls Gate [12]|VIT Main Gate|Boys Hostel Block [1-6]|Girls Hostel Gate [12])$/;
+const UPI_RE = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/;
 
-// Request SMS OTP (Fast2SMS / Twilio / Firebase Phone Auth integration ready)
-apiRouter.post('/auth/send-otp', async (req: Request, res: Response) => {
-  const { phone, role } = req.body;
-
-  if (!phone || typeof phone !== 'string' || phone.trim().length < 10) {
-    return res.status(400).json({ success: false, message: 'Valid 10-digit Indian phone number is required.' });
-  }
-
-  // Generate 4-digit secure OTP
-  const generatedOtp = secureOtp();
-  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minute expiry
-
-  otpStore.set(phone, { otp: generatedOtp, expiresAt, attempts: 0 });
-
-  await dispatchSmsOtp(phone, generatedOtp, role || 'STUDENT');
-
-  return res.json({
-    success: true,
-    message: `OTP sent successfully to ${phone}. Valid for 5 minutes.`
-  });
+const needsProfile = (user: { role: Role; name: string }) => user.role === Role.STUDENT && (!user.name || PLACEHOLDER_NAMES.has(user.name.trim()));
+const publicUser = (user: any) => ({
+  id: user.id,
+  phone: user.phone,
+  name: user.name,
+  role: user.role,
+  hostelBlock: user.hostelBlock,
+  kraveoCoins: user.kraveoCoins,
+  upiId: user.upiId,
+  createdAt: user.createdAt,
 });
 
-// Verify SMS OTP & Create/Retrieve Account Profile
+// Request SMS OTP. Rate limits + lockouts live in services/otpService.ts.
+apiRouter.post('/auth/send-otp', async (req: Request, res: Response) => {
+  const phone = canonicalPhone(req.body?.phone);
+  if (!phone) {
+    return res.status(400).json({ success: false, message: 'Enter a valid 10-digit Indian mobile number.' });
+  }
+
+  const gate = checkCanSend(phone);
+  if (!gate.ok) {
+    return res.status(gate.status).json({ success: false, message: gate.message, retryAfterSeconds: gate.retryAfterSeconds });
+  }
+
+  const meta = { resendAfterSeconds: RESEND_COOLDOWN_MS / 1000, expiresInSeconds: OTP_TTL_MS / 1000 };
+
+  // Demo numbers (explicit allow-list, off unless DEMO_MODE=true): fixed code, no SMS.
+  if (isDemoLogin(phone)) {
+    issueOtp(phone, demoOtp());
+    return res.json({ success: true, message: `Code sent to ${maskPhone(phone)}.`, ...meta });
+  }
+
+  const otp = issueOtp(phone);
+  const sent = await dispatchSmsOtp(phone, otp, 'STUDENT');
+  if (!sent.success) {
+    discardOtp(phone);
+    console.error(`❌ [OTP] SMS dispatch failed for ${maskPhone(phone)}: ${sent.error || 'unknown error'}`);
+    return res.status(503).json({ success: false, message: "We couldn't send the code right now. Please try again in a minute." });
+  }
+
+  return res.json({ success: true, message: `Code sent to ${maskPhone(phone)}.`, ...meta });
+});
+
+// Verify OTP -> log in (or self-register a STUDENT). Partner roles can never self-register.
 apiRouter.post('/auth/verify-otp', async (req: Request, res: Response) => {
   try {
-    const { phone, otp, role, name, hostelBlock, upiId } = req.body;
-
-    if (!phone || !otp) {
-      return res.status(400).json({ success: false, message: 'Phone number and OTP code are required.' });
+    const phone = canonicalPhone(req.body?.phone);
+    const code = String(req.body?.otp ?? '').trim();
+    if (!phone || !/^\d{4}$/.test(code)) {
+      return res.status(400).json({ success: false, message: 'Enter your phone number and the 4-digit code.' });
     }
 
-    const storedData = otpStore.get(phone);
-
-    if (!storedData) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired OTP code. Please try again.' });
+    const requestedRole = String(req.body?.role || 'STUDENT').toUpperCase();
+    if (!['STUDENT', 'VENDOR', 'DRIVER'].includes(requestedRole)) {
+      return res.status(403).json({ success: false, message: 'This role cannot sign in with a phone code.' });
     }
 
-    storedData.attempts = (storedData.attempts || 0) + 1;
-
-    if (storedData.attempts > 5) {
-      otpStore.delete(phone);
-      return res.status(400).json({ success: false, message: 'Too many failed OTP attempts. Please request a new OTP.' });
+    const verdict = checkOtp(phone, code);
+    if (!verdict.ok) {
+      return res.status(verdict.status).json({ success: false, message: verdict.message, attemptsLeft: verdict.attemptsLeft, retryAfterSeconds: verdict.retryAfterSeconds });
     }
 
-    if (storedData.otp !== String(otp).trim() || Date.now() >= storedData.expiresAt) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired OTP code. Please try again.' });
-    }
+    // Existing accounts may be stored as '+91 XXXXXXXXXX' (seed data) - match on the last 10 digits.
+    let user = await prisma.user.findFirst({ where: { phone: { endsWith: last10(phone) } } });
+    let isNewUser = false;
 
-    otpStore.delete(phone);
-
-    let user = await prisma.user.findUnique({ where: { phone } });
-
-    if (!user) {
+    if (user) {
+      if (user.role !== requestedRole) {
+        const message = user.role === 'STUDENT'
+          ? 'This number is a student account. Use the Kraveo customer app.'
+          : 'This number is a Kraveo partner account. Use the Kraveo partner app.';
+        return res.status(403).json({ success: false, message });
+      }
+    } else {
+      if (requestedRole !== 'STUDENT') {
+        return res.status(403).json({ success: false, message: 'This number is not registered as a Kraveo partner. Please contact Kraveo.' });
+      }
+      const suppliedName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+      const suppliedHostel = typeof req.body?.hostelBlock === 'string' ? req.body.hostelBlock.trim() : '';
       user = await prisma.user.create({
         data: {
-          name: name || (role === 'VENDOR' ? 'Dhaba Owner' : role === 'DRIVER' ? 'Delivery Partner' : 'VIT Student'),
           phone,
-          role: (role as Role) || Role.STUDENT,
-          hostelBlock: hostelBlock || 'Boys Hostel Block 1',
-          upiId: upiId || null
-        }
+          role: Role.STUDENT,
+          name: NAME_RE.test(suppliedName) ? suppliedName : 'VIT Student',
+          hostelBlock: HOSTEL_RE.test(suppliedHostel) ? suppliedHostel : 'Block 1',
+        },
       });
-    } else if (name || hostelBlock || upiId) {
-      const updateData: any = {};
-      if (name) updateData.name = name;
-      if (hostelBlock) updateData.hostelBlock = hostelBlock;
-      if (upiId) updateData.upiId = upiId;
-
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: updateData
-      });
+      isNewUser = true;
     }
 
     const token = generateToken({ id: user.id, phone: user.phone, role: user.role });
-
     return res.json({
       success: true,
-      message: 'OTP verified successfully. Logged in!',
+      message: isNewUser ? 'Welcome to Kraveo!' : 'Welcome back!',
       token,
-      user
+      user: publicUser(user),
+      isNewUser,
+      needsProfile: needsProfile(user),
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error verifying OTP' });
+    console.error('verify-otp failed:', err);
+    return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
 });
 
@@ -269,32 +284,72 @@ apiRouter.get('/auth/profile', requireAuth, async (req: AuthenticatedRequest, re
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (!user) return res.status(404).json({ success: false, message: 'User profile not found.' });
 
-    return res.json({ success: true, user });
+    return res.json({ success: true, user: publicUser(user), needsProfile: needsProfile(user) });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message || 'Error fetching profile' });
   }
 });
 
-// Update Authenticated User Profile
+// Update Authenticated User Profile (role, coins and phone can never be changed here)
 apiRouter.put('/auth/profile', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
-    const { name, hostelBlock, upiId, fcmToken } = req.body;
+    const { name, hostelBlock, upiId, fcmToken } = req.body ?? {};
 
-    const updateData: any = {};
-    if (name) updateData.name = name;
-    if (hostelBlock) updateData.hostelBlock = hostelBlock;
-    if (upiId) updateData.upiId = upiId;
-    if (fcmToken) updateData.fcmToken = fcmToken;
+    const updateData: Record<string, string> = {};
+    if (name !== undefined) {
+      const cleaned = String(name).trim().replace(/\s+/g, ' ');
+      if (!NAME_RE.test(cleaned) || PLACEHOLDER_NAMES.has(cleaned)) {
+        return res.status(400).json({ success: false, field: 'name', message: 'Enter your full name (2-60 letters).' });
+      }
+      updateData.name = cleaned;
+    }
+    if (hostelBlock !== undefined) {
+      const cleaned = String(hostelBlock).trim();
+      if (!HOSTEL_RE.test(cleaned)) {
+        return res.status(400).json({ success: false, field: 'hostelBlock', message: 'Choose one of the campus drop points.' });
+      }
+      updateData.hostelBlock = cleaned;
+    }
+    if (upiId !== undefined && upiId !== '') {
+      const cleaned = String(upiId).trim();
+      if (!UPI_RE.test(cleaned)) return res.status(400).json({ success: false, field: 'upiId', message: 'Enter a valid UPI ID.' });
+      updateData.upiId = cleaned;
+    }
+    if (typeof fcmToken === 'string' && fcmToken.length > 0 && fcmToken.length <= 4096) updateData.fcmToken = fcmToken;
 
-    const user = await prisma.user.update({
-      where: { id: req.user.id },
-      data: updateData
-    });
-
-    return res.json({ success: true, message: 'Profile updated successfully.', user });
+    const user = await prisma.user.update({ where: { id: req.user.id }, data: updateData });
+    return res.json({ success: true, message: 'Profile updated successfully.', user: publicUser(user), needsProfile: needsProfile(user) });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message || 'Error updating profile' });
+  }
+});
+
+// Logout: the JWT is stateless, so the useful server-side step is to stop pushing to this device.
+apiRouter.post('/auth/logout', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (req.user?.id) await prisma.user.update({ where: { id: req.user.id }, data: { fcmToken: null } });
+    return res.json({ success: true });
+  } catch {
+    return res.json({ success: true });
+  }
+});
+
+// Delete account (Play Store requires an in-app path). Orders/payments must keep their FK, so the row is anonymised.
+apiRouter.delete('/auth/account', requireAuth, requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const active = await prisma.order.count({ where: { customerId: userId, status: { notIn: ['DELIVERED', 'CANCELLED'] } } });
+    if (active > 0) {
+      return res.status(409).json({ success: false, message: 'You have an order in progress. You can delete your account once it is delivered.' });
+    }
+    await prisma.user.update({
+      where: { id: userId },
+      data: { name: 'Deleted user', phone: `deleted:${userId}`, hostelBlock: null, fcmToken: null, upiId: null, kraveoCoins: 0 },
+    });
+    return res.json({ success: true, message: 'Your account has been deleted.' });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message || 'Could not delete the account.' });
   }
 });
 

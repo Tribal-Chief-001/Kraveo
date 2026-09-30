@@ -151,6 +151,13 @@ io.on('connection', (socket) => {
   });
 });
 
+if (process.env.DEMO_MODE === 'true') {
+  console.warn('⚠️  DEMO_MODE is ON: allow-listed DEMO_LOGIN_PHONES sign in with a fixed code and no SMS. Turn it off after the demo.');
+}
+if (process.env.NODE_ENV === 'production' && !process.env.FAST2SMS_API_KEY && !process.env.MSG91_AUTH_KEY && !process.env.TWILIO_ACCOUNT_SID && process.env.DEMO_MODE !== 'true') {
+  console.warn('⚠️  No SMS provider configured: students cannot receive login codes until FAST2SMS_API_KEY (or similar) is set.');
+}
+
 server.listen(PORT, () => {
   console.log(`🚀 Kraveo Backend Engine running on http://localhost:${PORT}`);
   console.log(`📡 WebSockets listening for real-time driver tracking & order alerts`);
