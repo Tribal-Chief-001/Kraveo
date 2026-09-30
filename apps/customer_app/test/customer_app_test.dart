@@ -6,6 +6,8 @@ import 'package:customer_app/providers/order_provider.dart';
 import 'package:customer_app/models/menu_item.dart';
 import 'package:customer_app/models/order.dart';
 import 'package:customer_app/widgets/split_bill_modal.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 void main() {
   group('Customer App - CartProvider Tests', () {
@@ -241,17 +243,18 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          theme: KraveoTheme.customer(),
           home: Scaffold(
             body: SplitBillModal(order: order),
           ),
         ),
       );
 
-      expect(find.text('Roommate Split-Bill Generator'), findsOneWidget);
+      expect(find.text('Split the bill'), findsOneWidget);
       expect(find.text('₹115'), findsOneWidget); // 230 / 2 = 115
 
       // Tap add roommate button
-      await tester.tap(find.byIcon(Icons.add_circle_outline));
+      await tester.tap(find.byIcon(LucideIcons.plus));
       await tester.pump();
 
       expect(find.text('₹77'), findsOneWidget); // 230 / 3 = 76.66 -> 77

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:provider/provider.dart';
-import 'theme/app_theme.dart';
 import 'providers/dhaba_provider.dart';
 import 'providers/cart_provider.dart';
 import 'providers/order_provider.dart';
@@ -24,9 +24,9 @@ class KraveoCustomerApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => OrderProvider()),
       ],
       child: MaterialApp(
-        title: 'VIT Eats | Kraveo',
+        title: 'Kraveo',
         debugShowCheckedModeBanner: false,
-        theme: AppTheme.lightTheme,
+        theme: KraveoTheme.customer(),
         home: const AuthGate(),
       ),
     );
@@ -62,7 +62,15 @@ class _AuthGateState extends State<AuthGate> {
   @override
   Widget build(BuildContext context) {
     if (_isCheckingSession) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            KBrandMark(height: 72),
+            SizedBox(height: 28),
+            SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 3)),
+          ]),
+        ),
+      );
     }
     if (_isAuthenticated) return const HomeScreen();
     return AuthScreen(onAuthenticated: () => setState(() => _isAuthenticated = true));

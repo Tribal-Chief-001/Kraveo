@@ -1,12 +1,19 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
-import '../theme/app_theme.dart';
 import '../models/order.dart';
 import '../providers/dhaba_provider.dart';
 import '../providers/order_provider.dart';
-import '../widgets/hostel_dropdown.dart';
-import '../widgets/category_pills.dart';
 import '../widgets/dhaba_card.dart';
+import '../widgets/ui/display_text.dart';
+import '../widgets/ui/floating_bar.dart';
+import '../widgets/ui/hostel_pill.dart';
+import '../widgets/ui/k_icon_button.dart';
+import '../widgets/ui/snack.dart';
+import '../widgets/ui/status_map.dart';
 import 'dhaba_menu_screen.dart';
 import 'live_tracking_screen.dart';
 import 'order_history_screen.dart';
@@ -23,27 +30,24 @@ class _HomeScreenState extends State<HomeScreen> {
   String selectedHostel = 'Block 1';
   final TextEditingController _searchController = TextEditingController();
 
+  /// True until the live catalog answers (or a short grace period passes), so users see
+  /// skeletons instead of a flash of placeholder kitchens.
+  bool _loadingCatalog = true;
+
+  static const Duration _skeletonGrace = Duration(seconds: 4);
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        Provider.of<DhabaProvider>(context, listen: false).loadCatalog();
-      }
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final load = Provider.of<DhabaProvider>(context, listen: false).loadCatalog();
+      await Future.any<void>([load, Future<void>.delayed(_skeletonGrace)]);
+      if (mounted) setState(() => _loadingCatalog = false);
     });
   }
 
-  final List<String> hostelBlocks = [
-    'Block 1',
-    'Block 2',
-    'Block 3',
-    'Block 4',
-    'Block 5',
-    'Block 6',
-    'Girls Gate 1',
-    'Girls Gate 2',
-    'VIT Main Gate'
-  ];
+  final List<String> hostelBlocks = kHostelBlocks;
 
   @override
   void dispose() {
@@ -51,332 +55,187 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  void _goToTab(int index) => setState(() => _currentTab = index);
+
   @override
   Widget build(BuildContext context) {
+    final k = context.k;
     return Scaffold(
-      backgroundColor: AppTheme.surfaceBackground,
+      backgroundColor: k.bg,
+      extendBody: true,
       body: IndexedStack(
         index: _currentTab,
         children: [
-          _buildHomeFeed(context),
-          const LiveTrackingScreen(),
-          const OrderHistoryScreen(),
+          // Builder: the feed must read the padding Scaffold reports for the floating nav.
+          Builder(builder: _buildHomeFeed),
+          LiveTrackingScreen(onExplore: () => _goToTab(0)),
+          OrderHistoryScreen(
+            selectedHostel: selectedHostel,
+            onTrackOrder: () => _goToTab(1),
+            onExplore: () => _goToTab(0),
+          ),
         ],
       ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 10,
-              offset: const Offset(0, -2),
-            ),
-          ],
-        ),
-        child: BottomNavigationBar(
-          currentIndex: _currentTab,
-          onTap: (idx) => setState(() => _currentTab = idx),
-          selectedItemColor: AppTheme.primaryEmerald,
-          unselectedItemColor: AppTheme.textMuted,
-          selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-          type: BottomNavigationBarType.fixed,
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.storefront_outlined),
-              activeIcon: Icon(Icons.storefront),
-              label: 'Dhabas',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.two_wheeler_outlined),
-              activeIcon: Icon(Icons.two_wheeler),
-              label: 'Track Order',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.receipt_long_outlined),
-              activeIcon: Icon(Icons.receipt_long),
-              label: 'History',
-            ),
-          ],
-        ),
+      bottomNavigationBar: KGlassNav(
+        index: _currentTab,
+        onChanged: _goToTab,
+        items: const [
+          KNavItem(LucideIcons.house, 'Home'),
+          KNavItem(LucideIcons.bike, 'Track'),
+          KNavItem(LucideIcons.receiptText, 'Orders'),
+        ],
       ),
     );
   }
 
+  String _greeting() {
+    final hour = DateTime.now().hour;
+    if (hour >= 5 && hour < 12) return 'Good morning';
+    if (hour >= 12 && hour < 17) return 'Good afternoon';
+    if (hour >= 17 && hour < 22) return 'Good evening';
+    return 'Up late?';
+  }
+
   Widget _buildHomeFeed(BuildContext context) {
+    final k = context.k;
     final dhabaProvider = Provider.of<DhabaProvider>(context);
     final orderProvider = Provider.of<OrderProvider>(context);
     final activeOrder = orderProvider.activeOrder;
+    final showActiveBar = activeOrder != null && activeOrder.status.isLive;
     final dhabas = dhabaProvider.dhabas;
+    final filtering = dhabaProvider.searchQuery.trim().isNotEmpty || dhabaProvider.selectedCategoryIndex != 0 || dhabaProvider.showFavoritesOnly;
+    // With extendBody the scaffold reports the floating nav's height as bottom padding.
+    final navInset = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
-      backgroundColor: AppTheme.surfaceBackground,
-      appBar: AppBar(
-        toolbarHeight: 70,
-        backgroundColor: AppTheme.surfaceBackground,
-        elevation: 0,
-        title: HostelDropdown(
-          selectedHostel: selectedHostel,
-          hostelBlocks: hostelBlocks,
-          onChanged: (val) {
-            if (val != null) setState(() => selectedHostel = val);
-          },
-        ),
-        actions: [
-          // Favorites filter toggle button
-          IconButton(
-            icon: Icon(
-              dhabaProvider.showFavoritesOnly ? Icons.favorite : Icons.favorite_border,
-              color: dhabaProvider.showFavoritesOnly ? AppTheme.accentRed : AppTheme.textDark,
-            ),
-            tooltip: 'Show Favorites',
-            onPressed: () => dhabaProvider.toggleFavoritesOnly(),
-          ),
-          const Padding(
-            padding: EdgeInsets.only(right: 16.0, left: 4.0),
-            child: CircleAvatar(
-              radius: 18,
-              backgroundColor: AppTheme.primaryEmerald,
-              child: Text(
-                'VIT',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+      backgroundColor: k.bg,
+      body: Stack(children: [
+        CustomScrollView(
+          slivers: [
+            SliverAppBar(
+              pinned: true,
+              toolbarHeight: 76,
+              backgroundColor: k.bg,
+              surfaceTintColor: Colors.transparent,
+              automaticallyImplyLeading: false,
+              titleSpacing: KSpace.gutter,
+              title: Align(
+                alignment: Alignment.centerLeft,
+                child: HostelPill(
+                  selectedHostel: selectedHostel,
+                  hostelBlocks: hostelBlocks,
+                  onChanged: (val) => setState(() => selectedHostel = val),
+                ),
               ),
-            ),
-          ),
-        ],
-      ),
-      body: CustomScrollView(
-        slivers: [
-          // Search & Promo Header
-          SliverToBoxAdapter(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Real-time Search Input
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppTheme.borderLight),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.04),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: TextField(
-                      controller: _searchController,
-                      onChanged: (val) => dhabaProvider.setSearchQuery(val),
-                      decoration: InputDecoration(
-                        hintText: 'Search parathas, thalis, dhabas...',
-                        hintStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 14),
-                        prefixIcon: const Icon(Icons.search, color: AppTheme.primaryEmerald),
-                        suffixIcon: _searchController.text.isNotEmpty
-                            ? IconButton(
-                                icon: const Icon(Icons.clear, size: 18, color: AppTheme.textMuted),
-                                onPressed: () {
-                                  _searchController.clear();
-                                  dhabaProvider.setSearchQuery('');
-                                },
-                              )
-                            : null,
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-                      ),
-                    ),
-                  ),
+              actions: [
+                KIconButton(
+                  icon: LucideIcons.heart,
+                  semanticLabel: dhabaProvider.showFavoritesOnly ? 'Show all kitchens' : 'Show favourite kitchens only',
+                  color: dhabaProvider.showFavoritesOnly ? KraveoPalette.danger : k.ink,
+                  background: dhabaProvider.showFavoritesOnly ? KraveoPalette.danger.withValues(alpha: 0.12) : k.surface,
+                  onTap: dhabaProvider.toggleFavoritesOnly,
                 ),
-
-                // Active Order Live Shortcut Banner (if active order present)
-                if (activeOrder != null && activeOrder.status != OrderProgressStatus.delivered) ...[
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
-                    child: InkWell(
-                      onTap: () => setState(() => _currentTab = 1), // Switch to Live Track tab
-                      borderRadius: BorderRadius.circular(16),
-                      child: Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: AppTheme.primaryEmerald,
-                          borderRadius: BorderRadius.circular(16),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppTheme.primaryEmerald.withValues(alpha: 0.3),
-                              blurRadius: 8,
-                              offset: const Offset(0, 3),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.two_wheeler, color: AppTheme.secondaryGold, size: 28),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'ACTIVE ORDER: ${activeOrder.status.displayName}',
-                                    style: const TextStyle(
-                                      color: AppTheme.secondaryGold,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  Text(
-                                    '${activeOrder.dhabaName} • OTP ${activeOrder.otpCode}',
-                                    style: const TextStyle(color: Colors.white, fontSize: 11),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-
-                // Special Promo Banner Card
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          AppTheme.secondaryGold,
-                          AppTheme.secondaryGold.withValues(alpha: 0.8),
-                        ],
-                      ),
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: const [
-                              Text(
-                                'VITIAN SPECIAL OFFER 🎁',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w900,
-                                  color: AppTheme.secondaryTextGold,
-                                  letterSpacing: 0.5,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'Get 20% OFF on First Order',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppTheme.textDark,
-                                ),
-                              ),
-                              SizedBox(height: 2),
-                              Text(
-                                'Use promo code VITFIRST at checkout',
-                                style: TextStyle(fontSize: 12, color: AppTheme.secondaryTextGold),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: const BoxDecoration(
-                            color: Colors.white,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.local_offer, color: AppTheme.primaryEmerald, size: 24),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-
-                // Category Pills
-                CategoryPills(
-                  categories: dhabaProvider.categories,
-                  selectedIndex: dhabaProvider.selectedCategoryIndex,
-                  onSelectCategory: (idx) => dhabaProvider.setSelectedCategoryIndex(idx),
-                ),
-                const SizedBox(height: 16),
-
-                // Section Title
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        dhabaProvider.showFavoritesOnly ? 'Your Favorite Dhabas' : 'Popular Dhabas Near You',
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textDark),
-                      ),
-                      Text(
-                        '${dhabas.length} Places',
-                        style: const TextStyle(fontSize: 12, color: AppTheme.textMuted, fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
+                const SizedBox(width: KSpace.gutter),
               ],
             ),
-          ),
-
-          // Dhaba Cards List
-          dhabas.isEmpty
-              ? SliverToBoxAdapter(
+            SliverToBoxAdapter(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                KReveal(
                   child: Padding(
-                    padding: const EdgeInsets.all(40.0),
-                    child: Column(
-                      children: [
-                        const Icon(Icons.search_off, size: 60, color: AppTheme.textMuted),
-                        const SizedBox(height: 12),
-                        const Text(
-                          'No Dhabas Found',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textDark),
-                        ),
-                        const SizedBox(height: 4),
-                        const Text(
-                          'Try clearing search filters or checking back later!',
-                          style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
-                        ),
-                        const SizedBox(height: 16),
-                        ElevatedButton(
-                          onPressed: () {
-                            _searchController.clear();
-                            dhabaProvider.setSearchQuery('');
-                            dhabaProvider.setSelectedCategoryIndex(0);
-                            if (dhabaProvider.showFavoritesOnly) {
-                              dhabaProvider.toggleFavoritesOnly();
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.primaryEmerald,
-                            foregroundColor: Colors.white,
-                          ),
-                          child: const Text('Reset Filters'),
-                        ),
-                      ],
+                    padding: const EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, 0),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(_greeting().toUpperCase(), style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.2)),
+                      const SizedBox(height: 6),
+                      KDisplayText('What are you\ncraving?', style: KraveoType.displayMd.copyWith(color: k.ink)),
+                    ]),
+                  ),
+                ),
+                KReveal(
+                  index: 1,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(KSpace.gutter, 18, KSpace.gutter, 0),
+                    child: _SearchField(
+                      controller: _searchController,
+                      onChanged: dhabaProvider.setSearchQuery,
+                      onClear: () {
+                        _searchController.clear();
+                        dhabaProvider.setSearchQuery('');
+                      },
                     ),
                   ),
-                )
-              : SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final dhaba = dhabas[index];
-                        return DhabaCard(
+                ),
+                if (filtering) const SizedBox(height: 16) else const KReveal(index: 2, child: _PromoCard()),
+                KReveal(
+                  index: 3,
+                  child: SizedBox(
+                    height: 52,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: KSpace.gutter, vertical: 4),
+                      itemCount: dhabaProvider.categories.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) {
+                        final label = dhabaProvider.categories[index];
+                        return KChoiceChip(
+                          label: label,
+                          icon: _categoryIcon(label),
+                          selected: dhabaProvider.selectedCategoryIndex == index,
+                          onTap: () => dhabaProvider.setSelectedCategoryIndex(index),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(KSpace.gutter, 22, KSpace.gutter, 14),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                    Expanded(
+                      child: Text(
+                        dhabaProvider.showFavoritesOnly ? 'Your favourites' : 'Kitchens near campus',
+                        style: KraveoType.headlineSm.copyWith(color: k.ink),
+                      ),
+                    ),
+                    if (!_loadingCatalog)
+                      Text(dhabas.length == 1 ? '1 place' : '${dhabas.length} places', style: KraveoType.label.copyWith(color: k.inkMuted, fontSize: 13)),
+                  ]),
+                ),
+              ]),
+            ),
+            if (_loadingCatalog)
+              const SliverPadding(padding: EdgeInsets.symmetric(horizontal: KSpace.gutter), sliver: _SkeletonList())
+            else if (dhabas.isEmpty)
+              SliverToBoxAdapter(
+                child: KEmptyState(
+                  icon: dhabaProvider.showFavoritesOnly ? LucideIcons.heartOff : LucideIcons.searchX,
+                  title: dhabaProvider.showFavoritesOnly ? 'No favourites yet' : 'No kitchens match',
+                  message: dhabaProvider.showFavoritesOnly
+                      ? 'Tap the heart on any kitchen to keep it here for quick reorders.'
+                      : 'Try a different search or category, or clear the filters to see every kitchen.',
+                  action: KButton(
+                    label: 'Clear filters',
+                    kind: KButtonKind.tonal,
+                    expand: false,
+                    icon: LucideIcons.rotateCcw,
+                    onPressed: () {
+                      _searchController.clear();
+                      dhabaProvider.setSearchQuery('');
+                      dhabaProvider.setSelectedCategoryIndex(0);
+                      if (dhabaProvider.showFavoritesOnly) dhabaProvider.toggleFavoritesOnly();
+                    },
+                  ),
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: KSpace.gutter),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) {
+                      final dhaba = dhabas[index];
+                      return KReveal(
+                        key: ValueKey(dhaba.id),
+                        index: index,
+                        child: DhabaCard(
                           dhaba: dhaba,
                           onFavoriteToggle: () => dhabaProvider.toggleFavorite(dhaba.id),
                           onTap: () {
@@ -390,15 +249,200 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                             );
                           },
-                        );
-                      },
-                      childCount: dhabas.length,
-                    ),
+                        ),
+                      );
+                    },
+                    childCount: dhabas.length,
                   ),
                 ),
-          const SliverPadding(padding: EdgeInsets.only(bottom: 24)),
-        ],
+              ),
+            SliverToBoxAdapter(child: SizedBox(height: navInset + (showActiveBar ? 96 : 24))),
+          ],
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: navInset + 8,
+          child: KBarSwitcher(
+            visible: showActiveBar,
+            child: showActiveBar ? _ActiveOrderBar(orderProvider: orderProvider, onTap: () => _goToTab(1)) : const SizedBox.shrink(),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  static IconData _categoryIcon(String label) {
+    switch (label.toLowerCase()) {
+      case 'all':
+        return LucideIcons.utensilsCrossed;
+      case 'night mess':
+        return LucideIcons.moon;
+      case 'thalis':
+        return LucideIcons.cookingPot;
+      case 'fast food':
+        return LucideIcons.sandwich;
+      case 'beverages':
+        return LucideIcons.cupSoda;
+      case 'north indian':
+        return LucideIcons.flame;
+      case 'parathas':
+        return LucideIcons.wheat;
+      default:
+        return LucideIcons.utensils;
+    }
+  }
+}
+
+class _SearchField extends StatelessWidget {
+  const _SearchField({required this.controller, required this.onChanged, required this.onClear});
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Container(
+      decoration: BoxDecoration(borderRadius: KRadius.control, boxShadow: KShadow.soft(k.shadowTint)),
+      child: ValueListenableBuilder<TextEditingValue>(
+        valueListenable: controller,
+        builder: (context, value, _) => TextField(
+          controller: controller,
+          onChanged: onChanged,
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(
+            hintText: 'Search parathas, thalis, kitchens',
+            prefixIcon: Icon(LucideIcons.search, size: 20, color: k.brand),
+            suffixIcon: value.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear search',
+                    icon: Icon(LucideIcons.x, size: 18, color: k.inkMuted),
+                    onPressed: onClear,
+                  ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          ),
+        ),
       ),
+    );
+  }
+}
+
+/// The one promo we actually have: the VITFIRST coupon that the cart understands.
+class _PromoCard extends StatelessWidget {
+  const _PromoCard();
+
+  static const String _code = 'VITFIRST';
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(KSpace.gutter, 18, KSpace.gutter, 18),
+      child: KPressable(
+        semanticLabel: 'Copy coupon code $_code',
+        onTap: () {
+          Clipboard.setData(const ClipboardData(text: _code));
+          showKSnack(context, '$_code copied. Apply it in your cart.', icon: LucideIcons.ticket);
+        },
+        scale: 0.98,
+        child: Container(
+          width: double.infinity,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: k.brand,
+            borderRadius: BorderRadius.circular(KRadius.xl),
+            boxShadow: KShadow.lift(k.shadowTint),
+          ),
+          child: Stack(children: [
+            Positioned(
+              right: -34,
+              top: -34,
+              child: Container(width: 150, height: 150, decoration: BoxDecoration(color: KraveoPalette.g700.withValues(alpha: 0.55), shape: BoxShape.circle)),
+            ),
+            Positioned(
+              right: 14,
+              bottom: 10,
+              child: Icon(LucideIcons.badgePercent, size: 64, color: k.onBrand.withValues(alpha: 0.14)),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('FIRST ORDER', style: KraveoType.label.copyWith(color: k.onBrand.withValues(alpha: 0.75), letterSpacing: 1.2)),
+                const SizedBox(height: 6),
+                Text('20% off,\nup to ₹50', style: KraveoType.headline.copyWith(color: k.onBrand)),
+                const SizedBox(height: 4),
+                Text('On orders of ₹100 or more.', style: KraveoType.bodySm.copyWith(color: k.onBrand.withValues(alpha: 0.85))),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                  decoration: BoxDecoration(color: k.accent, borderRadius: BorderRadius.circular(KRadius.pill)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text(_code, style: KraveoType.button.copyWith(color: k.onAccent, fontSize: 14, letterSpacing: 1.2)),
+                    const SizedBox(width: 8),
+                    Icon(LucideIcons.copy, size: 15, color: k.onAccent),
+                  ]),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _SkeletonList extends StatelessWidget {
+  const _SkeletonList();
+
+  @override
+  Widget build(BuildContext context) {
+    return SliverList(
+      delegate: SliverChildListDelegate([
+        for (var i = 0; i < 3; i++)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 18),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              KSkeleton(height: 210, radius: KRadius.xl),
+              SizedBox(height: 12),
+              KSkeleton(width: 190, height: 16),
+              SizedBox(height: 8),
+              KSkeleton(width: 120, height: 12),
+            ]),
+          ),
+      ]),
+    );
+  }
+}
+
+class _ActiveOrderBar extends StatelessWidget {
+  const _ActiveOrderBar({required this.orderProvider, required this.onTap});
+
+  final OrderProvider orderProvider;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final order = orderProvider.activeOrder!;
+    return KFloatingBar(
+      semanticLabel: 'Active order from ${order.dhabaName}: ${order.status.headline}. Open tracking',
+      onTap: onTap,
+      leading: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(color: k.onBrand.withValues(alpha: 0.16), shape: BoxShape.circle),
+        child: Icon(LucideIcons.bike, size: 22, color: k.onBrand),
+      ),
+      title: Text(order.status.headline, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.onBrand)),
+      subtitle: order.status == OrderProgressStatus.arrivedAtGate ? 'Gate OTP ${order.otpCode}' : order.dhabaName,
+      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text('Track', style: KraveoType.button.copyWith(color: k.onBrand, fontSize: 14)),
+        const SizedBox(width: 4),
+        Icon(LucideIcons.arrowRight, size: 18, color: k.onBrand),
+      ]),
     );
   }
 }

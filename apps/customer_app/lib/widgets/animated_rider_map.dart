@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/order.dart';
+import 'ui/status_map.dart';
 
+/// Stylised route strip: kitchen -> your gate, with the rider marker placed by the order's status.
+/// It shows status-driven progress only (no invented distances or timings).
 class AnimatedRiderMap extends StatefulWidget {
   final OrderProgressStatus status;
   final String hostel;
@@ -54,145 +58,80 @@ class _AnimatedRiderMapState extends State<AnimatedRiderMap> with SingleTickerPr
     super.dispose();
   }
 
+  String get _caption => switch (widget.status) {
+        OrderProgressStatus.placed => 'Waiting for the kitchen',
+        OrderProgressStatus.preparing => 'Being cooked',
+        OrderProgressStatus.pickedUp => 'Picked up',
+        OrderProgressStatus.onTheWay => 'On the way',
+        OrderProgressStatus.arrivedAtGate => 'At your gate',
+        OrderProgressStatus.delivered => 'Delivered',
+        OrderProgressStatus.cancelled => 'Cancelled',
+      };
+
   @override
   Widget build(BuildContext context) {
+    final k = context.k;
+    final statusColor = widget.status.kStatus.color;
+    const night = KraveoPalette.g950;
+
     return Container(
-      height: 180,
+      height: 188,
       width: double.infinity,
       decoration: BoxDecoration(
-        color: const Color(0xFF1E2620), // Dark map aesthetic
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.borderLight),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          )
-        ],
+        color: night,
+        borderRadius: BorderRadius.circular(KRadius.xl),
+        boxShadow: KShadow.soft(k.shadowTint),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(KRadius.xl),
         child: AnimatedBuilder(
           animation: _animation,
           builder: (context, child) {
-            final progress = _animation.value;
-
-            return Stack(
-              children: [
-                // Simulated Map Grid Background Lines
-                CustomPaint(
-                  size: Size.infinite,
-                  painter: MapGridPainter(progress: progress),
+            final progress = _animation.value.clamp(0.0, 1.0);
+            return Stack(children: [
+              Positioned.fill(child: CustomPaint(painter: _MapPainter(progress: progress, trackColor: KraveoPalette.g700, activeColor: statusColor))),
+              Positioned(
+                top: 14,
+                left: 14,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(KRadius.pill)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(LucideIcons.navigation, size: 14, color: statusColor),
+                    const SizedBox(width: 6),
+                    Text(_caption, style: KraveoType.label.copyWith(color: Colors.white, fontSize: 12.5)),
+                  ]),
                 ),
-
-                // Top Info Badge
-                Positioned(
-                  top: 12,
-                  left: 12,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primaryEmerald,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.navigation, color: AppTheme.secondaryGold, size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          progress >= 0.95 ? 'ARRIVED AT GATE' : '${((1 - progress) * 3.5).toStringAsFixed(1)} KM AWAY',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-                // Map Pin 1: Dhaba (Start)
-                Positioned(
-                  left: 24,
-                  top: 80,
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: const BoxDecoration(
-                          color: AppTheme.secondaryGold,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.storefront, color: AppTheme.secondaryTextGold, size: 16),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        widget.dhabaName.split(' ').first,
-                        style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Map Pin 2: Gate Handshake (End)
-                Positioned(
-                  right: 24,
-                  top: 80,
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: const BoxDecoration(
-                          color: AppTheme.accentGreen,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.sensor_door, color: Colors.white, size: 16),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        widget.hostel,
-                        style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Animated Rider Marker
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final startX = 40.0;
-                    final endX = constraints.maxWidth - 50.0;
-                    final currentX = startX + (endX - startX) * progress.clamp(0.0, 1.0);
-
-                    return Positioned(
-                      left: currentX,
-                      top: 70,
+              ),
+              // Start pin: kitchen
+              Positioned(left: 20, bottom: 14, width: 92, child: _Pin(icon: LucideIcons.store, label: widget.dhabaName, color: KraveoPalette.g400)),
+              // End pin: gate
+              Positioned(right: 20, bottom: 14, width: 92, child: _Pin(icon: LucideIcons.doorOpen, label: widget.hostel, color: statusColor)),
+              // Rider
+              Positioned.fill(
+                child: LayoutBuilder(builder: (context, constraints) {
+                  const startX = 50.0;
+                  final endX = constraints.maxWidth - 90.0;
+                  final x = startX + (endX - startX) * progress;
+                  return Stack(children: [
+                    Positioned(
+                      left: x,
+                      top: constraints.maxHeight / 2 - 8,
                       child: Container(
-                        padding: const EdgeInsets.all(8),
+                        width: 40,
+                        height: 40,
                         decoration: BoxDecoration(
-                          color: AppTheme.primaryEmerald,
+                          color: statusColor,
                           shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppTheme.secondaryGold.withValues(alpha: 0.6),
-                              blurRadius: 10,
-                              spreadRadius: 2,
-                            ),
-                          ],
+                          boxShadow: [BoxShadow(color: statusColor.withValues(alpha: 0.55), blurRadius: 16, spreadRadius: 1)],
                         ),
-                        child: const Icon(
-                          Icons.two_wheeler,
-                          color: AppTheme.secondaryGold,
-                          size: 20,
-                        ),
+                        child: const Icon(LucideIcons.bike, size: 20, color: Colors.white),
                       ),
-                    );
-                  },
-                ),
-              ],
-            );
+                    ),
+                  ]);
+                }),
+              ),
+            ]);
           },
         ),
       ),
@@ -200,47 +139,65 @@ class _AnimatedRiderMapState extends State<AnimatedRiderMap> with SingleTickerPr
   }
 }
 
-class MapGridPainter extends CustomPainter {
-  final double progress;
+class _Pin extends StatelessWidget {
+  const _Pin({required this.icon, required this.label, required this.color});
 
-  MapGridPainter({required this.progress});
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        width: 30,
+        height: 30,
+        decoration: BoxDecoration(color: color.withValues(alpha: 0.25), shape: BoxShape.circle, border: Border.all(color: color, width: 1.6)),
+        child: Icon(icon, size: 15, color: Colors.white),
+      ),
+      const SizedBox(height: 4),
+      Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: KraveoType.caption.copyWith(color: Colors.white.withValues(alpha: 0.75), fontSize: 11)),
+    ]);
+  }
+}
+
+class _MapPainter extends CustomPainter {
+  _MapPainter({required this.progress, required this.trackColor, required this.activeColor});
+
+  final double progress;
+  final Color trackColor;
+  final Color activeColor;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paintGrid = Paint()
+    final grid = Paint()
       ..color = Colors.white.withValues(alpha: 0.05)
       ..strokeWidth = 1.0;
-
-    // Draw Grid Lines
     for (double i = 0; i < size.width; i += 30) {
-      canvas.drawLine(Offset(i, 0), Offset(i, size.height), paintGrid);
+      canvas.drawLine(Offset(i, 0), Offset(i, size.height), grid);
     }
     for (double j = 0; j < size.height; j += 30) {
-      canvas.drawLine(Offset(0, j), Offset(size.width, j), paintGrid);
+      canvas.drawLine(Offset(0, j), Offset(size.width, j), grid);
     }
 
-    // Draw Route Path Track
-    final pathPaint = Paint()
-      ..color = Colors.white24
-      ..strokeWidth = 4.0
+    final y = size.height / 2 + 12;
+    final start = Offset(70, y);
+    final end = Offset(size.width - 70, y);
+    final track = Paint()
+      ..color = trackColor.withValues(alpha: 0.9)
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    final active = Paint()
+      ..color = activeColor
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
 
-    final activePathPaint = Paint()
-      ..color = AppTheme.secondaryGold
-      ..strokeWidth = 4.0
-      ..style = PaintingStyle.stroke;
-
-    final start = Offset(40, size.height / 2 + 10);
-    final end = Offset(size.width - 40, size.height / 2 + 10);
-
-    canvas.drawLine(start, end, pathPaint);
-
-    final currentX = start.dx + (end.dx - start.dx) * progress.clamp(0.0, 1.0);
-    canvas.drawLine(start, Offset(currentX, size.height / 2 + 10), activePathPaint);
+    canvas.drawLine(start, end, track);
+    canvas.drawLine(start, Offset(start.dx + (end.dx - start.dx) * progress, y), active);
   }
 
   @override
-  bool shouldRepaint(covariant MapGridPainter oldDelegate) {
-    return oldDelegate.progress != progress;
-  }
+  bool shouldRepaint(covariant _MapPainter old) => old.progress != progress || old.activeColor != activeColor || old.trackColor != trackColor;
 }

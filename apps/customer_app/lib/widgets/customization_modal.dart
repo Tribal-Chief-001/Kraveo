@@ -1,7 +1,12 @@
+// ignore_for_file: sort_child_properties_last
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
-import '../models/menu_item.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/customization.dart';
+import '../models/menu_item.dart';
+import 'ui/format.dart';
+import 'ui/sheet_chrome.dart';
+import 'ui/veg_mark.dart';
 
 class CustomizationModal extends StatefulWidget {
   final MenuItemModel item;
@@ -13,6 +18,14 @@ class CustomizationModal extends StatefulWidget {
     required this.onAddToCart,
   });
 
+  static Future<void> show(
+    BuildContext context, {
+    required MenuItemModel item,
+    required Function(List<CustomizationOption> selectedOptions, String? notes) onAddToCart,
+  }) {
+    return showKSheet<void>(context, builder: (_) => CustomizationModal(item: item, onAddToCart: onAddToCart));
+  }
+
   @override
   State<CustomizationModal> createState() => _CustomizationModalState();
 }
@@ -21,13 +34,14 @@ class _CustomizationModalState extends State<CustomizationModal> {
   final Map<String, CustomizationOption> _singleSelections = {};
   final Map<String, Set<CustomizationOption>> _multiSelections = {};
   final TextEditingController _notesController = TextEditingController();
+  String? _missingGroupId;
 
   @override
   void initState() {
     super.initState();
     for (final group in widget.item.customizationGroups) {
       if (group.maxSelection == 1 && group.options.isNotEmpty) {
-        // Pre-select first option for required single choice
+        // Pre-select first option for single choice
         _singleSelections[group.id] = group.options.first;
       } else {
         _multiSelections[group.id] = {};
@@ -63,321 +77,180 @@ class _CustomizationModalState extends State<CustomizationModal> {
     return result;
   }
 
+  void _submit() {
+    for (final group in widget.item.customizationGroups) {
+      if (group.isRequired) {
+        final hasSingle = _singleSelections.containsKey(group.id);
+        final hasMulti = (_multiSelections[group.id] ?? {}).isNotEmpty;
+        if (!hasSingle && !hasMulti) {
+          setState(() => _missingGroupId = group.id);
+          return;
+        }
+      }
+    }
+    final notes = _notesController.text.trim();
+    widget.onAddToCart(allSelectedOptions, notes.isEmpty ? null : notes);
+    Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.85,
+    final k = context.k;
+    return KSheetFrame(
+      title: widget.item.name,
+      subtitle: Row(children: [
+        VegMark(isVeg: widget.item.isVeg, size: 14),
+        const SizedBox(width: 8),
+        Text('Base price ${rupee(widget.item.price)}', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+      ]),
+      children: [
+        for (final group in widget.item.customizationGroups) _buildGroup(context, group),
+        Text('Note for the kitchen', style: KraveoType.titleMd.copyWith(color: k.ink)),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _notesController,
+          maxLines: 2,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(hintText: 'e.g. less spicy, extra green chutney (optional)'),
+        ),
+        const SizedBox(height: 8),
+      ],
+      footer: KButton(
+        label: 'Add to cart · ${rupee(calculateTotalPrice)}',
+        icon: LucideIcons.plus,
+        onPressed: _submit,
       ),
-      decoration: const BoxDecoration(
-        color: AppTheme.surfaceBackground,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Drag handle indicator
-          Center(
-            child: Container(
-              margin: const EdgeInsets.only(top: 12, bottom: 8),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: AppTheme.borderLight,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          
-          // Header Item Info
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            widget.item.isVeg ? Icons.radio_button_checked : Icons.crop_square,
-                            color: widget.item.isVeg ? Colors.green : Colors.red,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            widget.item.isVeg ? 'VEG' : 'NON-VEG',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: widget.item.isVeg ? Colors.green : Colors.red,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        widget.item.name,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: AppTheme.textDark,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Base Price: ₹${widget.item.price.toInt()}',
-                        style: const TextStyle(
-                          color: AppTheme.textMuted,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: AppTheme.textMuted),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1, color: AppTheme.borderLight),
+    );
+  }
 
-          // Scrollable Customization Groups
-          Flexible(
-            child: ListView(
-              shrinkWrap: true,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              children: [
-                ...widget.item.customizationGroups.map((group) {
-                  final isSingleChoice = group.maxSelection == 1;
-
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 20.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              group.title,
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.textDark,
-                              ),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: group.isRequired
-                                    ? AppTheme.secondaryGold.withValues(alpha: 0.3)
-                                    : AppTheme.surfaceVariant,
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                group.isRequired ? 'REQUIRED' : 'OPTIONAL',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                  color: group.isRequired
-                                      ? AppTheme.secondaryTextGold
-                                      : AppTheme.textMuted,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        ...group.options.map((option) {
-                          if (isSingleChoice) {
-                            final isSelected = _singleSelections[group.id]?.id == option.id;
-                            return ListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              onTap: () {
-                                setState(() {
-                                  _singleSelections[group.id] = option;
-                                });
-                              },
-                              leading: Icon(
-                                isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-                                color: isSelected ? AppTheme.primaryEmerald : AppTheme.textMuted,
-                                size: 20,
-                              ),
-                              title: Text(
-                                option.name,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                  color: AppTheme.textDark,
-                                ),
-                              ),
-                              trailing: option.price > 0
-                                  ? Text(
-                                      '+₹${option.price.toInt()}',
-                                      style: const TextStyle(
-                                        color: AppTheme.primaryEmerald,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    )
-                                  : null,
-                            );
-                          } else {
-                            final set = _multiSelections[group.id] ?? {};
-                            final isSelected = set.any((o) => o.id == option.id);
-                            return CheckboxListTile(
-                              dense: true,
-                              activeColor: AppTheme.primaryEmerald,
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(
-                                option.name,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                  color: AppTheme.textDark,
-                                ),
-                              ),
-                              secondary: option.price > 0
-                                  ? Text(
-                                      '+₹${option.price.toInt()}',
-                                      style: const TextStyle(
-                                        color: AppTheme.primaryEmerald,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    )
-                                  : null,
-                              value: isSelected,
-                              onChanged: (checked) {
-                                setState(() {
-                                  if (checked == true) {
-                                    set.add(option);
-                                  } else {
-                                    set.removeWhere((o) => o.id == option.id);
-                                  }
-                                  _multiSelections[group.id] = set;
-                                });
-                              },
-                            );
-                          }
-                        }),
-                      ],
-                    ),
-                  );
-                }),
-
-                // Special Notes Field
-                const Text(
-                  'Cooking Notes / Request',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.textDark,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _notesController,
-                  decoration: InputDecoration(
-                    hintText: 'e.g. Less spicy, extra green chutney...',
-                    hintStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
-                    filled: true,
-                    fillColor: Colors.white,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: AppTheme.borderLight),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: AppTheme.primaryEmerald, width: 1.5),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  ),
-                ),
-                const SizedBox(height: 20),
-              ],
-            ),
-          ),
-
-          // Bottom Action Button
+  Widget _buildGroup(BuildContext context, CustomizationGroup group) {
+    final k = context.k;
+    final isSingleChoice = group.maxSelection == 1;
+    final missing = _missingGroupId == group.id;
+    final multiSet = _multiSelections[group.id] ?? <CustomizationOption>{};
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 22),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text(group.title, style: KraveoType.titleMd.copyWith(color: k.ink))),
+          const SizedBox(width: 8),
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.08),
-                  blurRadius: 10,
-                  offset: const Offset(0, -4),
-                )
-              ],
+              color: group.isRequired ? k.brandSoft : k.surfaceAlt,
+              borderRadius: BorderRadius.circular(KRadius.pill),
             ),
-            child: SafeArea(
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    for (final group in widget.item.customizationGroups) {
-                      if (group.isRequired) {
-                        final hasSingle = _singleSelections.containsKey(group.id);
-                        final hasMulti = (_multiSelections[group.id] ?? {}).isNotEmpty;
-                        if (!hasSingle && !hasMulti) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Please select required options for "${group.title}"'),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                          return;
-                        }
-                      }
-                    }
-                    final notes = _notesController.text.trim();
-                    widget.onAddToCart(allSelectedOptions, notes.isEmpty ? null : notes);
-                    Navigator.pop(context);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primaryEmerald,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text(
-                        'ADD ITEM',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: AppTheme.secondaryGold,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          '₹${calculateTotalPrice.toInt()}',
-                          style: const TextStyle(
-                            color: AppTheme.secondaryTextGold,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            child: Text(
+              group.isRequired ? 'Required' : (isSingleChoice ? 'Optional' : 'Optional · up to ${group.maxSelection}'),
+              style: KraveoType.caption.copyWith(color: group.isRequired ? k.brand : k.inkMuted, fontSize: 11.5),
             ),
           ),
+        ]),
+        if (missing) ...[
+          const SizedBox(height: 6),
+          Row(children: [
+            Icon(LucideIcons.circleAlert, size: 14, color: kDangerInk),
+            const SizedBox(width: 6),
+            Text('Pick at least one to continue', style: KraveoType.bodySm.copyWith(color: kDangerInk, fontWeight: FontWeight.w600)),
+          ]),
         ],
+        const SizedBox(height: 10),
+        for (final option in group.options)
+          if (isSingleChoice)
+            _OptionTile(
+              label: option.name,
+              price: option.price,
+              selected: _singleSelections[group.id]?.id == option.id,
+              radio: true,
+              onTap: () => setState(() {
+                _singleSelections[group.id] = option;
+                _missingGroupId = null;
+              }),
+            )
+          else
+            _OptionTile(
+              label: option.name,
+              price: option.price,
+              selected: multiSet.any((o) => o.id == option.id),
+              radio: false,
+              onTap: () {
+                final selected = multiSet.any((o) => o.id == option.id);
+                if (!selected && multiSet.length >= group.maxSelection) {
+                  setState(() => _missingGroupId = null);
+                  ScaffoldMessenger.of(context)
+                    ..hideCurrentSnackBar()
+                    ..showSnackBar(SnackBar(content: Text('You can pick up to ${group.maxSelection} for ${group.title}')));
+                  return;
+                }
+                setState(() {
+                  final set = _multiSelections[group.id] ?? <CustomizationOption>{};
+                  if (selected) {
+                    set.removeWhere((o) => o.id == option.id);
+                  } else {
+                    set.add(option);
+                  }
+                  _multiSelections[group.id] = set;
+                  _missingGroupId = null;
+                });
+              },
+            ),
+      ]),
+    );
+  }
+}
+
+class _OptionTile extends StatelessWidget {
+  const _OptionTile({required this.label, required this.price, required this.selected, required this.radio, required this.onTap});
+
+  final String label;
+  final double price;
+  final bool selected;
+  final bool radio;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: KPressable(
+        onTap: onTap,
+        scale: 0.985,
+        semanticLabel: '$label${price > 0 ? ', plus ${rupee(price)}' : ''}${selected ? ', selected' : ''}',
+        child: AnimatedContainer(
+          duration: KMotion.base,
+          curve: KMotion.emphasized,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            color: selected ? k.brandSoft : k.surface,
+            borderRadius: BorderRadius.circular(KRadius.md),
+            border: Border.all(color: selected ? k.brand : k.line, width: selected ? 1.6 : 1.2),
+          ),
+          child: Row(children: [
+            AnimatedContainer(
+              duration: KMotion.fast,
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(
+                color: selected ? k.brand : Colors.transparent,
+                shape: radio ? BoxShape.circle : BoxShape.rectangle,
+                borderRadius: radio ? null : BorderRadius.circular(7),
+                border: Border.all(color: selected ? k.brand : k.inkFaint, width: 1.6),
+              ),
+              child: selected
+                  ? (radio
+                      ? Center(child: Container(width: 8, height: 8, decoration: BoxDecoration(color: k.onBrand, shape: BoxShape.circle)))
+                      : Icon(LucideIcons.check, size: 14, color: k.onBrand))
+                  : null,
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Text(price > 0 ? label.replaceAll(RegExp(r'\s*\(\+\s*\u20B9\s*\d+\)'), '') : label, style: KraveoType.body.copyWith(color: k.ink, fontWeight: FontWeight.w600))),
+            if (price > 0) ...[
+              const SizedBox(width: 8),
+              Text('+${rupee(price)}', style: KraveoType.body.copyWith(color: k.brand, fontWeight: FontWeight.w700)),
+            ],
+          ]),
+        ),
       ),
     );
   }

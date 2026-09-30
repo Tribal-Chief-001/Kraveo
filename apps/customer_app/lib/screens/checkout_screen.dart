@@ -1,12 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
-import '../theme/app_theme.dart';
 import '../providers/cart_provider.dart';
 import '../providers/order_provider.dart';
 import '../services/customer_api_service.dart';
 import '../widgets/coupon_box.dart';
-import '../widgets/hostel_dropdown.dart';
+import '../widgets/ui/bill_breakdown.dart';
+import '../widgets/ui/coins_toggle.dart';
+import '../widgets/ui/format.dart';
+import '../widgets/ui/hostel_pill.dart';
+import '../widgets/ui/k_icon_button.dart';
+import '../widgets/ui/scroll_empty.dart';
+import '../widgets/ui/sheet_chrome.dart';
+import '../widgets/ui/snack.dart';
+import '../widgets/ui/veg_mark.dart';
 import 'live_tracking_screen.dart';
 
 class CheckoutScreen extends StatefulWidget {
@@ -34,7 +43,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   final List<Map<String, dynamic>> _paymentOptions = [
     {
       'name': 'UPI via Razorpay',
-      'icon': Icons.account_balance_wallet,
+      'icon': LucideIcons.smartphone,
       'sub': 'Google Pay, PhonePe, Paytm and more',
     },
   ];
@@ -201,385 +210,197 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   void _showPaymentError(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.red.shade700),
-    );
+    showKSnack(context, message, error: true);
   }
+
 
   @override
   Widget build(BuildContext context) {
+    final k = context.k;
     final cart = Provider.of<CartProvider>(context);
     final orderProvider = Provider.of<OrderProvider>(context, listen: false);
 
     return Scaffold(
-      backgroundColor: AppTheme.surfaceBackground,
+      backgroundColor: k.bg,
       appBar: AppBar(
-        title: const Text('Checkout'),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Dropoff Location Card
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: const [
-                            Icon(Icons.location_on, color: AppTheme.primaryEmerald, size: 20),
-                            SizedBox(width: 8),
-                            Text(
-                              'DELIVERY HOSTEL GATE',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w800,
-                                color: AppTheme.primaryEmerald,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                        HostelDropdown(
-                          selectedHostel: _currentHostel,
-                          onChanged: (newHostel) {
-                            if (newHostel != null) {
-                              setState(() {
-                                _currentHostel = newHostel;
-                              });
-                            }
-                          },
-                          hostelBlocks: const [
-                            'Block 1',
-                            'Block 2',
-                            'Block 3',
-                            'Block 4',
-                            'Block 5',
-                            'Block 6',
-                            'Girls Gate 1',
-                            'Girls Gate 2',
-                            'VIT Main Gate',
-                          ],
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _currentHostel,
-                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppTheme.textDark),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Runner will meet you at the primary gate entrance.',
-                      style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _deliveryNoteController,
-                      decoration: InputDecoration(
-                        labelText: 'Gate Handshake Note / Instructions',
-                        hintText: 'e.g. Call 5 mins before arrival...',
-                        hintStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
-                        isDense: true,
-                        filled: true,
-                        fillColor: AppTheme.surfaceVariant.withValues(alpha: 0.5),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: BorderSide.none,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Kraveo Coins Loyalty Rewards Card
-            Card(
-              color: const Color(0xFFFDD400).withValues(alpha: 0.15),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: const BorderSide(color: Color(0xFFFDD400), width: 1.5),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(14.0),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: const BoxDecoration(
-                        color: Color(0xFFFDD400),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.monetization_on, color: Color(0xFF1B1C1C), size: 22),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Kraveo Coins (${cart.userKraveoCoins} Coins)',
-                            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppTheme.textDark),
-                          ),
-                          const SizedBox(height: 2),
-                          const Text(
-                            'Redeem 50 Coins for Flat ₹20 OFF',
-                            style: TextStyle(fontSize: 12, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Switch(
-                      value: cart.isKraveoCoinsRedeemed,
-                      activeThumbColor: AppTheme.primaryEmerald,
-                      onChanged: (val) => cart.toggleKraveoCoinsRedemption(),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Order Summary Card
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          cart.dhabaName ?? 'Order Summary',
-                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textDark),
-                        ),
-                        Text(
-                          '${cart.itemCount} Items',
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryEmerald),
-                        ),
-                      ],
-                    ),
-                    const Divider(height: 20, color: AppTheme.borderLight),
-                    ...cart.items.map((item) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4.0),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(
-                              child: Text(
-                                '${item.quantity}x ${item.item.name}',
-                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textDark),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            Text(
-                              '₹${item.totalPrice.toInt()}',
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textDark),
-                            ),
-                          ],
-                        ),
-                      );
-                    }),
-                    const SizedBox(height: 12),
-                    const CouponBox(),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Payment Options Card
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Select Payment Method',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textDark),
-                    ),
-                    const SizedBox(height: 12),
-                    ..._paymentOptions.map((opt) {
-                      final isSelected = _selectedPaymentMethod == opt['name'];
-                      return InkWell(
-                        onTap: () => setState(() => _selectedPaymentMethod = opt['name']),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: isSelected ? AppTheme.primaryEmerald.withValues(alpha: 0.08) : Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: isSelected ? AppTheme.primaryEmerald : AppTheme.borderLight,
-                              width: isSelected ? 1.5 : 1.0,
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                opt['icon'] as IconData,
-                                color: isSelected ? AppTheme.primaryEmerald : AppTheme.textMuted,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      opt['name'] as String,
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                        color: isSelected ? AppTheme.primaryEmerald : AppTheme.textDark,
-                                      ),
-                                    ),
-                                    Text(
-                                      opt['sub'] as String,
-                                      style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Icon(
-                                isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-                                color: isSelected ? AppTheme.primaryEmerald : AppTheme.textMuted,
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Final Bill Summary
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    _buildRow('Subtotal', '₹${cart.subtotal.toInt()}'),
-                    _buildRow('Delivery Fee', '₹${cart.deliveryFee.toInt()}'),
-                    _buildRow('Taxes & Packaging', '₹${cart.taxAndPackaging.toInt()}'),
-                    if (cart.appliedCouponCode != null)
-                      _buildRow(
-                        'Coupon Discount (${cart.appliedCouponCode})',
-                        '-₹${cart.couponDiscountAmount.toInt()}',
-                        isDiscount: true,
-                      ),
-                    if (cart.isKraveoCoinsRedeemed)
-                      _buildRow(
-                        'Kraveo Coins Discount',
-                        '-₹${cart.kraveoCoinsDiscountAmount.toInt()}',
-                        isDiscount: true,
-                      ),
-                    const Divider(height: 20, color: AppTheme.borderLight),
-
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Grand Total',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textDark),
-                        ),
-                        Text(
-                          '₹${cart.grandTotal.toInt()}',
-                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppTheme.primaryEmerald),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-          ],
-        ),
-      ),
-      bottomNavigationBar: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.08),
-              blurRadius: 10,
-              offset: const Offset(0, -4),
-            )
-          ],
-        ),
-        child: SafeArea(
-          child: SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _isProcessingPayment || cart.items.isEmpty
-                  ? null
-                  : () => _handlePlaceOrder(cart, orderProvider),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryEmerald,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    'PAY ₹${cart.grandTotal.toInt()} VIA $_selectedPaymentMethod',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                  ),
-                  const SizedBox(width: 8),
-                  const Icon(Icons.lock, size: 16, color: AppTheme.secondaryGold),
-                ],
-              ),
+        automaticallyImplyLeading: false,
+        leadingWidth: 68,
+        toolbarHeight: 68,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 20),
+          child: Center(
+            child: KIconButton(
+              icon: LucideIcons.arrowLeft,
+              semanticLabel: 'Back',
+              onTap: _isProcessingPayment ? null : () => Navigator.of(context).maybePop(),
             ),
           ),
         ),
+        title: const Text('Checkout'),
       ),
+      body: cart.items.isEmpty
+          ? KEmptyScroll(
+              child: KEmptyState(
+              icon: LucideIcons.shoppingBag,
+              title: 'Your cart is empty',
+              message: 'Add something delicious from a kitchen and come back to pay.',
+              action: KButton(label: 'Back to menu', kind: KButtonKind.tonal, expand: false, onPressed: () => Navigator.of(context).maybePop()),
+              ),
+            )
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, 24),
+              children: [
+                KReveal(child: _SectionCard(title: 'Drop-off', icon: LucideIcons.mapPin, child: _buildDropoff(context, k))),
+                const SizedBox(height: 14),
+                KReveal(index: 1, child: _SectionCard(title: cart.dhabaName ?? 'Your order', icon: LucideIcons.receiptText, child: _buildSummary(context, k, cart))),
+                const SizedBox(height: 14),
+                KReveal(index: 2, child: CoinsToggle(cart: cart)),
+                const SizedBox(height: 14),
+                KReveal(index: 3, child: _SectionCard(title: 'Payment', icon: LucideIcons.wallet, child: _buildPayment(context, k))),
+                const SizedBox(height: 14),
+                KReveal(index: 4, child: BillBreakdown(cart: cart)),
+              ],
+            ),
+      bottomNavigationBar: cart.items.isEmpty
+          ? null
+          : KSheetFooter(
+              floating: true,
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                KButton(
+                  label: 'Pay ${rupee(cart.grandTotal)}',
+                  icon: LucideIcons.lock,
+                  loading: _isProcessingPayment,
+                  onPressed: () => _handlePlaceOrder(cart, orderProvider),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _isProcessingPayment ? 'Opening secure payment. Please do not close the app.' : 'Next: pay by UPI, then get your gate OTP and live tracking.',
+                  textAlign: TextAlign.center,
+                  style: KraveoType.caption.copyWith(color: k.inkFaint, fontSize: 12),
+                ),
+              ]),
+            ),
     );
   }
 
-  Widget _buildRow(String label, String value, {bool isDiscount = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              color: isDiscount ? AppTheme.accentGreen : AppTheme.textMuted,
-            ),
-          ),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: isDiscount ? AppTheme.accentGreen : AppTheme.textDark,
-            ),
-          ),
-        ],
+  Widget _buildDropoff(BuildContext context, KraveoTokens k) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      HostelPill(
+        caption: 'DELIVER TO',
+        selectedHostel: _currentHostel,
+        hostelBlocks: kHostelBlocks,
+        onChanged: (newHostel) => setState(() => _currentHostel = newHostel),
       ),
+      const SizedBox(height: 12),
+      Text(
+        'Your runner meets you at the gate. After you pay you get a 4-digit OTP: share it only when they arrive.',
+        style: KraveoType.bodySm.copyWith(color: k.inkMuted),
+      ),
+      const SizedBox(height: 14),
+      TextField(
+        controller: _deliveryNoteController,
+        textInputAction: TextInputAction.done,
+        decoration: InputDecoration(
+          hintText: 'Note for your runner, e.g. call 5 mins before',
+          prefixIcon: Icon(LucideIcons.messageSquare, size: 18, color: k.inkMuted),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _buildSummary(BuildContext context, KraveoTokens k, CartProvider cart) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text('${cart.itemCount} ${cart.itemCount == 1 ? 'item' : 'items'} in your order', style: KraveoType.label.copyWith(color: k.brand, fontSize: 13)),
+      const SizedBox(height: 6),
+      for (final item in cart.items)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(padding: const EdgeInsets.only(top: 3), child: VegMark(isVeg: item.item.isVeg, size: 14)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${item.quantity} × ${item.item.name}', maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: k.ink, fontWeight: FontWeight.w600, fontSize: 14)),
+                if (item.selectedOptions.isNotEmpty)
+                  Text(item.customizationSummary, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+              ]),
+            ),
+            const SizedBox(width: 12),
+            Text(rupee(item.totalPrice), style: KraveoType.body.copyWith(color: k.ink, fontWeight: FontWeight.w700, fontSize: 14)),
+          ]),
+        ),
+      Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Divider(height: 1, color: k.line)),
+      const CouponBox(),
+    ]);
+  }
+
+  Widget _buildPayment(BuildContext context, KraveoTokens k) {
+    return Column(children: [
+      for (final opt in _paymentOptions)
+        Builder(builder: (context) {
+          final isSelected = _selectedPaymentMethod == opt['name'];
+          return KPressable(
+            onTap: () => setState(() => _selectedPaymentMethod = opt['name']),
+            scale: 0.985,
+            semanticLabel: '${opt['name']}, ${opt['sub']}${isSelected ? ', selected' : ''}',
+            child: AnimatedContainer(
+              duration: KMotion.base,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: isSelected ? k.brandSoft : k.surface,
+                borderRadius: BorderRadius.circular(KRadius.md),
+                border: Border.all(color: isSelected ? k.brand : k.line, width: isSelected ? 1.6 : 1.2),
+              ),
+              child: Row(children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(color: isSelected ? k.brand : k.surfaceAlt, shape: BoxShape.circle),
+                  child: Icon(opt['icon'] as IconData, size: 20, color: isSelected ? k.onBrand : k.inkMuted),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(opt['name'] as String, style: KraveoType.titleMd.copyWith(color: k.ink)),
+                    Text(opt['sub'] as String, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+                  ]),
+                ),
+                const SizedBox(width: 8),
+                Icon(isSelected ? LucideIcons.circleCheck : LucideIcons.circle, color: isSelected ? k.brand : k.inkFaint),
+              ]),
+            ),
+          );
+        }),
+    ]);
+  }
+}
+
+class _SectionCard extends StatelessWidget {
+  const _SectionCard({required this.title, required this.icon, required this.child});
+
+  final String title;
+  final IconData icon;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return KCard(
+      padding: const EdgeInsets.all(18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(color: k.brandSoft, shape: BoxShape.circle),
+            child: Icon(icon, size: 17, color: k.brand),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink))),
+        ]),
+        const SizedBox(height: 14),
+        child,
+      ]),
     );
   }
 }

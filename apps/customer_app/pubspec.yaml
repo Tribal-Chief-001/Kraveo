@@ -12,7 +12,9 @@ dependencies:
   cupertino_icons: ^1.0.6
   http: ^1.2.1
   provider: ^6.1.2
-  google_fonts: ^6.2.1
+  kraveo_ui:
+    path: ../../packages/kraveo_ui
+  lucide_icons_flutter: ^3.1.20
   shared_preferences: ^2.2.2
   socket_io_client: ^2.0.3+1
   razorpay_flutter: ^1.4.6

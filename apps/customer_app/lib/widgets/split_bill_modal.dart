@@ -1,12 +1,22 @@
+// ignore_for_file: sort_child_properties_last
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../theme/app_theme.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/order.dart';
+import 'ui/format.dart';
+import 'ui/k_icon_button.dart';
+import 'ui/sheet_chrome.dart';
+import 'ui/snack.dart';
 
 class SplitBillModal extends StatefulWidget {
   final OrderModel order;
 
   const SplitBillModal({super.key, required this.order});
+
+  static Future<void> show(BuildContext context, {required OrderModel order}) {
+    return showKSheet<void>(context, builder: (_) => SplitBillModal(order: order));
+  }
 
   @override
   State<SplitBillModal> createState() => _SplitBillModalState();
@@ -19,150 +29,90 @@ class _SplitBillModalState extends State<SplitBillModal> {
     return (widget.order.totalAmount / _roommateCount).round().toString();
   }
 
-
   String get _splitSummaryText {
     final perPerson = _formattedPerPerson;
     final buffer = StringBuffer();
-    buffer.writeln('🛵 *KRAVEO LATE-NIGHT HOSTEL BILL SPLIT* 🍕');
-    buffer.writeln('📍 Dhaba: ${widget.order.dhabaName}');
-    buffer.writeln('🏢 Dropoff: ${widget.order.hostel}');
+    buffer.writeln('*KRAVEO LATE-NIGHT HOSTEL BILL SPLIT*');
+    buffer.writeln('Kitchen: ${widget.order.dhabaName}');
+    buffer.writeln('Drop-off: ${widget.order.hostel}');
     buffer.writeln('--------------------------------');
-    for (final item in widget.order.items) {
-      buffer.writeln('• ${item.quantity}x ${item.item.name} - ₹${item.totalPrice.toInt()}');
+    if (widget.order.items.isNotEmpty) {
+      for (final item in widget.order.items) {
+        buffer.writeln('- ${item.quantity}x ${item.item.name} - ${rupee(item.totalPrice)}');
+      }
+      buffer.writeln('--------------------------------');
     }
-    buffer.writeln('--------------------------------');
-    buffer.writeln('💰 Total Bill: ₹${widget.order.totalAmount.toInt()}');
-    buffer.writeln('👥 Split among $_roommateCount roommates: *₹$perPerson per person*');
-    buffer.writeln('📲 Pay via UPI to hosteller!');
+    buffer.writeln('Total bill: ${rupee(widget.order.totalAmount)}');
+    buffer.writeln('Split among $_roommateCount roommates: *₹$perPerson per person*');
+    buffer.writeln('Pay via UPI to the one who ordered.');
     return buffer.toString();
   }
 
   @override
   Widget build(BuildContext context) {
+    final k = context.k;
     final perPersonAmount = _formattedPerPerson;
 
-
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: const [
-                  Icon(Icons.groups, color: AppTheme.primaryEmerald, size: 24),
-                  SizedBox(width: 8),
-                  Text(
-                    'Roommate Split-Bill Generator',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textDark),
-                  ),
-                ],
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, color: AppTheme.textMuted),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ],
+    return KSheetFrame(
+      title: 'Split the bill',
+      subtitle: Text('Share what each roommate owes, ready for WhatsApp.', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+      children: [
+        Row(children: [
+          Expanded(child: Text('How many people are sharing?', style: KraveoType.titleMd.copyWith(color: k.ink))),
+          const SizedBox(width: 8),
+          KIconButton(
+            icon: LucideIcons.minus,
+            semanticLabel: 'One fewer person',
+            onTap: _roommateCount > 1 ? () => setState(() => _roommateCount--) : null,
           ),
-          const Divider(height: 20, color: AppTheme.borderLight),
-          const SizedBox(height: 8),
-
-          // Roommate Count Stepper
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('Split among how many roommates?', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-              Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.remove_circle_outline, color: AppTheme.accentRed),
-                    onPressed: _roommateCount > 1 ? () => setState(() => _roommateCount--) : null,
-                  ),
-                  Text('$_roommateCount', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  IconButton(
-                    icon: const Icon(Icons.add_circle_outline, color: AppTheme.primaryEmerald),
-                    onPressed: () => setState(() => _roommateCount++),
-                  ),
-                ],
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 16),
-
-          // Per Person Calculation Banner
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppTheme.secondaryGold.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppTheme.secondaryGold),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('EACH ROOMMATE PAYS', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.secondaryTextGold)),
-                    Text('₹$perPersonAmount', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: AppTheme.textDark)),
-                  ],
-                ),
-                Text('Total ₹${widget.order.totalAmount.toInt()}', style: const TextStyle(color: AppTheme.textMuted, fontSize: 13, fontWeight: FontWeight.bold)),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Preview Text Box
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: AppTheme.surfaceBackground,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.borderLight),
-            ),
-            child: Text(
-              _splitSummaryText,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: AppTheme.textDark),
-            ),
-          ),
-
-          const SizedBox(height: 20),
-
-          // Copy / Share Buttons
           SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton.icon(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: _splitSummaryText));
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Itemized Split Bill copied to clipboard! Paste in WhatsApp group.'),
-                    backgroundColor: AppTheme.primaryEmerald,
-                  ),
-                );
-              },
-              icon: const Icon(Icons.copy, color: Colors.white),
-              label: const Text('COPY BILL SUMMARY TO PASTE IN WHATSAPP', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryEmerald,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              ),
-            ),
+            width: 44,
+            child: Text('$_roommateCount', textAlign: TextAlign.center, style: KraveoType.numericSm.copyWith(color: k.ink)),
           ),
-        ],
+          KIconButton(
+            icon: LucideIcons.plus,
+            semanticLabel: 'One more person',
+            onTap: () => setState(() => _roommateCount++),
+          ),
+        ]),
+        const SizedBox(height: 18),
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(color: k.brandSoft, borderRadius: BorderRadius.circular(KRadius.xl)),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('EACH PERSON PAYS', style: KraveoType.label.copyWith(color: k.brand)),
+                const SizedBox(height: 4),
+                Text('₹$perPersonAmount', style: KraveoType.displayMd.copyWith(color: k.ink)),
+              ]),
+            ),
+            const SizedBox(width: 12),
+            Text('of ${rupee(widget.order.totalAmount)}', style: KraveoType.body.copyWith(color: k.inkMuted, fontWeight: FontWeight.w700)),
+          ]),
+        ),
+        const SizedBox(height: 18),
+        Text('Message preview', style: KraveoType.label.copyWith(color: k.inkMuted)),
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: k.surfaceAlt, borderRadius: BorderRadius.circular(KRadius.md)),
+          child: Text(_splitSummaryText, style: KraveoType.bodySm.copyWith(color: k.ink, height: 1.5)),
+        ),
+        const SizedBox(height: 4),
+      ],
+      footer: KButton(
+        label: 'Copy for WhatsApp',
+        icon: LucideIcons.copy,
+        onPressed: () {
+          Clipboard.setData(ClipboardData(text: _splitSummaryText));
+          final messenger = ScaffoldMessenger.of(context);
+          Navigator.pop(context);
+          messenger
+            ..hideCurrentSnackBar()
+            ..showSnackBar(buildKSnack('Bill copied. Paste it in your roommates’ WhatsApp group.', icon: LucideIcons.copyCheck));
+        },
       ),
     );
   }

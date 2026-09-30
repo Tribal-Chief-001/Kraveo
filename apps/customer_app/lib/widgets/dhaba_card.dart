@@ -1,7 +1,14 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
+import 'package:kraveo_ui/kraveo_ui.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/dhaba.dart';
+import 'ui/format.dart';
+import 'ui/info_chip.dart';
+import 'ui/k_icon_button.dart';
+import 'ui/k_image.dart';
 
+/// Image-led kitchen card: photo with scrim, rating + ETA overlaid, name and cuisine on the image,
+/// open / closed state in the footer.
 class DhabaCard extends StatelessWidget {
   final Dhaba dhaba;
   final VoidCallback onTap;
@@ -14,242 +21,106 @@ class DhabaCard extends StatelessWidget {
     this.onFavoriteToggle,
   });
 
+  static String heroTag(String dhabaId) => 'dhaba-image-$dhabaId';
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: AppTheme.cardWhite,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.borderLight),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: onTap,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Stack(
-              children: [
-                ClipRRect(
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                  child: Image.network(
-                    dhaba.bannerUrl,
-                    height: 165,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) => Container(
-                      height: 165,
-                      color: AppTheme.surfaceVariant,
-                      child: const Center(
-                        child: Icon(Icons.restaurant, color: AppTheme.textMuted, size: 40),
-                      ),
+    final k = context.k;
+    final open = dhaba.isAcceptingOrders;
+    return KPressable(
+      onTap: onTap,
+      scale: 0.98,
+      semanticLabel: '${dhaba.name}, ${open ? 'open' : 'closed'}, rated ${dhaba.rating}, ${dhaba.eta}',
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 18),
+        decoration: BoxDecoration(
+          color: k.surface,
+          borderRadius: BorderRadius.circular(KRadius.xl),
+          boxShadow: KShadow.soft(k.shadowTint),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(KRadius.xl),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            AspectRatio(
+              aspectRatio: 1.42,
+              child: Stack(fit: StackFit.expand, children: [
+                Hero(tag: heroTag(dhaba.id), child: KImage(dhaba.bannerUrl, grayscale: !open)),
+                // Warm scrims: top for chip legibility, bottom for the title.
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        KraveoPalette.g950.withValues(alpha: 0.35),
+                        Colors.transparent,
+                        KraveoPalette.g950.withValues(alpha: 0.9),
+                      ],
+                      stops: const [0, 0.42, 1],
                     ),
                   ),
                 ),
                 Positioned(
                   top: 12,
                   left: 12,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.95),
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.1),
-                          blurRadius: 4,
-                        )
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.star, color: AppTheme.secondaryTextGold, size: 15),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${dhaba.rating}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 12,
-                            color: AppTheme.textDark,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  child: open
+                      ? KInfoChip(icon: LucideIcons.star, label: dhaba.rating.toStringAsFixed(1), glass: true, iconColor: kStarColor)
+                      : const KInfoChip(icon: LucideIcons.moon, label: 'Closed now', glass: true),
                 ),
                 if (onFavoriteToggle != null)
                   Positioned(
-                    top: 12,
-                    right: 12,
-                    child: InkWell(
+                    top: 8,
+                    right: 8,
+                    child: KIconButton(
+                      icon: LucideIcons.heart,
+                      semanticLabel: dhaba.isFavorite ? 'Remove ${dhaba.name} from favourites' : 'Save ${dhaba.name} to favourites',
                       onTap: onFavoriteToggle,
-                      borderRadius: BorderRadius.circular(20),
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.95),
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
-                              blurRadius: 4,
-                            )
-                          ],
-                        ),
-                        child: Icon(
-                          dhaba.isFavorite ? Icons.favorite : Icons.favorite_border,
-                          color: dhaba.isFavorite ? AppTheme.accentRed : AppTheme.textMuted,
-                          size: 18,
-                        ),
-                      ),
+                      background: k.surface.withValues(alpha: 0.94),
+                      bordered: false,
+                      color: dhaba.isFavorite ? KraveoPalette.danger : k.inkMuted,
                     ),
                   ),
                 Positioned(
-                  bottom: 12,
-                  right: 12,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primaryEmerald.withValues(alpha: 0.9),
-                      borderRadius: BorderRadius.circular(12),
+                  left: 16,
+                  right: 16,
+                  bottom: 14,
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                        Text(dhaba.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.headlineSm.copyWith(color: Colors.white)),
+                        const SizedBox(height: 2),
+                        Text(dhaba.category, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: Colors.white.withValues(alpha: 0.85))),
+                      ]),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.timer_outlined, color: AppTheme.secondaryGold, size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          dhaba.eta,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 11,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                    const SizedBox(width: 10),
+                    KInfoChip(icon: LucideIcons.clock, label: dhaba.eta, glass: true),
+                  ]),
                 ),
-              ],
+              ]),
             ),
             Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          dhaba.name,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.textDark,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: AppTheme.accentGreen.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text(
-                          'OPEN',
-                          style: TextStyle(
-                            color: AppTheme.accentGreen,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 10,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    dhaba.category,
-                    style: const TextStyle(fontSize: 13, color: AppTheme.textMuted),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: Row(children: [
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(color: open ? KraveoPalette.g500 : k.inkFaint, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: 8),
+                Text(open ? 'Open' : 'Closed', style: KraveoType.label.copyWith(color: open ? k.brand : k.inkMuted, fontSize: 12.5)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Min ${rupee(dhaba.minOrder)} · Delivery ${rupee(dhaba.deliveryFee)}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                    style: KraveoType.bodySm.copyWith(color: k.inkMuted),
                   ),
-                  if (dhaba.tags.isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 4,
-                      children: dhaba.tags.take(3).map((tag) {
-                        return Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: AppTheme.surfaceVariant.withValues(alpha: 0.6),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            tag,
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                              color: AppTheme.textMuted,
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ],
-                  const SizedBox(height: 14),
-                  const Divider(height: 1, color: AppTheme.borderLight),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Min. Order ₹${dhaba.minOrder.toInt()} • Delivery ₹${dhaba.deliveryFee.toInt()}',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.textMuted,
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                        decoration: BoxDecoration(
-                          color: AppTheme.secondaryGold,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: const [
-                            Text(
-                              'View Menu',
-                              style: TextStyle(
-                                color: AppTheme.secondaryTextGold,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
-                              ),
-                            ),
-                            SizedBox(width: 4),
-                            Icon(Icons.arrow_forward_ios, size: 10, color: AppTheme.secondaryTextGold),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+                ),
+              ]),
             ),
-          ],
+          ]),
         ),
       ),
     );
