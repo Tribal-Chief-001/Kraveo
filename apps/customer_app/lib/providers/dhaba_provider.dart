@@ -8,7 +8,8 @@ class DhabaProvider with ChangeNotifier {
   String _searchQuery = '';
   int _selectedCategoryIndex = 0;
   bool _showFavoritesOnly = false;
-  final Set<String> _favoriteDhabaIds = {'ven-1', 'ven-3'};
+  static const Set<String> _defaultFavoriteIds = {'ven-1', 'ven-3'};
+  final Set<String> _favoriteDhabaIds = {..._defaultFavoriteIds};
 
   final List<String> categories = [
     'All',
@@ -340,6 +341,17 @@ class DhabaProvider with ChangeNotifier {
     } catch (error) {
       debugPrint('⚠️ [Catalog] Live catalog unavailable; retaining local catalog: $error');
     }
+  }
+
+  /// Clears per-student browsing state (search, filters, favourites) on logout.
+  void resetForLogout() {
+    _searchQuery = '';
+    _selectedCategoryIndex = 0;
+    _showFavoritesOnly = false;
+    _favoriteDhabaIds
+      ..clear()
+      ..addAll(_defaultFavoriteIds);
+    notifyListeners();
   }
 
   void setSearchQuery(String query) {

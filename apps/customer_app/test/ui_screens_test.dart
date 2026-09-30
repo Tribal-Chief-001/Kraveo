@@ -4,6 +4,7 @@ import 'package:customer_app/models/order.dart';
 import 'package:customer_app/providers/cart_provider.dart';
 import 'package:customer_app/providers/dhaba_provider.dart';
 import 'package:customer_app/providers/order_provider.dart';
+import 'package:customer_app/providers/session_provider.dart';
 import 'package:customer_app/screens/auth_screen.dart';
 import 'package:customer_app/screens/dhaba_menu_screen.dart';
 import 'package:customer_app/screens/home_screen.dart';
@@ -28,6 +29,7 @@ Future<void> pumpScreen(
   CartProvider? cart,
   OrderProvider? orders,
   DhabaProvider? dhabas,
+  SessionProvider? session,
 }) async {
   tester.view.physicalSize = const Size(360, 640);
   tester.view.devicePixelRatio = 1.0;
@@ -41,6 +43,7 @@ Future<void> pumpScreen(
   await tester.pumpWidget(
     MultiProvider(
       providers: [
+        ChangeNotifierProvider<SessionProvider>.value(value: session ?? SessionProvider(initial: SessionStatus.signedIn)),
         ChangeNotifierProvider<DhabaProvider>.value(value: dhabas ?? DhabaProvider()),
         ChangeNotifierProvider<CartProvider>.value(value: cart ?? CartProvider()),
         ChangeNotifierProvider<OrderProvider>.value(value: orders ?? OrderProvider()),
@@ -100,7 +103,7 @@ void main() {
   setUpAll(loadKraveoFonts);
 
   testWidgets('AuthScreen shows the phone step and validates the number', (tester) async {
-    await pumpScreen(tester, AuthScreen(onAuthenticated: () {}));
+    await pumpScreen(tester, AuthScreen(onVerified: (_) {}));
     expect(find.text('Send code'), findsOneWidget);
     expect(find.textContaining('cravings'), findsOneWidget);
 

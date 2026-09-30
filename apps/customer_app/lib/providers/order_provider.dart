@@ -49,6 +49,14 @@ class OrderProvider with ChangeNotifier {
 
   Timer? _statusTimer;
 
+  /// Forgets the previous student's orders on logout (history and any live order).
+  void resetForLogout() {
+    _statusTimer?.cancel();
+    _activeOrder = null;
+    _orderHistory.clear();
+    notifyListeners();
+  }
+
   OrderModel? get activeOrder => _activeOrder;
   List<OrderModel> get orderHistory => List.unmodifiable(_orderHistory);
 

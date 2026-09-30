@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../models/order.dart';
 import '../providers/dhaba_provider.dart';
 import '../providers/order_provider.dart';
+import '../providers/session_provider.dart';
 import '../widgets/dhaba_card.dart';
 import '../widgets/ui/display_text.dart';
 import '../widgets/ui/floating_bar.dart';
@@ -17,6 +18,7 @@ import '../widgets/ui/status_map.dart';
 import 'dhaba_menu_screen.dart';
 import 'live_tracking_screen.dart';
 import 'order_history_screen.dart';
+import 'profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -27,7 +29,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentTab = 0;
-  String selectedHostel = 'Block 1';
   final TextEditingController _searchController = TextEditingController();
 
   /// True until the live catalog answers (or a short grace period passes), so users see
@@ -57,9 +58,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _goToTab(int index) => setState(() => _currentTab = index);
 
+  /// Drop-off point changes made from Home are saved to the profile too, so the Me tab,
+  /// checkout and the next launch all agree. Reverts (with a message) if saving fails.
+  Future<void> _changeHostel(String block) async {
+    final result = await context.read<SessionProvider>().changeHostel(block);
+    if (!mounted || result.success || result.unauthorized) return;
+    showKSnack(
+      context,
+      result.networkError ? 'Couldn\'t save your drop-off point. Check your connection.' : (result.message ?? 'Couldn\'t save your drop-off point.'),
+      error: true,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.k;
+    final selectedHostel = context.select<SessionProvider, String>((s) => s.selectedHostel);
     return Scaffold(
       backgroundColor: k.bg,
       extendBody: true,
@@ -74,6 +88,7 @@ class _HomeScreenState extends State<HomeScreen> {
             onTrackOrder: () => _goToTab(1),
             onExplore: () => _goToTab(0),
           ),
+          ProfileScreen(onOpenOrders: () => _goToTab(2), onTrackOrder: () => _goToTab(1)),
         ],
       ),
       bottomNavigationBar: KGlassNav(
@@ -83,6 +98,7 @@ class _HomeScreenState extends State<HomeScreen> {
           KNavItem(LucideIcons.house, 'Home'),
           KNavItem(LucideIcons.bike, 'Track'),
           KNavItem(LucideIcons.receiptText, 'Orders'),
+          KNavItem(LucideIcons.user, 'Me'),
         ],
       ),
     );
@@ -100,6 +116,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final k = context.k;
     final dhabaProvider = Provider.of<DhabaProvider>(context);
     final orderProvider = Provider.of<OrderProvider>(context);
+    final session = context.watch<SessionProvider>();
+    final selectedHostel = session.selectedHostel;
     final activeOrder = orderProvider.activeOrder;
     final showActiveBar = activeOrder != null && activeOrder.status.isLive;
     final dhabas = dhabaProvider.dhabas;
@@ -124,7 +142,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: HostelPill(
                   selectedHostel: selectedHostel,
                   hostelBlocks: hostelBlocks,
-                  onChanged: (val) => setState(() => selectedHostel = val),
+                  onChanged: _changeHostel,
                 ),
               ),
               actions: [
@@ -144,7 +162,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, 0),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(_greeting().toUpperCase(), style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.2)),
+                      Text(
+                        session.user?.firstName.isNotEmpty == true ? '${_greeting()}, ${session.user!.firstName}'.toUpperCase() : _greeting().toUpperCase(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.2),
+                      ),
                       const SizedBox(height: 6),
                       KDisplayText('What are you\ncraving?', style: KraveoType.displayMd.copyWith(color: k.ink)),
                     ]),

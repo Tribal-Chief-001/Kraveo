@@ -195,6 +195,18 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Seeds the balance from the backend when a student signs in.
+  void setKraveoCoins(int coins) {
+    _userKraveoCoins = coins < 0 ? 0 : coins;
+    notifyListeners();
+  }
+
+  /// Wipes everything tied to the previous student (cart, coupon, coins) on logout.
+  void resetForLogout() {
+    _userKraveoCoins = 0;
+    clearCart();
+  }
+
   void addKraveoCoins(int coins) {
     _userKraveoCoins += coins;
     notifyListeners();

@@ -3,79 +3,135 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import '../models/auth_results.dart';
 import '../services/customer_api_service.dart';
 import '../widgets/ui/display_text.dart';
-import '../widgets/ui/format.dart';
+import '../widgets/ui/error_line.dart';
 import '../widgets/ui/otp_boxes.dart';
+import '../widgets/ui/phone_input.dart';
 import '../widgets/ui/snack.dart';
 
+/// Phone login in two steps: number, then the 4-digit SMS code.
+/// Calls [onVerified] once the backend has accepted the code (token already saved).
 class AuthScreen extends StatefulWidget {
-  const AuthScreen({super.key, required this.onAuthenticated});
+  const AuthScreen({super.key, required this.onVerified});
 
-  final VoidCallback onAuthenticated;
+  final ValueChanged<VerifyOtpResult> onVerified;
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
 }
 
 class _AuthScreenState extends State<AuthScreen> {
-  static const int _resendSeconds = 30;
-
   final _phoneController = TextEditingController();
   final _otpController = TextEditingController();
-  final _nameController = TextEditingController();
   final _otpFocus = FocusNode();
   bool _otpRequested = false;
   bool _isLoading = false;
   String? _errorMessage;
   int _errorTick = 0;
-  Timer? _resendTimer;
+
+  Timer? _ticker;
+
+  /// Seconds until the code can be re-sent (OTP step), or until sending is allowed again
+  /// after a 429 (phone step).
   int _resendLeft = 0;
+
+  /// Seconds the code entry stays locked after too many wrong tries.
+  int _lockLeft = 0;
+  int _expiresInSeconds = 300;
+  String? _limitedPhone;
 
   @override
   void dispose() {
-    _resendTimer?.cancel();
+    _ticker?.cancel();
     _phoneController.dispose();
     _otpController.dispose();
-    _nameController.dispose();
     _otpFocus.dispose();
     super.dispose();
   }
 
   String get _phone => _phoneController.text.trim();
 
-  void _startResendCountdown() {
-    _resendTimer?.cancel();
-    setState(() => _resendLeft = _resendSeconds);
-    _resendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+  static String _clock(int seconds) => '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
+
+  void _ensureTicker() {
+    if (_ticker?.isActive ?? false) return;
+    _ticker = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
         timer.cancel();
         return;
       }
-      setState(() => _resendLeft = _resendLeft > 0 ? _resendLeft - 1 : 0);
-      if (_resendLeft == 0) timer.cancel();
+      setState(() {
+        if (_resendLeft > 0) _resendLeft--;
+        if (_lockLeft > 0) {
+          _lockLeft--;
+          if (_lockLeft == 0) {
+            _errorMessage = null;
+            _refocusOtp();
+          }
+        }
+      });
+      if (_resendLeft == 0 && _lockLeft == 0) timer.cancel();
     });
+  }
+
+  void _startResend(int seconds) {
+    setState(() => _resendLeft = seconds < 1 ? 1 : seconds);
+    _ensureTicker();
+  }
+
+  void _refocusOtp() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _otpRequested) _otpFocus.requestFocus();
+    });
+  }
+
+  String _sendFailure(SendOtpResult r, {required bool resend}) {
+    if (r.networkError) return 'We couldn\'t reach Kraveo. Check your connection and try again.';
+    if (r.unavailable) return 'We couldn\'t send the code right now. Please try again in a little while.';
+    if (r.rateLimited) return r.message ?? 'Too many code requests. Please wait a moment and try again.';
+    if (r.statusCode == 400) return r.message ?? 'That doesn\'t look like a valid mobile number.';
+    return r.message ?? (resend ? 'Could not resend the code. Please try again.' : 'Could not send the code. Please try again.');
   }
 
   Future<void> _requestOtp() async {
     FocusScope.of(context).unfocus();
-    if (!RegExp(r'^\d{10}$').hasMatch(_phone)) {
-      setState(() => _errorMessage = 'Enter your 10-digit Indian mobile number.');
+    if (_isLoading) return;
+    final problem = validateIndianMobile(_phone);
+    if (problem != null) {
+      setState(() => _errorMessage = problem);
       return;
     }
+    if (_resendLeft > 0 && _limitedPhone == _phone) return;
 
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
-    final sent = await CustomerApiService.sendOtp(_phone);
+    final result = await CustomerApiService.sendOtp(_phone);
     if (!mounted) return;
+    if (result.success) {
+      _otpController.clear();
+      setState(() {
+        _isLoading = false;
+        _otpRequested = true;
+        _errorMessage = null;
+        _lockLeft = 0;
+        _expiresInSeconds = result.expiresInSeconds;
+        _limitedPhone = null;
+      });
+      _startResend(result.resendAfterSeconds);
+      return;
+    }
     setState(() {
       _isLoading = false;
-      _otpRequested = sent;
-      _errorMessage = sent ? null : 'Unable to send OTP. Check your connection and try again.';
+      _errorMessage = _sendFailure(result, resend: false);
     });
-    if (sent) _startResendCountdown();
+    if (result.rateLimited) {
+      _limitedPhone = _phone;
+      _startResend(result.retryAfterSeconds ?? 30);
+    }
   }
 
   Future<void> _resendOtp() async {
@@ -84,72 +140,123 @@ class _AuthScreenState extends State<AuthScreen> {
       _isLoading = true;
       _errorMessage = null;
     });
-    final sent = await CustomerApiService.sendOtp(_phone);
+    final result = await CustomerApiService.sendOtp(_phone);
     if (!mounted) return;
+    if (result.success) {
+      _otpController.clear();
+      setState(() {
+        _isLoading = false;
+        _lockLeft = 0;
+        _expiresInSeconds = result.expiresInSeconds;
+      });
+      _startResend(result.resendAfterSeconds);
+      _refocusOtp();
+      showKSnack(context, 'New code sent to +91 $_phone', icon: LucideIcons.messageSquare);
+      return;
+    }
     setState(() {
       _isLoading = false;
-      _errorMessage = sent ? null : 'Could not resend the code. Check your connection and try again.';
+      _errorMessage = _sendFailure(result, resend: true);
     });
-    if (sent) {
-      _otpController.clear();
-      _startResendCountdown();
-      showKSnack(context, 'New code sent to +91 $_phone', icon: LucideIcons.messageSquare);
-    }
+    if (result.rateLimited) _startResend(result.retryAfterSeconds ?? 30);
   }
 
-  Future<void> _verifyOtp() async {
-    FocusScope.of(context).unfocus();
-    if (!RegExp(r'^\d{4}$').hasMatch(_otpController.text.trim())) {
+  Future<void> _verifyOtp([String? completed]) async {
+    if (_isLoading || _lockLeft > 0) return;
+    final code = (completed ?? _otpController.text).trim();
+    if (!RegExp(r'^\d{4}$').hasMatch(code)) {
+      FocusScope.of(context).unfocus();
       setState(() {
-        _errorMessage = 'Enter the 4-digit OTP sent to your phone.';
+        _errorMessage = 'Enter the 4-digit code we sent you.';
         _errorTick++;
       });
       return;
     }
 
+    FocusScope.of(context).unfocus();
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
-    final token = await CustomerApiService.verifyOtp(
-      _phone,
-      _otpController.text.trim(),
-      name: _nameController.text.trim().isEmpty ? null : _nameController.text.trim(),
-    );
+    final result = await CustomerApiService.verifyOtp(_phone, code);
     if (!mounted) return;
-    setState(() => _isLoading = false);
-    if (token == null) {
-      setState(() {
-        _errorMessage = 'Invalid or expired OTP. Request a new code and try again.';
-        _errorTick++;
-      });
-      _otpController.clear();
-      _otpFocus.requestFocus();
+    if (result.success) {
+      setState(() => _isLoading = false);
+      widget.onVerified(result);
       return;
     }
-    widget.onAuthenticated();
+
+    if (result.networkError) {
+      // Keep the digits: nothing was wrong with them.
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'We couldn\'t reach Kraveo. Check your connection and tap Verify to try again.';
+      });
+      return;
+    }
+    if (result.unavailable || (result.statusCode != null && result.statusCode! >= 500)) {
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Verification is unavailable right now. Please try again in a moment.';
+      });
+      return;
+    }
+    if (result.locked) {
+      _otpController.clear();
+      setState(() {
+        _isLoading = false;
+        _lockLeft = result.retryAfterSeconds ?? 300;
+        _errorMessage = result.message ?? 'Too many wrong codes. Please wait before trying again.';
+        _errorTick++;
+      });
+      _ensureTicker();
+      return;
+    }
+    if (result.roleNotAllowed) {
+      _otpController.clear();
+      setState(() {
+        _isLoading = false;
+        _errorMessage = result.message ?? 'This number can\'t sign in to the customer app.';
+      });
+      return;
+    }
+
+    final left = result.attemptsLeft;
+    final base = result.message ?? 'That code didn\'t work.';
+    final tail = left == null ? 'Request a new code if it expired.' : (left <= 0 ? 'No attempts left.' : '$left ${left == 1 ? 'attempt' : 'attempts'} left.');
+    _otpController.clear();
+    setState(() {
+      _isLoading = false;
+      _errorMessage = '${base.replaceFirst(RegExp(r'[.!\s]+$'), '')}. $tail';
+      _errorTick++;
+    });
+    _refocusOtp();
   }
 
   void _changeNumber() {
-    _resendTimer?.cancel();
+    _ticker?.cancel();
     setState(() {
       _otpRequested = false;
       _otpController.clear();
       _errorMessage = null;
       _resendLeft = 0;
+      _lockLeft = 0;
+      _limitedPhone = null;
     });
   }
 
   Future<void> _pasteCode() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final digits = (data?.text ?? '').replaceAll(RegExp(r'\D'), '');
-    if (digits.length >= 4) {
-      _otpController.text = digits.substring(0, 4);
-      _otpController.selection = TextSelection.collapsed(offset: _otpController.text.length);
-      setState(() => _errorMessage = null);
-    } else if (mounted) {
+    final match = RegExp(r'(?<!\d)\d{4}(?!\d)').firstMatch(data?.text ?? '');
+    if (!mounted) return;
+    if (match == null) {
       showKSnack(context, 'No 4-digit code found on your clipboard.', error: true);
+      return;
     }
+    _otpController.text = match.group(0)!;
+    _otpController.selection = TextSelection.collapsed(offset: _otpController.text.length);
+    setState(() => _errorMessage = null);
+    _verifyOtp(_otpController.text);
   }
 
   @override
@@ -203,6 +310,7 @@ class _AuthScreenState extends State<AuthScreen> {
   Widget _buildPhoneStep(BuildContext context) {
     final k = context.k;
     final hasError = _errorMessage != null;
+    final coolingDown = _resendLeft > 0 && _limitedPhone == _phone;
     return Column(
       key: const ValueKey('phone-step'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -220,15 +328,22 @@ class _AuthScreenState extends State<AuthScreen> {
             Text('MOBILE NUMBER', style: KraveoType.label.copyWith(color: k.inkMuted)),
             const SizedBox(height: 8),
             TextField(
+              key: const ValueKey('phone-field'),
               controller: _phoneController,
               enabled: !_isLoading,
               keyboardType: TextInputType.phone,
               textInputAction: TextInputAction.done,
               autofillHints: const [AutofillHints.telephoneNumberNational],
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
+              inputFormatters: const [IndianPhoneInputFormatter()],
               style: KraveoType.headlineSm.copyWith(color: k.ink, letterSpacing: 1),
               onChanged: (_) {
-                if (_errorMessage != null) setState(() => _errorMessage = null);
+                setState(() {
+                  _errorMessage = null;
+                  if (_limitedPhone != null && _limitedPhone != _phone) {
+                    _resendLeft = 0;
+                    _limitedPhone = null;
+                  }
+                });
               },
               onSubmitted: (_) => _requestOtp(),
               decoration: InputDecoration(
@@ -245,13 +360,18 @@ class _AuthScreenState extends State<AuthScreen> {
                 enabledBorder: hasError ? OutlineInputBorder(borderRadius: KRadius.control, borderSide: const BorderSide(color: KraveoPalette.danger, width: 1.6)) : null,
               ),
             ),
-            _ErrorLine(message: _errorMessage),
+            KErrorLine(message: _errorMessage),
           ]),
         ),
         const SizedBox(height: 20),
         KReveal(
           index: 4,
-          child: KButton(label: 'Send code', icon: LucideIcons.arrowRight, loading: _isLoading, onPressed: _requestOtp),
+          child: KButton(
+            label: coolingDown ? 'Try again in ${_clock(_resendLeft)}' : 'Send code',
+            icon: coolingDown ? LucideIcons.timer : LucideIcons.arrowRight,
+            loading: _isLoading,
+            onPressed: coolingDown ? null : _requestOtp,
+          ),
         ),
         const SizedBox(height: 16),
         KReveal(
@@ -269,6 +389,8 @@ class _AuthScreenState extends State<AuthScreen> {
   Widget _buildOtpStep(BuildContext context) {
     final k = context.k;
     final hasError = _errorMessage != null;
+    final locked = _lockLeft > 0;
+    final minutes = (_expiresInSeconds / 60).round();
     return Column(
       key: const ValueKey('otp-step'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -282,7 +404,7 @@ class _AuthScreenState extends State<AuthScreen> {
             semanticLabel: 'Change phone number',
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Text('Change', style: KraveoType.button.copyWith(color: k.brand, fontSize: 15)),
+              child: Text('Change number', style: KraveoType.button.copyWith(color: k.brand, fontSize: 15)),
             ),
           ),
         ]),
@@ -290,18 +412,19 @@ class _AuthScreenState extends State<AuthScreen> {
         OtpBoxes(
           controller: _otpController,
           focusNode: _otpFocus,
-          enabled: !_isLoading,
+          enabled: !_isLoading && !locked,
           hasError: hasError,
           errorTick: _errorTick,
           onChanged: (_) {
-            if (_errorMessage != null) setState(() => _errorMessage = null);
+            if (_errorMessage != null && !locked) setState(() => _errorMessage = null);
           },
+          onCompleted: _verifyOtp,
         ),
-        _ErrorLine(message: _errorMessage),
+        KErrorLine(message: _errorMessage),
         const SizedBox(height: 4),
         Row(children: [
           KPressable(
-            onTap: _isLoading ? null : _pasteCode,
+            onTap: _isLoading || locked ? null : _pasteCode,
             semanticLabel: 'Paste code from clipboard',
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 10),
@@ -314,7 +437,7 @@ class _AuthScreenState extends State<AuthScreen> {
           ),
           const Spacer(),
           if (_resendLeft > 0)
-            Text('Resend in 0:${_resendLeft.toString().padLeft(2, '0')}', style: KraveoType.label.copyWith(color: k.inkFaint, fontSize: 13))
+            Text('Resend in ${_clock(_resendLeft)}', style: KraveoType.label.copyWith(color: k.inkFaint, fontSize: 13))
           else
             KPressable(
               onTap: _isLoading ? null : _resendOtp,
@@ -325,46 +448,20 @@ class _AuthScreenState extends State<AuthScreen> {
               ),
             ),
         ]),
-        const SizedBox(height: 16),
-        Text('YOUR NAME (OPTIONAL)', style: KraveoType.label.copyWith(color: k.inkMuted)),
         const SizedBox(height: 8),
-        TextField(
-          controller: _nameController,
-          enabled: !_isLoading,
-          textCapitalization: TextCapitalization.words,
-          textInputAction: TextInputAction.done,
-          autofillHints: const [AutofillHints.givenName],
-          onSubmitted: (_) => _verifyOtp(),
-          decoration: const InputDecoration(hintText: 'So your runner can greet you'),
+        KButton(
+          label: locked ? 'Try again in ${_clock(_lockLeft)}' : 'Verify & continue',
+          icon: locked ? LucideIcons.timer : LucideIcons.arrowRight,
+          loading: _isLoading,
+          onPressed: locked ? null : _verifyOtp,
         ),
-        const SizedBox(height: 20),
-        KButton(label: 'Verify & start ordering', icon: LucideIcons.arrowRight, loading: _isLoading, onPressed: _verifyOtp),
+        const SizedBox(height: 14),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(padding: const EdgeInsets.only(top: 1), child: Icon(LucideIcons.clock, size: 16, color: k.inkFaint)),
+          const SizedBox(width: 8),
+          Expanded(child: Text('The code is valid for $minutes ${minutes == 1 ? 'minute' : 'minutes'}.', style: KraveoType.bodySm.copyWith(color: k.inkMuted))),
+        ]),
       ],
-    );
-  }
-}
-
-class _ErrorLine extends StatelessWidget {
-  const _ErrorLine({required this.message});
-
-  final String? message;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedSize(
-      duration: KMotion.base,
-      curve: KMotion.emphasized,
-      alignment: Alignment.topLeft,
-      child: message == null
-          ? const SizedBox(width: double.infinity)
-          : Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Padding(padding: const EdgeInsets.only(top: 2), child: Icon(LucideIcons.circleAlert, size: 16, color: kDangerInk)),
-                const SizedBox(width: 8),
-                Expanded(child: Text(message!, style: KraveoType.bodySm.copyWith(color: kDangerInk, fontWeight: FontWeight.w600))),
-              ]),
-            ),
     );
   }
 }

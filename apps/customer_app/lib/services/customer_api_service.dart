@@ -3,10 +3,66 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
+import '../models/auth_results.dart';
 
 class CustomerApiService {
   static const String _tokenPrefKey = 'kraveo_customer_jwt_token';
   static String? _cachedToken;
+
+  /// Message shown (and thrown) when an authenticated call is rejected with HTTP 401.
+  static const String sessionExpiredMessage = 'Session expired, please log in again';
+
+  /// Set by the app shell. Called after the stored token has been cleared because the
+  /// backend answered 401 to an authenticated request.
+  static void Function()? onUnauthorized;
+
+  /// Test seam: route every request through a fake client.
+  @visibleForTesting
+  static http.Client? httpClientOverride;
+
+  static Future<http.Response> _get(Uri url, {Map<String, String>? headers, required Duration timeout}) {
+    final c = httpClientOverride;
+    return (c == null ? http.get(url, headers: headers) : c.get(url, headers: headers)).timeout(timeout);
+  }
+
+  static Future<http.Response> _post(Uri url, {Map<String, String>? headers, Object? body, required Duration timeout}) {
+    final c = httpClientOverride;
+    return (c == null ? http.post(url, headers: headers, body: body) : c.post(url, headers: headers, body: body)).timeout(timeout);
+  }
+
+  static Future<http.Response> _put(Uri url, {Map<String, String>? headers, Object? body, required Duration timeout}) {
+    final c = httpClientOverride;
+    return (c == null ? http.put(url, headers: headers, body: body) : c.put(url, headers: headers, body: body)).timeout(timeout);
+  }
+
+  static Future<http.Response> _delete(Uri url, {Map<String, String>? headers, required Duration timeout}) {
+    final c = httpClientOverride;
+    return (c == null ? http.delete(url, headers: headers) : c.delete(url, headers: headers)).timeout(timeout);
+  }
+
+  static Map<String, dynamic> _json(http.Response response) {
+    try {
+      final body = jsonDecode(response.body);
+      if (body is Map) return Map<String, dynamic>.from(body);
+    } catch (_) {}
+    return const {};
+  }
+
+  static String? _msg(Map<String, dynamic> body) {
+    final m = body['message'];
+    return m is String && m.trim().isNotEmpty ? m.trim() : null;
+  }
+
+  static int? _int(Object? v) => v is num ? v.round() : int.tryParse('$v');
+
+  /// Central 401 handling for authenticated calls: drop the dead token, tell the app shell.
+  /// Returns true when the response was a 401.
+  static Future<bool> _rejectIfUnauthorized(http.Response response) async {
+    if (response.statusCode != 401) return false;
+    await clearToken();
+    onUnauthorized?.call();
+    return true;
+  }
 
   /// Retrieves stored JWT auth token from SharedPreferences or memory cache
   static Future<String?> getSavedToken() async {
@@ -41,32 +97,105 @@ class CustomerApiService {
   }
 
   /// Validates the stored JWT against the backend and returns the profile.
-  static Future<Map<String, dynamic>?> fetchProfile() async {
+  /// Returns null when there is no saved token. On 401 the token is cleared and
+  /// [onUnauthorized] fires; on network trouble the token is kept so the user is not
+  /// logged out just because they opened the app offline.
+  static Future<ProfileResult?> fetchProfile() async {
     final token = await getSavedToken();
     if (token == null || token.isEmpty) return null;
 
     try {
-      final response = await http.get(
+      final response = await _get(
         Uri.parse('${ApiConfig.baseUrl}/auth/profile'),
         headers: await getAuthHeaders(),
-      ).timeout(const Duration(seconds: 10));
-      final body = jsonDecode(response.body);
-      if (response.statusCode == 200 && body is Map && body['user'] is Map) {
-        return Map<String, dynamic>.from(body['user'] as Map);
+        timeout: const Duration(seconds: 10),
+      );
+      if (await _rejectIfUnauthorized(response)) {
+        return const ProfileResult(success: false, statusCode: 401, message: sessionExpiredMessage);
       }
+      return _profileResult(response);
     } catch (e) {
-      debugPrint('⚠️ [Customer API] Session validation failed: $e');
+      debugPrint('[Customer API] Session validation failed: $e');
+      return const ProfileResult(success: false, networkError: true);
     }
+  }
 
-    await clearToken();
-    return null;
+  static ProfileResult _profileResult(http.Response response) {
+    final body = _json(response);
+    final user = body['user'];
+    final ok = response.statusCode == 200 && body['success'] != false && user is Map;
+    return ProfileResult(
+      success: ok,
+      statusCode: response.statusCode,
+      message: _msg(body),
+      user: user is Map ? Map<String, dynamic>.from(user) : null,
+      needsProfile: body['needsProfile'] == true,
+      field: body['field']?.toString(),
+    );
+  }
+
+  /// Saves name + drop-off point. 400 responses carry `field` so the form can point at the input.
+  static Future<ProfileResult> updateProfile({required String name, required String hostelBlock}) async {
+    try {
+      final response = await _put(
+        Uri.parse('${ApiConfig.baseUrl}/auth/profile'),
+        headers: await getAuthHeaders(),
+        body: jsonEncode({'name': name, 'hostelBlock': hostelBlock}),
+        timeout: const Duration(seconds: 10),
+      );
+      if (await _rejectIfUnauthorized(response)) {
+        return const ProfileResult(success: false, statusCode: 401, message: sessionExpiredMessage);
+      }
+      return _profileResult(response);
+    } catch (e) {
+      debugPrint('[Customer API] Update profile failed: $e');
+      return const ProfileResult(success: false, networkError: true);
+    }
+  }
+
+  /// Tells the backend to forget this device's push token. Best-effort: the JWT is stateless,
+  /// so callers clear the local session regardless of the outcome. Pass [token] when the local
+  /// token may already have been cleared.
+  static Future<ActionResult> logout({String? token}) async {
+    try {
+      final headers = <String, String>{'Content-Type': 'application/json'};
+      final t = token ?? await getSavedToken();
+      if (t != null && t.isNotEmpty) headers['Authorization'] = t.startsWith('Bearer ') ? t : 'Bearer $t';
+      final response = await _post(
+        Uri.parse('${ApiConfig.baseUrl}/auth/logout'),
+        headers: headers,
+        timeout: const Duration(seconds: 5),
+      );
+      final body = _json(response);
+      return ActionResult(success: response.statusCode == 200 && body['success'] != false, statusCode: response.statusCode, message: _msg(body));
+    } catch (e) {
+      debugPrint('[Customer API] Logout notice failed (ignored): $e');
+      return const ActionResult(success: false, networkError: true);
+    }
+  }
+
+  /// Permanently anonymises the account. 409 means an order is still in progress.
+  static Future<ActionResult> deleteAccount() async {
+    try {
+      final response = await _delete(
+        Uri.parse('${ApiConfig.baseUrl}/auth/account'),
+        headers: await getAuthHeaders(),
+        timeout: const Duration(seconds: 15),
+      );
+      if (await _rejectIfUnauthorized(response)) {
+        return const ActionResult(success: false, statusCode: 401, message: sessionExpiredMessage);
+      }
+      final body = _json(response);
+      return ActionResult(success: response.statusCode == 200 && body['success'] != false, statusCode: response.statusCode, message: _msg(body));
+    } catch (e) {
+      debugPrint('[Customer API] Delete account failed: $e');
+      return const ActionResult(success: false, networkError: true);
+    }
   }
 
   /// Loads the public restaurant catalog, including database-backed menu IDs.
   static Future<List<Map<String, dynamic>>> fetchVendors() async {
-    final response = await http.get(
-      Uri.parse('${ApiConfig.baseUrl}/vendors'),
-    ).timeout(const Duration(seconds: 15));
+    final response = await _get(Uri.parse('${ApiConfig.baseUrl}/vendors'), timeout: const Duration(seconds: 15));
     final body = jsonDecode(response.body);
     if (response.statusCode != 200 || body is! Map || body['data'] is! List) {
       throw Exception(body is Map ? body['message'] ?? 'Unable to load restaurants.' : 'Unable to load restaurants.');
@@ -89,53 +218,70 @@ class CustomerApiService {
     return headers;
   }
 
-  /// Sends SMS OTP to student phone number
-  static Future<bool> sendOtp(String phone) async {
+  /// Sends the 4-digit SMS code. `phone` is the 10-digit Indian mobile, digits only.
+  static Future<SendOtpResult> sendOtp(String phone) async {
     try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/auth/send-otp');
-      final response = await http.post(
-        url,
+      final response = await _post(
+        Uri.parse('${ApiConfig.baseUrl}/auth/send-otp'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'phone': phone}),
-      ).timeout(const Duration(seconds: 5));
-
-      if (response.statusCode == 200) {
-        debugPrint('📱 [Customer API] OTP sent successfully to $phone');
-        return true;
-      }
+        timeout: const Duration(seconds: 12),
+      );
+      final body = _json(response);
+      final ok = response.statusCode == 200 && body['success'] != false;
+      return SendOtpResult(
+        success: ok,
+        statusCode: response.statusCode,
+        message: _msg(body),
+        retryAfterSeconds: _int(body['retryAfterSeconds']),
+        resendAfterSeconds: _int(body['resendAfterSeconds']) ?? 30,
+        expiresInSeconds: _int(body['expiresInSeconds']) ?? 300,
+      );
     } catch (e) {
-      debugPrint('⚠️ [Customer API Notice] Send OTP delayed ($e).');
+      debugPrint('[Customer API] Send OTP failed: $e');
+      return const SendOtpResult(success: false, networkError: true);
     }
-    return false;
   }
 
-  /// Verifies student 4-digit SMS OTP & stores returned JWT session token
-  static Future<String?> verifyOtp(String phone, String otp, {String? name, String? hostelBlock}) async {
+  /// Verifies the SMS code. On success the JWT is persisted before returning.
+  static Future<VerifyOtpResult> verifyOtp(String phone, String otp) async {
     try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/auth/verify-otp');
-      final bodyMap = <String, dynamic>{'phone': phone, 'otp': otp, 'role': 'STUDENT'};
-      if (name != null) bodyMap['name'] = name;
-      if (hostelBlock != null) bodyMap['hostelBlock'] = hostelBlock;
-
-      final response = await http.post(
-        url,
+      final response = await _post(
+        Uri.parse('${ApiConfig.baseUrl}/auth/verify-otp'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(bodyMap),
-      ).timeout(const Duration(seconds: 5));
-
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body);
-        final token = json['token'] as String?;
-        if (token != null) {
-          await saveToken(token);
-        }
-        debugPrint('🔑 [Customer API] OTP verified successfully for $phone');
-        return token;
+        body: jsonEncode({'phone': phone, 'otp': otp, 'role': 'STUDENT'}),
+        timeout: const Duration(seconds: 12),
+      );
+      final body = _json(response);
+      final token = body['token'];
+      final user = body['user'];
+      final ok = response.statusCode == 200 && body['success'] != false && token is String && token.isNotEmpty && user is Map;
+      if (!ok) {
+        return VerifyOtpResult(
+          success: false,
+          statusCode: response.statusCode,
+          message: _msg(body),
+          retryAfterSeconds: _int(body['retryAfterSeconds']),
+          attemptsLeft: _int(body['attemptsLeft']),
+        );
       }
+      final userMap = Map<String, dynamic>.from(user);
+      if (userMap['role'] != null && userMap['role'] != 'STUDENT') {
+        return const VerifyOtpResult(success: false, statusCode: 403, message: 'This number cannot sign in to the Kraveo customer app.');
+      }
+      await saveToken(token);
+      return VerifyOtpResult(
+        success: true,
+        statusCode: 200,
+        token: token,
+        user: userMap,
+        isNewUser: body['isNewUser'] == true,
+        needsProfile: body['needsProfile'] == true,
+      );
     } catch (e) {
-      debugPrint('⚠️ [Customer API Notice] Verify OTP delayed ($e).');
+      debugPrint('[Customer API] Verify OTP failed: $e');
+      return const VerifyOtpResult(success: false, networkError: true);
     }
-    return null;
   }
 
   /// Places order on AWS EC2 backend with dynamic JWT token
@@ -144,11 +290,8 @@ class CustomerApiService {
       final url = Uri.parse('${ApiConfig.baseUrl}/orders');
       final headers = await getAuthHeaders();
 
-      final response = await http.post(
-        url,
-        headers: headers,
-        body: jsonEncode(orderPayload),
-      ).timeout(const Duration(seconds: 5));
+      final response = await _post(url, headers: headers, body: jsonEncode(orderPayload), timeout: const Duration(seconds: 5));
+      if (await _rejectIfUnauthorized(response)) return false;
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         debugPrint('🛍️ [Customer API] Order placed successfully on AWS backend!');
@@ -182,11 +325,8 @@ class CustomerApiService {
     }
 
     try {
-      final response = await http.post(
-        url,
-        headers: headers,
-        body: jsonEncode(payload),
-      ).timeout(const Duration(seconds: 15));
+      final response = await _post(url, headers: headers, body: jsonEncode(payload), timeout: const Duration(seconds: 15));
+      if (await _rejectIfUnauthorized(response)) throw Exception(sessionExpiredMessage);
       final body = jsonDecode(response.body);
       if (response.statusCode == 201 && body is Map && body['data'] is Map) {
         return Map<String, dynamic>.from(body['data'] as Map);
@@ -204,11 +344,8 @@ class CustomerApiService {
     final headers = await getAuthHeaders();
 
     try {
-      final response = await http.post(
-        url,
-        headers: headers,
-        body: jsonEncode({'orderId': orderId}),
-      ).timeout(const Duration(seconds: 15));
+      final response = await _post(url, headers: headers, body: jsonEncode({'orderId': orderId}), timeout: const Duration(seconds: 15));
+      if (await _rejectIfUnauthorized(response)) throw Exception(sessionExpiredMessage);
       final body = jsonDecode(response.body);
       if (response.statusCode == 200 && body is Map && body['success'] == true) {
         return Map<String, dynamic>.from(body);
@@ -230,7 +367,7 @@ class CustomerApiService {
     final headers = await getAuthHeaders();
 
     try {
-      final response = await http.post(
+      final response = await _post(
         url,
         headers: headers,
         body: jsonEncode({
@@ -238,7 +375,9 @@ class CustomerApiService {
           'razorpayPaymentId': razorpayPaymentId,
           'razorpaySignature': razorpaySignature,
         }),
-      ).timeout(const Duration(seconds: 15));
+        timeout: const Duration(seconds: 15),
+      );
+      if (await _rejectIfUnauthorized(response)) throw Exception(sessionExpiredMessage);
       final body = jsonDecode(response.body);
       if (response.statusCode == 200 && body is Map && body['success'] == true) {
         return;
@@ -261,7 +400,7 @@ class CustomerApiService {
       final url = Uri.parse('${ApiConfig.baseUrl}/reviews');
       final headers = await getAuthHeaders();
 
-      final response = await http.post(
+      final response = await _post(
         url,
         headers: headers,
         body: jsonEncode({
@@ -270,7 +409,9 @@ class CustomerApiService {
           'driverRating': driverRating,
           'reviewText': reviewText,
         }),
-      ).timeout(const Duration(seconds: 5));
+        timeout: const Duration(seconds: 5),
+      );
+      if (await _rejectIfUnauthorized(response)) return false;
 
       if (response.statusCode == 200) {
         debugPrint('⭐️ [Customer API] Review submitted! +10 Kraveo Coins awarded.');
