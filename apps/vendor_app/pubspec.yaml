@@ -1,7 +1,7 @@
 name: vendor_app
 description: "Kraveo Dhaba Owner Mobile App (High Volume Audio & Simple UI)"
 publish_to: 'none'
-version: 1.2.0+3
+version: 1.2.0+4
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
