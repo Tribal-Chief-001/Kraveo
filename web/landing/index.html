@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kraveo — campus food, delivered to your gate</title>
+  <meta name="description" content="Kraveo brings your favourite campus kitchens to your hostel gate, tracked live and handed over with a one-time code. Launching soon at VIT Bhopal." />
+  <meta name="theme-color" content="#032309" />
+  <meta property="og:title" content="Kraveo — campus food, delivered to your gate" />
+  <meta property="og:description" content="Campus kitchens to your hostel gate, tracked live and handed over with a one-time code. Launching soon at VIT Bhopal." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://kraveo.site/" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <script type="module" src="/src/main.js"></script>
+</head>
+<body>
+  <!-- Brand mark (simplified vector redraw of the Kraveo bowl), recoloured through CSS variables -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="kmark" viewBox="0 0 200 150">
+        <path class="m-body" d="M14 66Q18 118 70 130V142Q70 146 74 146H126Q130 146 130 142V130Q182 118 186 66Z" />
+        <rect class="m-body" x="12" y="8" width="24" height="64" rx="12" />
+        <rect class="m-body" x="164" y="8" width="24" height="64" rx="12" />
+        <rect class="m-body" x="20" y="6" width="160" height="14" rx="7" />
+        <rect class="m-band" x="6" y="50" width="188" height="20" />
+        <path class="m-band" d="M40 52Q42 32 60 32H90V38H64V46H90V52H64V60H90V66H60Q42 68 40 52Z" />
+        <ellipse class="m-band" cx="130" cy="51" rx="22" ry="17" />
+        <path class="m-smile" d="M62 98Q100 126 138 98" />
+        <circle class="m-dot" cx="61" cy="97" r="4.5" />
+        <circle class="m-dot" cx="139" cy="97" r="4.5" />
+      </symbol>
+    </defs>
+  </svg>
+
+  <div class="grain" aria-hidden="true"></div>
+  <div class="cursor" aria-hidden="true"><span class="cursor__ring"></span><span class="cursor__dot"></span></div>
+
+  <div class="loader" aria-hidden="true">
+    <svg class="loader__mark" viewBox="0 0 200 150"><use href="#kmark" /></svg>
+    <div class="loader__word"><span>K</span><span>R</span><span>A</span><span>V</span><span>E</span><span>O</span></div>
+  </div>
+
+  <header class="nav" id="nav">
+    <a class="nav__brand" href="/" aria-label="Kraveo home">
+      <svg class="nav__mark" viewBox="0 0 200 150" aria-hidden="true"><use href="#kmark" /></svg>
+      <span>Kraveo</span>
+    </a>
+    <nav class="nav__links" aria-label="Primary">
+      <a href="#how" data-magnetic>How it works</a>
+      <a href="#apps" data-magnetic>The apps</a>
+      <a href="#campus" data-magnetic>On campus</a>
+      <a href="#faq" data-magnetic>FAQ</a>
+    </nav>
+    <a class="btn btn--yellow nav__cta" href="#launch" data-magnetic><span>Launching soon</span></a>
+  </header>
+
+  <main>
+    <!-- HERO -->
+    <section class="hero" id="top">
+      <div class="hero__bg" aria-hidden="true">
+        <div class="hero__glow hero__glow--a"></div>
+        <div class="hero__glow hero__glow--b"></div>
+        <svg class="hero__bigmark" viewBox="0 0 200 150"><use href="#kmark" /></svg>
+        <div class="hero__rings"><i></i><i></i><i></i></div>
+      </div>
+
+      <div class="hero__inner">
+        <div class="hero__copy">
+          <p class="pill" data-reveal><span class="pill__dot"></span>Launching soon · VIT Bhopal</p>
+          <h1 class="hero__title" data-split>
+            Hungry?<br />
+            It's already<br />
+            at the <span class="hl"><span class="hl__text">gate</span><svg class="hl__smile" viewBox="0 0 120 26" aria-hidden="true"><path d="M4 6Q60 34 116 6" /></svg></span>.
+          </h1>
+          <p class="hero__sub" data-reveal>
+            Kraveo connects you to campus kitchens and brings the food to your hostel gate — tracked live, handed over with a one-time code. No hunting for the rider. No cold food.
+          </p>
+          <div class="hero__actions" data-reveal>
+            <a class="btn btn--yellow btn--lg" href="#how" data-magnetic><span>See how it works</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg></a>
+            <a class="btn btn--ghost btn--lg" href="#launch" data-magnetic><span>Partner with us</span></a>
+          </div>
+        </div>
+
+        <div class="hero__stage">
+          <div class="chip chip--a" data-depth="1.4"><i style="--c:#F5A524"></i>Order placed</div>
+          <div class="chip chip--b" data-depth="-1"><i style="--c:#F97316"></i>Preparing</div>
+          <div class="chip chip--c" data-depth="1.8"><i style="--c:#3B82F6"></i>On the way</div>
+          <div class="chip chip--d" data-depth="-1.6"><i style="--c:#8B5CF6"></i>At your gate</div>
+
+          <div class="phone phone--hero" id="heroPhone">
+            <div class="phone__frame">
+              <div class="phone__island"></div>
+              <div class="phone__screen" data-clone="s-pick"></div>
+              <div class="phone__glare"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <a class="scrollhint" href="#how" aria-label="Scroll to how it works">
+        <span>Scroll</span><i></i>
+      </a>
+    </section>
+
+    <!-- MARQUEE -->
+    <section class="marquee" aria-hidden="true">
+      <div class="marquee__track">
+        <div class="marquee__row">
+          <span>Biryani</span><b></b><span>Rolls</span><b></b><span>Chai</span><b></b><span>Momos</span><b></b><span>Maggi</span><b></b><span>Dosa</span><b></b><span>Paneer</span><b></b><span>Burgers</span><b></b><span>Cold coffee</span><b></b><span>Parathas</span><b></b>
+        </div>
+        <div class="marquee__row">
+          <span>Biryani</span><b></b><span>Rolls</span><b></b><span>Chai</span><b></b><span>Momos</span><b></b><span>Maggi</span><b></b><span>Dosa</span><b></b><span>Paneer</span><b></b><span>Burgers</span><b></b><span>Cold coffee</span><b></b><span>Parathas</span><b></b>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOW IT WORKS (pinned) -->
+    <section class="how" id="how">
+      <div class="how__pin">
+        <div class="how__grid">
+          <div class="how__copy">
+            <p class="eyebrow" data-reveal>How it works</p>
+            <h2 class="display" data-split>From craving<br />to <em>doorstep</em><br />in four taps.</h2>
+            <ol class="steps" id="steps">
+              <li class="step is-active" data-step="0">
+                <span class="step__n">01</span>
+                <div><h3>Pick a kitchen</h3><p>Browse campus restaurants, add what you want, and tell us where you are — your hostel block, or any drop point if you're not a hosteller.</p></div>
+              </li>
+              <li class="step" data-step="1">
+                <span class="step__n">02</span>
+                <div><h3>Pay in a slide</h3><p>UPI or card through Razorpay, confirmed with a single slide. Your card and UPI details never touch Kraveo's servers.</p></div>
+              </li>
+              <li class="step" data-step="2">
+                <span class="step__n">03</span>
+                <div><h3>Watch it arrive</h3><p>The kitchen accepts, cooks and hands over to a rider. You see every status change as it happens, live on the map.</p></div>
+              </li>
+              <li class="step" data-step="3">
+                <span class="step__n">04</span>
+                <div><h3>Show the code at the gate</h3><p>Your rider arrives, you share a one-time code, done. No code, no handover — your food only goes to you.</p></div>
+              </li>
+            </ol>
+            <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+          </div>
+
+          <div class="how__stage">
+            <div class="how__halo" aria-hidden="true"></div>
+            <div class="phone phone--how">
+              <div class="phone__frame">
+                <div class="phone__island"></div>
+                <div class="phone__screen phone__screen--stack" id="howScreens">
+                  <div class="screen is-on" data-screen="0" data-clone="s-pick"></div>
+                  <div class="screen" data-screen="1" data-clone="s-pay"></div>
+                  <div class="screen" data-screen="2" data-clone="s-track"></div>
+                  <div class="screen" data-screen="3" data-clone="s-gate"></div>
+                </div>
+                <div class="phone__glare"></div>
+              </div>
+            </div>
+            <p class="how__note">Illustrative UI</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- THE APPS -->
+    <section class="apps" id="apps">
+      <div class="wrap">
+        <p class="eyebrow eyebrow--light" data-reveal>Three apps, one loop</p>
+        <h2 class="display display--light" data-split>One craving.<br />One kitchen. <span class="y">One rider.</span></h2>
+
+        <div class="cards">
+          <article class="card" data-tilt>
+            <div class="card__spot"></div>
+            <div class="card__art card__art--customer" aria-hidden="true">
+              <div class="mini mini--a"><i></i><i></i><i></i></div>
+              <div class="mini mini--b"></div>
+            </div>
+            <p class="card__tag">For hungry people</p>
+            <h3>Kraveo</h3>
+            <p>Order from campus kitchens, pay in a slide, follow your food live and collect it at the gate with a one-time code. Sign in with Google, pick a mythical avatar, done.</p>
+          </article>
+
+          <article class="card card--yellow" data-tilt>
+            <div class="card__spot"></div>
+            <div class="card__art card__art--vendor" aria-hidden="true">
+              <div class="ticket"><b>NEW</b><span></span><span></span></div>
+              <div class="ticket ticket--2"><b>COOKING</b><span></span><span></span></div>
+              <div class="ticket ticket--3"><b>READY</b><span></span><span></span></div>
+            </div>
+            <p class="card__tag">For kitchens</p>
+            <h3>Restaurant Partner</h3>
+            <p>A calm order queue built for a busy counter. Accept, mark preparing, mark ready — the rider is alerted the moment the food is. Your menu, your prices.</p>
+          </article>
+
+          <article class="card" data-tilt>
+            <div class="card__spot"></div>
+            <div class="card__art card__art--driver" aria-hidden="true">
+              <svg viewBox="0 0 220 120"><path class="route" d="M10 100Q50 20 100 70T210 20" /><circle class="rider" r="7" /></svg>
+            </div>
+            <p class="card__tag">For riders</p>
+            <h3>Delivery Partner</h3>
+            <p>See your assigned order, pick it up, share live location while you deliver, and confirm the handover with the customer's code. Simple enough to use one-handed.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ON CAMPUS (bento) -->
+    <section class="campus" id="campus">
+      <div class="wrap">
+        <p class="eyebrow" data-reveal>Built for campus</p>
+        <h2 class="display" data-split>Made for hostels,<br />not highways.</h2>
+
+        <div class="bento">
+          <div class="tile tile--wide tile--green" data-reveal>
+            <h3>Every status. Always in sync.</h3>
+            <p>Customer, kitchen and rider see the same order state at the same moment — one shared language across all three apps.</p>
+            <div class="rail" id="rail">
+              <span style="--c:#F5A524">Placed</span>
+              <span style="--c:#14B8A6">Accepted</span>
+              <span style="--c:#F97316">Preparing</span>
+              <span style="--c:#84CC16">Ready</span>
+              <span style="--c:#3B82F6">On the way</span>
+              <span style="--c:#8B5CF6">At gate</span>
+              <span style="--c:#16A34A">Delivered</span>
+            </div>
+          </div>
+
+          <div class="tile tile--yellow" data-reveal>
+            <h3>One-time gate code</h3>
+            <p>The rider can't hand over without it. Your order only goes to you.</p>
+            <div class="otp" aria-hidden="true"><span>•</span><span>•</span><span>•</span><span>•</span></div>
+          </div>
+
+          <div class="tile tile--cream" data-reveal>
+            <h3>Hostel-aware</h3>
+            <p>Hostellers choose their block once. Everyone else sets a drop point at checkout.</p>
+            <div class="blocks" aria-hidden="true"><i>Block 1</i><i>Block 2</i><i>Gate 3</i><i>Library</i></div>
+          </div>
+
+          <div class="tile tile--dark" data-reveal>
+            <h3>Fifteen creatures. Zero selfies.</h3>
+            <p>Pick a mythical avatar instead of a photo. We only remember which one you chose.</p>
+            <div class="avatars" aria-hidden="true">
+              <i style="--h:140"></i><i style="--h:52"></i><i style="--h:265"></i><i style="--h:18"></i><i style="--h:190"></i><i style="--h:320"></i><i style="--h:96"></i><i style="--h:230"></i>
+            </div>
+          </div>
+
+          <div class="tile tile--wide tile--line" data-reveal>
+            <h3>Private by design</h3>
+            <ul class="ticks">
+              <li>Sign in with Google — any Gmail works</li>
+              <li>No profile photos stored, just an avatar id</li>
+              <li>Payments handled by Razorpay, not by us</li>
+              <li>Delete your account from inside the app</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="faq" id="faq">
+      <div class="wrap faq__grid">
+        <div>
+          <p class="eyebrow" data-reveal>Questions</p>
+          <h2 class="display" data-split>Good<br />questions.</h2>
+        </div>
+        <div class="acc" id="acc">
+          <details class="acc__item" open>
+            <summary><span>Where is Kraveo available?</span><i></i></summary>
+            <p>We're starting at VIT Bhopal University and launching soon. We'll add more campuses once the first one runs smoothly.</p>
+          </details>
+          <details class="acc__item">
+            <summary><span>When can I order?</span><i></i></summary>
+            <p>Soon. We'd rather launch properly than launch early, so there's no public date yet. This page will update the moment the apps are live.</p>
+          </details>
+          <details class="acc__item">
+            <summary><span>How do I pay?</span><i></i></summary>
+            <p>UPI and cards through Razorpay. We never see or store your card number or UPI PIN.</p>
+          </details>
+          <details class="acc__item">
+            <summary><span>I'm not a hosteller. Can I order?</span><i></i></summary>
+            <p>Yes. Sign in with any Google account, say you're not a hostel student, and choose a drop point at checkout.</p>
+          </details>
+          <details class="acc__item">
+            <summary><span>I run a kitchen or want to ride with you.</span><i></i></summary>
+            <p>Partner accounts are created by us, not self-signed-up. Get in touch below and we'll set you up with a login for the Restaurant or Delivery Partner app.</p>
+          </details>
+          <details class="acc__item">
+            <summary><span>Can I delete my data?</span><i></i></summary>
+            <p>Yes — delete your account from inside the app. Read exactly what we collect and keep on the <a href="/privacy">privacy page</a>.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta" id="launch">
+      <div class="cta__inner">
+        <svg class="cta__mark" viewBox="0 0 200 150" aria-hidden="true"><use href="#kmark" /></svg>
+        <h2 class="cta__title" data-split>Coming to<br />your campus.</h2>
+        <p class="cta__sub" data-reveal>Run a kitchen? Want to ride? Want Kraveo at your college? Say hello.</p>
+        <div class="cta__actions" data-reveal>
+          <a class="btn btn--dark btn--lg" href="mailto:hello@kraveo.site" data-magnetic><span>hello@kraveo.site</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg></a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="foot__word" id="footWord" aria-hidden="true">KRAVEO</div>
+    <div class="foot__bar">
+      <p>© 2026 Kraveo · Made in Bhopal</p>
+      <nav aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+    </div>
+  </footer>
+
+  <!-- Phone screens (cloned into phones by JS) -->
+  <template id="s-pick">
+    <div class="ui ui--pick">
+      <div class="ui__bar"><span class="ui__loc"><b>Deliver to</b>Block 1 ▾</span><span class="ui__av"></span></div>
+      <div class="ui__search">Search kitchens or dishes</div>
+      <div class="ui__chips"><i class="on">All</i><i>Rolls</i><i>Biryani</i><i>Chai</i></div>
+      <div class="ui__cardr"><div class="ui__img ui__img--a"></div><div class="ui__meta"><b>Night Owl Rolls</b><span>Rolls · Wraps</span></div><em>Open</em></div>
+      <div class="ui__cardr"><div class="ui__img ui__img--b"></div><div class="ui__meta"><b>Chai &amp; Chill</b><span>Tea · Snacks</span></div><em>Open</em></div>
+      <div class="ui__cardr"><div class="ui__img ui__img--c"></div><div class="ui__meta"><b>Dhaba Express</b><span>North Indian</span></div><em>Open</em></div>
+      <div class="ui__dock"><i class="on"></i><i></i><i></i><i></i></div>
+    </div>
+  </template>
+
+  <template id="s-pay">
+    <div class="ui ui--pay">
+      <div class="ui__title">Your order</div>
+      <div class="ui__line"><span>2 × Paneer roll</span><b>₹180</b></div>
+      <div class="ui__line"><span>1 × Masala chai</span><b>₹30</b></div>
+      <div class="ui__line ui__line--muted"><span>Delivery</span><b>₹20</b></div>
+      <div class="ui__sum"><span>Total</span><b>₹230</b></div>
+      <div class="ui__upi"><i>UPI</i><span>Pay with any UPI app</span></div>
+      <div class="ui__slide"><span class="ui__knob"></span><em>Slide to pay</em></div>
+    </div>
+  </template>
+
+  <template id="s-track">
+    <div class="ui ui--track">
+      <div class="ui__map">
+        <svg viewBox="0 0 240 300" preserveAspectRatio="xMidYMid slice">
+          <path class="g" d="M0 60H240M0 130H240M0 200H240M0 270H240M50 0V300M120 0V300M190 0V300" />
+          <path class="r" d="M30 270Q30 200 100 190T180 110T200 40" />
+          <circle class="h" cx="200" cy="40" r="9" />
+          <circle class="k" cx="30" cy="270" r="9" />
+          <circle class="d" r="8" />
+        </svg>
+      </div>
+      <div class="ui__sheet">
+        <span class="ui__status">On the way</span>
+        <b>Your order is moving</b>
+        <div class="ui__bars"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></div>
+      </div>
+    </div>
+  </template>
+
+  <template id="s-gate">
+    <div class="ui ui--gate">
+      <span class="ui__status ui__status--gate">At your gate</span>
+      <b class="ui__big">Your rider has arrived</b>
+      <div class="ui__code"><i>7</i><i>3</i><i>1</i><i>9</i></div>
+      <p>Share this code only with your rider, at the gate.</p>
+      <div class="ui__ok">Delivered ✓</div>
+    </div>
+  </template>
+</body>
+</html>
