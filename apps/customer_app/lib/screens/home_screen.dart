@@ -73,7 +73,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    final selectedHostel = context.select<SessionProvider, String>((s) => s.selectedHostel);
+    final selectedHostel = context.select<SessionProvider, String?>((s) => s.deliveryPoint);
     return Scaffold(
       backgroundColor: k.bg,
       extendBody: true,
@@ -117,7 +117,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final dhabaProvider = Provider.of<DhabaProvider>(context);
     final orderProvider = Provider.of<OrderProvider>(context);
     final session = context.watch<SessionProvider>();
-    final selectedHostel = session.selectedHostel;
+    final selectedHostel = session.deliveryPoint;
     final activeOrder = orderProvider.activeOrder;
     final showActiveBar = activeOrder != null && activeOrder.status.isLive;
     final dhabas = dhabaProvider.dhabas;
@@ -162,12 +162,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, 0),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(
-                        session.user?.firstName.isNotEmpty == true ? '${_greeting()}, ${session.user!.firstName}'.toUpperCase() : _greeting().toUpperCase(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.2),
-                      ),
+                      Row(children: [
+                        if (session.user?.avatarId != null) ...[
+                          ExcludeSemantics(child: KAvatar(id: session.user!.avatarId, size: 30)),
+                          const SizedBox(width: 10),
+                        ],
+                        Expanded(
+                          child: Text(
+                            session.user?.firstName.isNotEmpty == true ? '${_greeting()}, ${session.user!.firstName}'.toUpperCase() : _greeting().toUpperCase(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.2),
+                          ),
+                        ),
+                      ]),
                       const SizedBox(height: 6),
                       KDisplayText('What are you\ncraving?', style: KraveoType.displayMd.copyWith(color: k.ink)),
                     ]),

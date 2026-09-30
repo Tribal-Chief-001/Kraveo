@@ -7,6 +7,7 @@ import 'providers/cart_provider.dart';
 import 'providers/order_provider.dart';
 import 'providers/session_provider.dart';
 import 'services/customer_api_service.dart';
+import 'services/google_auth_service.dart';
 import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/profile_setup_screen.dart';
@@ -17,13 +18,16 @@ void main() {
 }
 
 class KraveoCustomerApp extends StatelessWidget {
-  const KraveoCustomerApp({super.key});
+  /// [googleAuth] is a test seam; the real Google layer is used when it is null.
+  const KraveoCustomerApp({super.key, this.googleAuth});
+
+  final GoogleAuthService? googleAuth;
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => SessionProvider()),
+        ChangeNotifierProvider(create: (_) => SessionProvider(googleAuth: googleAuth)),
         ChangeNotifierProvider(create: (_) => DhabaProvider()),
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => OrderProvider()),
@@ -96,9 +100,9 @@ class _AuthGateState extends State<AuthGate> {
       case SessionStatus.checking:
         return const _SplashScreen();
       case SessionStatus.unreachable:
-        return _SessionUnreachable(onRetry: session.retryRestore, onUseAnotherNumber: session.logout);
+        return _SessionUnreachable(onRetry: session.retryRestore, onUseAnotherAccount: session.logout);
       case SessionStatus.signedOut:
-        return AuthScreen(onVerified: session.startFromVerify);
+        return const AuthScreen();
       case SessionStatus.needsProfile:
         return const ProfileSetupScreen();
       case SessionStatus.signedIn:
@@ -127,10 +131,10 @@ class _SplashScreen extends StatelessWidget {
 /// Shown when a saved session exists but Kraveo cannot be reached. We keep the token so the
 /// student is not logged out just because the network dropped.
 class _SessionUnreachable extends StatefulWidget {
-  const _SessionUnreachable({required this.onRetry, required this.onUseAnotherNumber});
+  const _SessionUnreachable({required this.onRetry, required this.onUseAnotherAccount});
 
   final Future<void> Function() onRetry;
-  final Future<void> Function() onUseAnotherNumber;
+  final Future<void> Function() onUseAnotherAccount;
 
   @override
   State<_SessionUnreachable> createState() => _SessionUnreachableState();
@@ -161,7 +165,7 @@ class _SessionUnreachableState extends State<_SessionUnreachable> {
                 action: Column(mainAxisSize: MainAxisSize.min, children: [
                   KButton(label: 'Try again', icon: LucideIcons.rotateCcw, loading: _busy, onPressed: _retry),
                   const SizedBox(height: 12),
-                  KButton(label: 'Use a different number', kind: KButtonKind.ghost, onPressed: _busy ? null : widget.onUseAnotherNumber),
+                  KButton(label: 'Use a different account', kind: KButtonKind.ghost, onPressed: _busy ? null : widget.onUseAnotherAccount),
                 ]),
               ),
             ),

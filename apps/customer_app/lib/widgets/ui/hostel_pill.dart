@@ -51,9 +51,15 @@ class HostelPill extends StatelessWidget {
     required this.hostelBlocks,
     required this.onChanged,
     this.caption = 'DELIVERING TO',
+    this.placeholder = 'Choose drop point',
   });
 
-  final String selectedHostel;
+  /// The chosen drop-off point, or null when none has been picked yet (non-students pick at
+  /// checkout). A null value shows [placeholder] and a neutral caption.
+  final String? selectedHostel;
+
+  /// Shown instead of a block name while nothing is chosen.
+  final String placeholder;
   final List<String> hostelBlocks;
   final ValueChanged<String> onChanged;
   final String caption;
@@ -61,11 +67,12 @@ class HostelPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    final safeValue = hostelBlocks.contains(selectedHostel) ? selectedHostel : (hostelBlocks.isNotEmpty ? hostelBlocks.first : selectedHostel);
+    final chosen = selectedHostel;
+    final safeValue = chosen == null ? null : (hostelBlocks.contains(chosen) ? chosen : (hostelBlocks.isNotEmpty ? hostelBlocks.first : chosen));
     return KPressable(
-      semanticLabel: 'Delivering to $safeValue. Change drop-off point',
+      semanticLabel: safeValue == null ? 'Delivery point not chosen. Choose drop-off point' : 'Delivering to $safeValue. Change drop-off point',
       onTap: () async {
-        final picked = await showHostelPicker(context, blocks: hostelBlocks, selected: safeValue);
+        final picked = await showHostelPicker(context, blocks: hostelBlocks, selected: safeValue ?? '');
         if (picked != null) onChanged(picked);
       },
       child: Container(
@@ -86,8 +93,8 @@ class HostelPill extends StatelessWidget {
           const SizedBox(width: 10),
           Flexible(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Text(caption, maxLines: 1, style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 0.8)),
-              Text(safeValue, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.ink)),
+              Text(safeValue == null ? 'DELIVERY POINT' : caption, maxLines: 1, style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 0.8)),
+              Text(safeValue ?? placeholder, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: safeValue == null ? k.inkMuted : k.ink)),
             ]),
           ),
           const SizedBox(width: 6),

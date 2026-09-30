@@ -3,6 +3,7 @@ import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 import '../config/app_info.dart';
+import '../models/auth_results.dart';
 import '../models/customer_user.dart';
 import '../models/order.dart';
 import '../providers/cart_provider.dart';
@@ -11,12 +12,13 @@ import '../providers/session_provider.dart';
 import '../widgets/ui/error_line.dart';
 import '../widgets/ui/format.dart';
 import '../widgets/ui/hostel_pill.dart';
+import '../widgets/ui/profile_sheets.dart';
 import '../widgets/ui/sheet_chrome.dart';
 import '../widgets/ui/snack.dart';
 import '../widgets/ui/status_map.dart';
 
-/// "Me" tab: identity, coins, drop-off point, order summary, and the account actions
-/// (log out, delete account).
+/// "Me" tab: avatar, name, e-mail, mobile, student status, drop-off point, coins, order summary
+/// and the account actions (log out, delete account).
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key, this.onOpenOrders, this.onTrackOrder});
 
@@ -42,11 +44,31 @@ class ProfileScreen extends StatelessWidget {
             ));
   }
 
+  Future<void> _toggleStudent(BuildContext context, SessionProvider session, bool value) async {
+    if (session.isSavingProfile) return;
+    final messenger = ScaffoldMessenger.of(context);
+    ProfileResult result;
+    if (value) {
+      // A student needs a hostel block: ask first, save both together.
+      final picked = await showHostelPicker(context, blocks: kHostelBlocks, selected: session.hostel ?? '');
+      if (picked == null || !context.mounted) return;
+      result = await session.saveProfile(isStudent: true, hostelBlock: picked);
+    } else {
+      result = await session.saveProfile(isStudent: false);
+    }
+    if (result.unauthorized) return; // AuthGate already sent the student back to login
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(result.success
+          ? buildKSnack(value ? 'Student status saved' : 'Saved. You\'ll choose your drop-off point at checkout.', icon: LucideIcons.graduationCap)
+          : buildKSnack(profileSaveFailure(result), error: true));
+  }
+
   Future<void> _logout(BuildContext context, SessionProvider session) async {
     final ok = await showKConfirm(
       context,
       title: 'Log out of Kraveo?',
-      message: 'You will need a new code to sign back in. Anything in your cart will be cleared.',
+      message: 'You will sign back in with Google next time. Anything in your cart will be cleared.',
       confirmLabel: 'Log out',
     );
     if (ok == true) await session.logout();
@@ -78,21 +100,55 @@ class ProfileScreen extends StatelessWidget {
           : ListView(
               padding: EdgeInsets.fromLTRB(KSpace.gutter, 4, KSpace.gutter, bottomInset + 24),
               children: [
-                KReveal(child: _IdentityCard(user: user, coins: coins)),
-                const _SectionLabel('DELIVERY'),
+                KReveal(child: _IdentityCard(user: user, coins: coins, onChangeAvatar: () => showAvatarSheet(context))),
+                const _SectionLabel('YOUR DETAILS'),
                 KReveal(
                   index: 1,
-                  child: _DropoffCard(
-                    hostel: session.hostel,
-                    saving: session.isSavingProfile,
-                    onTap: () => _changeHostel(context, session),
+                  child: KCard(
+                    padding: EdgeInsets.zero,
+                    child: Column(children: [
+                      _DetailRow(icon: LucideIcons.user, label: 'Name', value: user.displayName, onTap: () => showDetailsSheet(context)),
+                      Divider(height: 1, indent: 72, endIndent: 16, color: k.line.withValues(alpha: 0.7)),
+                      _DetailRow(icon: LucideIcons.mail, label: 'Email', value: user.email ?? 'Not available'),
+                      Divider(height: 1, indent: 72, endIndent: 16, color: k.line.withValues(alpha: 0.7)),
+                      _DetailRow(
+                        icon: LucideIcons.phone,
+                        label: 'Mobile',
+                        value: user.phone == null ? 'Add your number' : user.maskedPhone,
+                        muted: user.phone == null,
+                        onTap: () => showDetailsSheet(context),
+                      ),
+                    ]),
+                  ),
+                ),
+                const _SectionLabel('DELIVERY'),
+                KReveal(
+                  index: 2,
+                  child: KCard(
+                    padding: EdgeInsets.zero,
+                    child: Column(children: [
+                      _StudentRow(
+                        isStudent: user.isStudent == true,
+                        saving: session.isSavingProfile,
+                        onChanged: (v) => _toggleStudent(context, session, v),
+                      ),
+                      Divider(height: 1, indent: 72, endIndent: 16, color: k.line.withValues(alpha: 0.7)),
+                      if (user.isStudent == true)
+                        _DropoffCard(
+                          hostel: session.hostel,
+                          saving: session.isSavingProfile,
+                          onTap: () => _changeHostel(context, session),
+                        )
+                      else
+                        const _DeliveryPointNote(),
+                    ]),
                   ),
                 ),
                 const _SectionLabel('ORDERS'),
-                KReveal(index: 2, child: _OrdersCard(orders: orders, onOpen: onOpenOrders, onTrack: onTrackOrder)),
+                KReveal(index: 3, child: _OrdersCard(orders: orders, onOpen: onOpenOrders, onTrack: onTrackOrder)),
                 const _SectionLabel('ACCOUNT'),
                 KReveal(
-                  index: 3,
+                  index: 4,
                   child: KCard(
                     padding: EdgeInsets.zero,
                     child: Column(children: [
@@ -141,56 +197,67 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-/// Brand-green hero: avatar, name, masked number and the coin balance.
+/// Brand-green hero: avatar (tap to change), name, e-mail and the coin balance.
 class _IdentityCard extends StatelessWidget {
-  const _IdentityCard({required this.user, required this.coins});
+  const _IdentityCard({required this.user, required this.coins, required this.onChangeAvatar});
 
   final CustomerUser user;
   final int coins;
+  final VoidCallback onChangeAvatar;
 
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    return Semantics(
-      container: true,
-      label: '${user.displayName}, ${user.maskedPhone}, $coins Kraveo Coins',
-      child: Container(
-        width: double.infinity,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(color: k.brand, borderRadius: BorderRadius.circular(KRadius.xl), boxShadow: KShadow.lift(k.shadowTint)),
-        child: Stack(children: [
-          Positioned(
-            right: -40,
-            top: -46,
-            child: Container(width: 170, height: 170, decoration: BoxDecoration(color: KraveoPalette.g700.withValues(alpha: 0.55), shape: BoxShape.circle)),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: ExcludeSemantics(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Container(
-                    width: 64,
-                    height: 64,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(color: k.accent, shape: BoxShape.circle),
-                    child: Text(user.initials, style: KraveoType.headline.copyWith(color: k.onAccent, fontSize: 24)),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(user.displayName, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.headlineSm.copyWith(color: k.onBrand)),
-                      const SizedBox(height: 6),
-                      Row(children: [
-                        Icon(LucideIcons.phone, size: 14, color: k.onBrand.withValues(alpha: 0.8)),
-                        const SizedBox(width: 6),
-                        Flexible(child: Text(user.maskedPhone, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.onBrand.withValues(alpha: 0.85), fontWeight: FontWeight.w600))),
-                      ]),
-                    ]),
+    return Container(
+      width: double.infinity,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(color: k.brand, borderRadius: BorderRadius.circular(KRadius.xl), boxShadow: KShadow.lift(k.shadowTint)),
+      child: Stack(children: [
+        Positioned(
+          right: -40,
+          top: -46,
+          child: Container(width: 170, height: 170, decoration: BoxDecoration(color: KraveoPalette.g700.withValues(alpha: 0.55), shape: BoxShape.circle)),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              KPressable(
+                onTap: onChangeAvatar,
+                semanticLabel: 'Change avatar',
+                child: Stack(clipBehavior: Clip.none, children: [
+                  KAvatar(id: user.avatarId, size: 72, ring: true),
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: Container(
+                      width: 26,
+                      height: 26,
+                      decoration: BoxDecoration(color: k.surface, shape: BoxShape.circle, border: Border.all(color: k.brand, width: 2)),
+                      child: Icon(LucideIcons.pencil, size: 13, color: k.brand),
+                    ),
                   ),
                 ]),
-                const SizedBox(height: 18),
-                Container(
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: MergeSemantics(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(user.displayName, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.headlineSm.copyWith(color: k.onBrand)),
+                    if (user.email != null) ...[
+                      const SizedBox(height: 6),
+                      Text(user.email!, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.onBrand.withValues(alpha: 0.85), fontWeight: FontWeight.w600)),
+                    ],
+                  ]),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 18),
+            Semantics(
+              container: true,
+              label: '$coins Kraveo Coins. 50 coins equals ${rupee(20)} off',
+              child: ExcludeSemantics(
+                child: Container(
                   padding: const EdgeInsets.fromLTRB(14, 12, 16, 12),
                   decoration: BoxDecoration(color: k.onBrand.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(KRadius.lg)),
                   child: Row(children: [
@@ -212,11 +279,116 @@ class _IdentityCard extends StatelessWidget {
                     KAnimatedNumber(value: coins, style: KraveoType.numericSm.copyWith(color: k.onBrand)),
                   ]),
                 ),
+              ),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+/// One line of profile info: icon tile, small label, value. Tappable rows show a chevron.
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({required this.icon, required this.label, required this.value, this.onTap, this.muted = false});
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final VoidCallback? onTap;
+  final bool muted;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return KPressable(
+      onTap: onTap,
+      scale: 0.99,
+      semanticLabel: onTap == null ? '$label, $value' : '$label, $value. Edit',
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: ExcludeSemantics(
+          child: Row(children: [
+            _IconTile(icon: icon, color: k.brand),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(label, style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 0.6)),
+                const SizedBox(height: 2),
+                Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: muted ? k.inkFaint : k.ink)),
               ]),
             ),
-          ),
-        ]),
+            if (onTap != null) Icon(LucideIcons.pencil, size: 18, color: k.inkFaint),
+          ]),
+        ),
       ),
+    );
+  }
+}
+
+/// "I'm a student" switch. Turning it on asks for a hostel block first.
+class _StudentRow extends StatelessWidget {
+  const _StudentRow({required this.isStudent, required this.saving, required this.onChanged});
+
+  final bool isStudent;
+  final bool saving;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Semantics(
+      toggled: isStudent,
+      label: 'I\'m a student. ${isStudent ? 'On. Your hostel block is saved for checkout' : 'Off. You choose a drop-off point at checkout'}',
+      excludeSemantics: true,
+      onTap: saving ? null : () => onChanged(!isStudent),
+      child: KPressable(
+        onTap: saving ? null : () => onChanged(!isStudent),
+        scale: 0.99,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(children: [
+            _IconTile(icon: LucideIcons.graduationCap, color: k.brand),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('I\'m a student', style: KraveoType.titleMd.copyWith(color: k.ink)),
+                const SizedBox(height: 2),
+                Text(isStudent ? 'Your hostel block is saved for checkout' : 'You choose a drop-off point at checkout', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+              ]),
+            ),
+            const SizedBox(width: 8),
+            if (saving)
+              SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.4, color: k.brand))
+            else
+              IgnorePointer(child: Switch(value: isStudent, onChanged: (_) {})),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown instead of the hostel row when the student flag is off.
+class _DeliveryPointNote extends StatelessWidget {
+  const _DeliveryPointNote();
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Row(children: [
+        _IconTile(icon: LucideIcons.mapPin, color: k.inkMuted),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Delivery point', style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 0.6)),
+            const SizedBox(height: 2),
+            Text('Chosen at checkout for each order', style: KraveoType.titleMd.copyWith(color: k.ink)),
+          ]),
+        ),
+      ]),
     );
   }
 }
@@ -231,32 +403,32 @@ class _DropoffCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    return KCard(
+    return KPressable(
       onTap: saving ? null : onTap,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      scale: 0.99,
       child: Semantics(
-        label: hostel == null ? 'Drop-off point not set. Choose one' : 'Drop-off point $hostel. Change',
+        label: hostel == null ? 'Hostel block not set. Choose one' : 'Hostel block $hostel. Change',
         excludeSemantics: true,
-        child: Row(children: [
-          _IconTile(icon: LucideIcons.mapPin, color: k.brand),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Drop-off point', style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 0.6)),
-              const SizedBox(height: 2),
-              Text(hostel ?? 'Not set', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: hostel == null ? k.inkFaint : k.ink)),
-            ]),
-          ),
-          const SizedBox(width: 8),
-          if (saving)
-            SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4, color: k.brand))
-          else
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Row(children: [
+            _IconTile(icon: LucideIcons.mapPin, color: k.brand),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Hostel block', style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 0.6)),
+                const SizedBox(height: 2),
+                Text(hostel ?? 'Not set', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: hostel == null ? k.inkFaint : k.ink)),
+              ]),
+            ),
+            const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(color: k.brandSoft, borderRadius: BorderRadius.circular(KRadius.pill)),
               child: Text(hostel == null ? 'Choose' : 'Change', style: KraveoType.label.copyWith(color: k.brand, fontSize: 13)),
             ),
-        ]),
+          ]),
+        ),
       ),
     );
   }

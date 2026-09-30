@@ -15,14 +15,15 @@ import 'ui/sheet_chrome.dart';
 import 'ui/veg_mark.dart';
 
 class CartSheet extends StatelessWidget {
-  final String selectedHostel;
+  /// Saved drop-off point; null when the student has not chosen one (checkout asks).
+  final String? selectedHostel;
 
   const CartSheet({
     super.key,
     required this.selectedHostel,
   });
 
-  static Future<void> show(BuildContext context, {required String selectedHostel}) {
+  static Future<void> show(BuildContext context, {required String? selectedHostel}) {
     return showKSheet<void>(context, builder: (_) => CartSheet(selectedHostel: selectedHostel));
   }
 
@@ -50,7 +51,7 @@ class CartSheet extends StatelessWidget {
       subtitle: Row(children: [
         Icon(LucideIcons.mapPin, size: 14, color: k.brand),
         const SizedBox(width: 4),
-        Flexible(child: Text('Delivering to $selectedHostel', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted))),
+        Flexible(child: Text(selectedHostel == null ? 'Choose your drop-off point at checkout' : 'Delivering to $selectedHostel', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted))),
       ]),
       children: [
         for (final cartItem in cart.items) _CartLine(cartItem: cartItem, cart: cart),

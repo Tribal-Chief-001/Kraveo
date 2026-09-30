@@ -1,41 +1,76 @@
-/// The signed-in student, as returned by /auth/verify-otp and /auth/profile.
+import 'package:kraveo_ui/kraveo_ui.dart' show kAvatarCount;
+
+/// The signed-in student, as returned by /auth/google and /auth/profile.
 class CustomerUser {
   const CustomerUser({
     required this.id,
-    required this.phone,
+    this.email,
+    this.phone,
     this.name,
     this.role = 'STUDENT',
+    this.isStudent,
     this.hostelBlock,
+    this.avatarId,
     this.kraveoCoins = 0,
   });
 
   final String id;
-  final String phone;
+  final String? email;
+
+  /// Stored as `+91 XXXXXXXXXX` by the server; null until the student adds one.
+  final String? phone;
   final String? name;
   final String role;
+
+  /// null = not answered yet ("Are you a student?" is part of sign-up).
+  final bool? isStudent;
   final String? hostelBlock;
+
+  /// 1..[kAvatarCount]; null until chosen.
+  final int? avatarId;
   final int kraveoCoins;
 
+  static String? _clean(Object? raw) {
+    final v = raw?.toString().trim();
+    return v == null || v.isEmpty ? null : v;
+  }
+
   factory CustomerUser.fromJson(Map<String, dynamic> json) {
-    final rawName = json['name']?.toString().trim();
-    final rawHostel = json['hostelBlock']?.toString().trim();
     final coins = json['kraveoCoins'];
+    final rawAvatar = json['avatarId'];
+    final avatar = rawAvatar is num ? rawAvatar.round() : int.tryParse('${rawAvatar ?? ''}');
+    final student = json['isStudent'];
     return CustomerUser(
       id: json['id']?.toString() ?? '',
-      phone: json['phone']?.toString() ?? '',
-      name: rawName == null || rawName.isEmpty ? null : rawName,
+      email: _clean(json['email']),
+      phone: _clean(json['phone']),
+      name: _clean(json['name']),
       role: json['role']?.toString() ?? 'STUDENT',
-      hostelBlock: rawHostel == null || rawHostel.isEmpty ? null : rawHostel,
+      isStudent: student is bool ? student : null,
+      hostelBlock: _clean(json['hostelBlock']),
+      avatarId: avatar != null && avatar >= 1 && avatar <= kAvatarCount ? avatar : null,
       kraveoCoins: coins is num ? coins.round() : int.tryParse('$coins') ?? 0,
     );
   }
 
-  CustomerUser copyWith({String? name, String? hostelBlock, int? kraveoCoins}) => CustomerUser(
+  CustomerUser copyWith({
+    String? name,
+    String? phone,
+    bool? isStudent,
+    String? hostelBlock,
+    bool clearHostelBlock = false,
+    int? avatarId,
+    int? kraveoCoins,
+  }) =>
+      CustomerUser(
         id: id,
-        phone: phone,
+        email: email,
+        phone: phone ?? this.phone,
         name: name ?? this.name,
         role: role,
-        hostelBlock: hostelBlock ?? this.hostelBlock,
+        isStudent: isStudent ?? this.isStudent,
+        hostelBlock: clearHostelBlock ? null : (hostelBlock ?? this.hostelBlock),
+        avatarId: avatarId ?? this.avatarId,
         kraveoCoins: kraveoCoins ?? this.kraveoCoins,
       );
 
@@ -58,7 +93,7 @@ class CustomerUser {
   }
 
   /// `+91 98••• ••210`: enough to recognise the number, not enough to read it over a shoulder.
-  String get maskedPhone => maskIndianPhone(phone);
+  String get maskedPhone => maskIndianPhone(phone ?? '');
 }
 
 /// Masks the middle of an Indian mobile number. Accepts +91 / 91 / 0 prefixes.

@@ -53,8 +53,6 @@ class CustomerApiService {
     return m is String && m.trim().isNotEmpty ? m.trim() : null;
   }
 
-  static int? _int(Object? v) => v is num ? v.round() : int.tryParse('$v');
-
   /// Central 401 handling for authenticated calls: drop the dead token, tell the app shell.
   /// Returns true when the response was a 401.
   static Future<bool> _rejectIfUnauthorized(http.Response response) async {
@@ -134,13 +132,28 @@ class CustomerApiService {
     );
   }
 
-  /// Saves name + drop-off point. 400 responses carry `field` so the form can point at the input.
-  static Future<ProfileResult> updateProfile({required String name, required String hostelBlock}) async {
+  /// PUT /auth/profile with only the fields that are given. 400 responses carry `field` so the
+  /// form can point at the input. [hostelBlock] is only accepted by the server when the student
+  /// flag is (or becomes) true; it is cleared server-side when [isStudent] is false.
+  static Future<ProfileResult> updateProfile({
+    String? name,
+    String? phone,
+    bool? isStudent,
+    String? hostelBlock,
+    int? avatarId,
+  }) async {
+    final payload = <String, dynamic>{
+      if (name != null) 'name': name,
+      if (phone != null) 'phone': phone,
+      if (isStudent != null) 'isStudent': isStudent,
+      if (hostelBlock != null) 'hostelBlock': hostelBlock,
+      if (avatarId != null) 'avatarId': avatarId,
+    };
     try {
       final response = await _put(
         Uri.parse('${ApiConfig.baseUrl}/auth/profile'),
         headers: await getAuthHeaders(),
-        body: jsonEncode({'name': name, 'hostelBlock': hostelBlock}),
+        body: jsonEncode(payload),
         timeout: const Duration(seconds: 10),
       );
       if (await _rejectIfUnauthorized(response)) {
@@ -218,59 +231,29 @@ class CustomerApiService {
     return headers;
   }
 
-  /// Sends the 4-digit SMS code. `phone` is the 10-digit Indian mobile, digits only.
-  static Future<SendOtpResult> sendOtp(String phone) async {
+  /// Exchanges a Google ID token for a Kraveo session. On success the JWT is persisted
+  /// before returning.
+  static Future<GoogleLoginResult> googleSignIn(String idToken) async {
     try {
       final response = await _post(
-        Uri.parse('${ApiConfig.baseUrl}/auth/send-otp'),
+        Uri.parse('${ApiConfig.baseUrl}/auth/google'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'phone': phone}),
-        timeout: const Duration(seconds: 12),
-      );
-      final body = _json(response);
-      final ok = response.statusCode == 200 && body['success'] != false;
-      return SendOtpResult(
-        success: ok,
-        statusCode: response.statusCode,
-        message: _msg(body),
-        retryAfterSeconds: _int(body['retryAfterSeconds']),
-        resendAfterSeconds: _int(body['resendAfterSeconds']) ?? 30,
-        expiresInSeconds: _int(body['expiresInSeconds']) ?? 300,
-      );
-    } catch (e) {
-      debugPrint('[Customer API] Send OTP failed: $e');
-      return const SendOtpResult(success: false, networkError: true);
-    }
-  }
-
-  /// Verifies the SMS code. On success the JWT is persisted before returning.
-  static Future<VerifyOtpResult> verifyOtp(String phone, String otp) async {
-    try {
-      final response = await _post(
-        Uri.parse('${ApiConfig.baseUrl}/auth/verify-otp'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'phone': phone, 'otp': otp, 'role': 'STUDENT'}),
-        timeout: const Duration(seconds: 12),
+        body: jsonEncode({'idToken': idToken}),
+        timeout: const Duration(seconds: 15),
       );
       final body = _json(response);
       final token = body['token'];
       final user = body['user'];
       final ok = response.statusCode == 200 && body['success'] != false && token is String && token.isNotEmpty && user is Map;
       if (!ok) {
-        return VerifyOtpResult(
-          success: false,
-          statusCode: response.statusCode,
-          message: _msg(body),
-          retryAfterSeconds: _int(body['retryAfterSeconds']),
-          attemptsLeft: _int(body['attemptsLeft']),
-        );
+        return GoogleLoginResult(success: false, statusCode: response.statusCode, message: _msg(body));
       }
       final userMap = Map<String, dynamic>.from(user);
       if (userMap['role'] != null && userMap['role'] != 'STUDENT') {
-        return const VerifyOtpResult(success: false, statusCode: 403, message: 'This number cannot sign in to the Kraveo customer app.');
+        return const GoogleLoginResult(success: false, statusCode: 403, message: 'This Google account can\'t sign in to the Kraveo customer app.');
       }
       await saveToken(token);
-      return VerifyOtpResult(
+      return GoogleLoginResult(
         success: true,
         statusCode: 200,
         token: token,
@@ -279,8 +262,8 @@ class CustomerApiService {
         needsProfile: body['needsProfile'] == true,
       );
     } catch (e) {
-      debugPrint('[Customer API] Verify OTP failed: $e');
-      return const VerifyOtpResult(success: false, networkError: true);
+      debugPrint('[Customer API] Google sign-in failed: $e');
+      return const GoogleLoginResult(success: false, networkError: true);
     }
   }
 

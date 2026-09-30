@@ -18,6 +18,7 @@ dependencies:
   shared_preferences: ^2.2.2
   socket_io_client: ^2.0.3+1
   razorpay_flutter: ^1.4.6
+  google_sign_in: ^7.2.0
 
 dev_dependencies:
   flutter_test:

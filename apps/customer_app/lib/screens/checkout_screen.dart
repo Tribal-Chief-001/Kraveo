@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
 import '../providers/cart_provider.dart';
 import '../providers/order_provider.dart';
+import '../providers/session_provider.dart';
 import '../services/customer_api_service.dart';
 import '../widgets/coupon_box.dart';
 import '../widgets/ui/bill_breakdown.dart';
@@ -19,7 +20,9 @@ import '../widgets/ui/veg_mark.dart';
 import 'live_tracking_screen.dart';
 
 class CheckoutScreen extends StatefulWidget {
-  final String selectedHostel;
+  /// The saved drop-off point, or null when the student has none (non-students, or no hostel
+  /// saved yet). Null forces an explicit choice before the Pay button works.
+  final String? selectedHostel;
 
   const CheckoutScreen({
     super.key,
@@ -32,7 +35,7 @@ class CheckoutScreen extends StatefulWidget {
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
   final Razorpay _razorpay = Razorpay();
-  late String _currentHostel;
+  String? _currentHostel;
   final TextEditingController _deliveryNoteController = TextEditingController();
   String _selectedPaymentMethod = 'UPI via Razorpay';
   bool _isProcessingPayment = false;
@@ -51,7 +54,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   @override
   void initState() {
     super.initState();
-    _currentHostel = widget.selectedHostel;
+    _currentHostel = widget.selectedHostel ?? context.read<SessionProvider>().deliveryPoint;
     _deliveryNoteController.text = 'Call when reaching hostel gate';
     _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
     _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
@@ -70,6 +73,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       _showPaymentError('Your cart is empty or the restaurant is missing.');
       return;
     }
+    final dropoff = _currentHostel;
+    if (dropoff == null) {
+      // Never reach the payment gateway without a drop-off point.
+      _chooseDropoff();
+      return;
+    }
 
     setState(() => _isProcessingPayment = true);
     _pendingCart = cart;
@@ -82,7 +91,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           'itemId': item.item.id,
           'quantity': item.quantity,
         }).toList(),
-        dropoffHostel: _currentHostel,
+        dropoffHostel: dropoff,
         dropoffNotes: _deliveryNoteController.text.trim(),
         couponCode: cart.appliedCouponCode,
       );
@@ -177,7 +186,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     // Place Order in OrderProvider
     final newOrder = orderProvider.placeOrder(
       cart: cart,
-      hostel: _currentHostel,
+      hostel: _currentHostel ?? kHostelBlocks.first,
       deliveryNote: _deliveryNoteController.text.trim(),
       paymentMethod: _selectedPaymentMethod,
       serverOrderId: serverOrderId,
@@ -267,14 +276,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               floating: true,
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 KButton(
-                  label: 'Pay ${rupee(cart.grandTotal)}',
-                  icon: LucideIcons.lock,
+                  label: _currentHostel == null ? 'Choose drop-off' : 'Pay ${rupee(cart.grandTotal)}',
+                  icon: _currentHostel == null ? LucideIcons.mapPin : LucideIcons.lock,
+                  kind: _currentHostel == null ? KButtonKind.accent : KButtonKind.primary,
                   loading: _isProcessingPayment,
                   onPressed: () => _handlePlaceOrder(cart, orderProvider),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  _isProcessingPayment ? 'Opening secure payment. Please do not close the app.' : 'Next: pay by UPI, then get your gate OTP and live tracking.',
+                  _isProcessingPayment
+                      ? 'Opening secure payment. Please do not close the app.'
+                      : (_currentHostel == null ? 'Tell us where to deliver first. Payment opens right after.' : 'Next: pay by UPI, then get your gate OTP and live tracking.'),
                   textAlign: TextAlign.center,
                   style: KraveoType.caption.copyWith(color: k.inkFaint, fontSize: 12),
                 ),
@@ -283,14 +295,63 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
+  /// Opens the picker. Students keep their saved default; everyone else's choice is remembered
+  /// for this session so the next checkout is pre-filled.
+  Future<void> _chooseDropoff() async {
+    final picked = await showHostelPicker(context, blocks: kHostelBlocks, selected: _currentHostel ?? '');
+    if (picked != null) _setDropoff(picked);
+  }
+
+  void _setDropoff(String block) {
+    if (!mounted) return;
+    setState(() => _currentHostel = block);
+    final session = context.read<SessionProvider>();
+    if (session.user?.isStudent != true) session.changeHostel(block); // in-memory only
+  }
+
   Widget _buildDropoff(BuildContext context, KraveoTokens k) {
+    final chosen = _currentHostel;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      HostelPill(
-        caption: 'DELIVER TO',
-        selectedHostel: _currentHostel,
-        hostelBlocks: kHostelBlocks,
-        onChanged: (newHostel) => setState(() => _currentHostel = newHostel),
-      ),
+      if (chosen == null)
+        KPressable(
+          onTap: _chooseDropoff,
+          semanticLabel: 'Choose a drop-off point. Required before you can pay',
+          child: AnimatedContainer(
+            duration: KMotion.base,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: k.brandSoft,
+              borderRadius: BorderRadius.circular(KRadius.lg),
+              border: Border.all(color: k.brand, width: 2),
+            ),
+            child: ExcludeSemantics(
+              child: Row(children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(color: k.brand, shape: BoxShape.circle),
+                  child: Icon(LucideIcons.mapPin, size: 22, color: k.onBrand),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Choose drop-off point', style: KraveoType.titleLg.copyWith(color: k.ink)),
+                    const SizedBox(height: 2),
+                    Text('Required before you can pay', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+                  ]),
+                ),
+                Icon(LucideIcons.chevronRight, size: 22, color: k.brand),
+              ]),
+            ),
+          ),
+        )
+      else
+        HostelPill(
+          caption: 'DELIVER TO',
+          selectedHostel: chosen,
+          hostelBlocks: kHostelBlocks,
+          onChanged: _setDropoff,
+        ),
       const SizedBox(height: 12),
       Text(
         'Your runner meets you at the gate. After you pay you get a 4-digit OTP: share it only when they arrive.',

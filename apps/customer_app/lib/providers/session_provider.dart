@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/auth_results.dart';
 import '../models/customer_user.dart';
 import '../services/customer_api_service.dart';
+import '../services/google_auth_service.dart';
 import '../widgets/ui/hostel_pill.dart';
 
 /// Where the app is in the account lifecycle. `AuthGate` renders one screen per state.
@@ -13,36 +14,73 @@ enum SessionStatus {
   /// Saved token exists but the backend could not be reached; the user can retry.
   unreachable,
 
-  /// No valid session: show phone login.
+  /// No valid session: show the Google welcome screen.
   signedOut,
 
-  /// Signed in, but name / drop-off point are missing: show first-time setup.
+  /// Signed in with Google, but the sign-up profile (name, phone, student?, avatar) is incomplete.
   needsProfile,
 
   /// Fully set up: show the app.
   signedIn,
 }
 
+/// Result of a tap on "Continue with Google", already phrased for the student.
+class SignInOutcome {
+  const SignInOutcome.ok() : cancelled = false, error = null;
+  const SignInOutcome.cancelled() : cancelled = true, error = null;
+  const SignInOutcome.failed(String this.error) : cancelled = false;
+
+  /// The student closed the Google picker: show nothing.
+  final bool cancelled;
+
+  /// User-facing reason, or null on success / cancel.
+  final String? error;
+
+  bool get success => !cancelled && error == null;
+}
+
 /// The signed-in student and their drop-off point. Single source of truth for
 /// "who am I" so Home, Me and checkout agree.
 class SessionProvider with ChangeNotifier {
-  SessionProvider({SessionStatus initial = SessionStatus.checking}) : _status = initial;
+  SessionProvider({SessionStatus initial = SessionStatus.checking, GoogleAuthService? googleAuth})
+      : _status = initial,
+        _googleAuth = googleAuth ?? PlatformGoogleAuthService();
+
+  final GoogleAuthService _googleAuth;
 
   SessionStatus _status;
   CustomerUser? _user;
   bool _savingProfile = false;
+  bool _signingIn = false;
+
+  /// Name Google gave us for a brand-new account (pre-fills sign-up step 1).
+  String? _googleName;
+  bool _newAccount = false;
+
+  /// Drop point picked by a non-student. The server keeps no hostel for them, so it lives only
+  /// for this session and is re-asked at checkout after a restart.
+  String? _localDropPoint;
 
   SessionStatus get status => _status;
   CustomerUser? get user => _user;
   bool get isSavingProfile => _savingProfile;
+  bool get isSigningIn => _signingIn;
 
   /// The stored hostel mapped onto [kHostelBlocks] (legacy free-text included), or null if unset.
   String? get hostel => normalizeHostelBlock(_user?.hostelBlock, kHostelBlocks);
 
-  /// Drop-off used across the app; Block 1 until the student picks one.
-  String get selectedHostel => hostel ?? kHostelBlocks.first;
+  /// Where the next order goes, or null when the student has not chosen yet
+  /// (non-students choose at checkout).
+  String? get deliveryPoint => hostel ?? _localDropPoint;
 
-  /// Called once per new sign-in (after OTP or session restore) with the fresh user.
+  /// Display fallback for places that must always show a block; Block 1 until one is chosen.
+  /// Checkout uses [deliveryPoint] and forces an explicit choice instead.
+  String get selectedHostel => deliveryPoint ?? kHostelBlocks.first;
+
+  /// Name to pre-fill in sign-up step 1.
+  String? get suggestedName => _newAccount ? (_googleName ?? _user?.name) : (_user?.name ?? _googleName);
+
+  /// Called once per new sign-in (after Google sign-in or session restore) with the fresh user.
   /// Lets the app shell seed provider state such as the coin balance.
   void Function(CustomerUser user)? onUserLoaded;
 
@@ -77,11 +115,52 @@ class SessionProvider with ChangeNotifier {
     _begin(user, needsProfile: result.needsProfile);
   }
 
-  /// Called by the login screen after a successful OTP check (token already saved).
-  void startFromVerify(VerifyOtpResult result) {
-    final map = result.user;
-    if (map == null) return;
-    _begin(CustomerUser.fromJson(map), needsProfile: result.needsProfile);
+  /// "Continue with Google": account picker -> ID token -> POST /auth/google. On success the
+  /// session moves to `needsProfile` or `signedIn`; otherwise the outcome says what to show.
+  Future<SignInOutcome> signInWithGoogle() async {
+    if (_signingIn) return const SignInOutcome.cancelled();
+    _signingIn = true;
+    notifyListeners();
+    try {
+      final google = await _googleAuth.signIn();
+      final credential = google.credential;
+      if (credential == null) {
+        final failure = google.failure ?? GoogleAuthFailure.other;
+        final message = googleFailureMessage(failure);
+        return message == null ? const SignInOutcome.cancelled() : SignInOutcome.failed(message);
+      }
+      final result = await CustomerApiService.googleSignIn(credential.idToken);
+      final user = result.user;
+      if (!result.success || user == null) {
+        // Forget the Google account so the next attempt shows the picker (e.g. after a 403).
+        unawaited(_googleAuth.signOut());
+        return SignInOutcome.failed(_serverFailure(result));
+      }
+      _googleName = credential.displayName?.trim();
+      _newAccount = result.isNewUser;
+      _begin(CustomerUser.fromJson(user), needsProfile: result.needsProfile);
+      return const SignInOutcome.ok();
+    } finally {
+      _signingIn = false;
+      notifyListeners();
+    }
+  }
+
+  static String _serverFailure(GoogleLoginResult r) {
+    if (r.networkError) return 'We couldn\'t reach Kraveo. Check your connection and try again.';
+    if (r.roleNotAllowed) return r.message ?? 'This Google account belongs to a Kraveo partner and can\'t be used in the customer app.';
+    if (r.rejected) return r.message ?? 'Google sign-in was rejected. Please try again, or pick a different Google account.';
+    if (r.rateLimited) return r.message ?? 'Too many attempts. Please wait a moment and try again.';
+    if (r.unavailable || (r.statusCode != null && r.statusCode! >= 500)) return 'Kraveo is unavailable right now. Please try again in a little while.';
+    return r.message ?? 'We couldn\'t sign you in. Please try again.';
+  }
+
+  /// Test seam: enters a session state without a network round trip.
+  @visibleForTesting
+  void beginForTest(Map<String, dynamic> userJson, {bool needsProfile = false, String? googleName, bool isNewAccount = false}) {
+    _googleName = googleName;
+    _newAccount = isNewAccount;
+    _begin(CustomerUser.fromJson(userJson), needsProfile: needsProfile);
   }
 
   void _begin(CustomerUser user, {required bool needsProfile}) {
@@ -91,30 +170,37 @@ class SessionProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  /// Saves name + drop-off point. On success the session moves to `signedIn`.
-  Future<ProfileResult> saveProfile({required String name, required String hostelBlock}) async {
+  /// PUT /auth/profile with only the given fields. On success the stored user is replaced by the
+  /// server's copy and the status follows `needsProfile` (sign-up completes here).
+  Future<ProfileResult> saveProfile({String? name, String? phone, bool? isStudent, String? hostelBlock, int? avatarId}) async {
     _savingProfile = true;
     notifyListeners();
-    final result = await CustomerApiService.updateProfile(name: name, hostelBlock: hostelBlock);
+    final result = await CustomerApiService.updateProfile(name: name, phone: phone, isStudent: isStudent, hostelBlock: hostelBlock, avatarId: avatarId);
     _savingProfile = false;
-    if (result.success && result.user != null) {
-      final saved = CustomerUser.fromJson(result.user!);
-      _user = saved;
+    if (_user != null && result.success && result.user != null) {
+      _user = CustomerUser.fromJson(result.user!);
       _status = result.needsProfile ? SessionStatus.needsProfile : SessionStatus.signedIn;
     }
     notifyListeners();
     return result;
   }
 
-  /// Optimistically switches the drop-off point, then persists it. Reverts on failure.
+  /// Switches the drop-off point. Students save it to their profile (optimistic, reverts on
+  /// failure); non-students keep it for this session only because the server stores no hostel
+  /// for them.
   Future<ProfileResult> changeHostel(String block) async {
     final current = _user;
     if (current == null) return const ProfileResult(success: false, message: 'Please log in again.');
-    if (block == hostel) return const ProfileResult(success: true);
+    if (block == deliveryPoint) return const ProfileResult(success: true);
+    if (current.isStudent != true) {
+      _localDropPoint = block;
+      notifyListeners();
+      return const ProfileResult(success: true);
+    }
     final previous = current;
     _user = current.copyWith(hostelBlock: block);
     notifyListeners();
-    final result = await CustomerApiService.updateProfile(name: current.name ?? '', hostelBlock: block);
+    final result = await CustomerApiService.updateProfile(hostelBlock: block);
     if (_user == null) return result; // signed out meanwhile
     if (result.success && result.user != null) {
       _user = CustomerUser.fromJson(result.user!);
@@ -151,7 +237,12 @@ class SessionProvider with ChangeNotifier {
 
   void _endSession() {
     final wasActive = _user != null || _status != SessionStatus.signedOut;
+    // Forget the Google account too, so the next sign-in starts from the account picker.
+    if (_user != null) unawaited(_googleAuth.signOut());
     _user = null;
+    _googleName = null;
+    _newAccount = false;
+    _localDropPoint = null;
     _savingProfile = false;
     _status = SessionStatus.signedOut;
     if (wasActive) onSignedOut?.call();

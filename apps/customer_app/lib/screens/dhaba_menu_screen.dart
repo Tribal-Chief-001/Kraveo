@@ -22,7 +22,8 @@ import '../widgets/ui/veg_mark.dart';
 
 class DhabaMenuScreen extends StatefulWidget {
   final Dhaba dhaba;
-  final String selectedHostel;
+  /// Saved drop-off point; null when none is chosen yet (checkout asks).
+  final String? selectedHostel;
 
   const DhabaMenuScreen({
     super.key,
@@ -144,7 +145,7 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
                     KInfoChip(icon: LucideIcons.star, label: widget.dhaba.rating.toStringAsFixed(1), iconColor: kStarColor),
                     KInfoChip(icon: LucideIcons.clock, label: widget.dhaba.eta),
                     KInfoChip(icon: LucideIcons.wallet, label: 'Min ${rupee(widget.dhaba.minOrder)}'),
-                    KInfoChip(icon: LucideIcons.mapPin, label: 'To ${widget.selectedHostel}', iconColor: k.brand),
+                    KInfoChip(icon: LucideIcons.mapPin, label: widget.selectedHostel == null ? 'Pick drop-off at checkout' : 'To ${widget.selectedHostel}', iconColor: k.brand),
                   ]),
                   if (widget.dhaba.address.isNotEmpty) ...[
                     const SizedBox(height: 12),

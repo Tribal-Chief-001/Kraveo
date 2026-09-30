@@ -24,50 +24,33 @@ abstract class ApiOutcome {
 
   bool get rateLimited => statusCode == 429;
 
-  /// 502 / 503: an upstream (SMS gateway, database) is down.
+  /// 502 / 503: an upstream (Google, database) is down.
   bool get unavailable => statusCode == 502 || statusCode == 503;
 }
 
-class SendOtpResult extends ApiOutcome {
-  const SendOtpResult({
+/// POST /auth/google: exchanges a Google ID token for a Kraveo session.
+class GoogleLoginResult extends ApiOutcome {
+  const GoogleLoginResult({
     required super.success,
     super.message,
     super.statusCode,
     super.networkError,
-    super.retryAfterSeconds,
-    this.resendAfterSeconds = 30,
-    this.expiresInSeconds = 300,
-  });
-
-  final int resendAfterSeconds;
-  final int expiresInSeconds;
-}
-
-class VerifyOtpResult extends ApiOutcome {
-  const VerifyOtpResult({
-    required super.success,
-    super.message,
-    super.statusCode,
-    super.networkError,
-    super.retryAfterSeconds,
-    this.attemptsLeft,
     this.token,
     this.user,
     this.isNewUser = false,
     this.needsProfile = false,
   });
 
-  final int? attemptsLeft;
   final String? token;
   final Map<String, dynamic>? user;
   final bool isNewUser;
   final bool needsProfile;
 
-  /// 403: this number belongs to a different Kraveo app (vendor / driver).
-  bool get roleNotAllowed => statusCode == 403;
+  /// 401: token invalid, wrong audience or e-mail not verified.
+  bool get rejected => statusCode == 401;
 
-  /// 429 after too many wrong tries.
-  bool get locked => rateLimited;
+  /// 403: this Google e-mail belongs to a partner or admin account.
+  bool get roleNotAllowed => statusCode == 403;
 }
 
 /// GET / PUT /auth/profile.
@@ -85,7 +68,7 @@ class ProfileResult extends ApiOutcome {
   final Map<String, dynamic>? user;
   final bool needsProfile;
 
-  /// Which input the server rejected: 'name' or 'hostelBlock'.
+  /// Which input the server rejected: 'name', 'phone', 'isStudent', 'hostelBlock' or 'avatarId'.
   final String? field;
 
   /// 401: the stored token is expired or invalid.

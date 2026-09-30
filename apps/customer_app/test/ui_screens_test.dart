@@ -102,15 +102,11 @@ Future<void> loadKraveoFonts() async {
 void main() {
   setUpAll(loadKraveoFonts);
 
-  testWidgets('AuthScreen shows the phone step and validates the number', (tester) async {
-    await pumpScreen(tester, AuthScreen(onVerified: (_) {}));
-    expect(find.text('Send code'), findsOneWidget);
+  testWidgets('AuthScreen shows the Google welcome without overflow', (tester) async {
+    await pumpScreen(tester, const AuthScreen());
+    expect(find.text('Continue with Google'), findsOneWidget);
     expect(find.textContaining('cravings'), findsOneWidget);
-
-    await tester.ensureVisible(find.text('Send code'));
-    await tester.tap(find.text('Send code'));
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(find.text('Enter your 10-digit Indian mobile number.'), findsOneWidget);
+    expect(find.textContaining('Google name and email'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -132,7 +128,9 @@ void main() {
   });
 
   testWidgets('HomeScreen renders header, promo, chips and kitchens without overflow', (tester) async {
-    await pumpScreen(tester, const HomeScreen());
+    final session = SessionProvider(initial: SessionStatus.checking)
+      ..beginForTest({'id': 'u', 'name': 'Aarav Sharma', 'role': 'STUDENT', 'isStudent': true, 'hostelBlock': 'Block 1', 'avatarId': 2});
+    await pumpScreen(tester, const HomeScreen(), session: session);
     // Let the skeleton grace period elapse.
     await tester.pump(const Duration(seconds: 5));
     await tester.pump(const Duration(milliseconds: 800));
@@ -145,6 +143,18 @@ void main() {
 
     await tester.scrollUntilVisible(find.text('Sharma Highway Dhaba'), 200, scrollable: find.byType(Scrollable).first);
     expect(find.text('Sharma Highway Dhaba'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('HomeScreen without a chosen drop point shows a neutral Delivery point pill', (tester) async {
+    final session = SessionProvider(initial: SessionStatus.checking)
+      ..beginForTest({'id': 'u', 'name': 'Meera Rao', 'role': 'STUDENT', 'isStudent': false});
+    await pumpScreen(tester, const HomeScreen(), session: session);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pump(const Duration(milliseconds: 800));
+    expect(find.text('DELIVERY POINT'), findsOneWidget);
+    expect(find.text('Choose drop point'), findsOneWidget);
+    expect(find.text('DELIVERING TO'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
