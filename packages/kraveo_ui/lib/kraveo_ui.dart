@@ -15,3 +15,4 @@ export 'src/widgets/misc.dart';
 export 'src/widgets/glass_nav.dart';
 export 'src/widgets/slide_confirm.dart';
 export 'src/widgets/brand.dart';
+export 'src/widgets/avatar.dart';

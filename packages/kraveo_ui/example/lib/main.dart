@@ -33,6 +33,8 @@ class _GalleryState extends State<Gallery> {
           )),
           Padding(padding: const EdgeInsets.fromLTRB(20, 24, 20, 0), child: Text('Late night\ncravings, sorted.', style: KraveoType.displayLg.copyWith(color: k.ink))),
           Padding(padding: const EdgeInsets.fromLTRB(20, 10, 20, 0), child: Text('Hot food from highway dhabas to your hostel gate.', style: KraveoType.body.copyWith(color: k.inkMuted))),
+          const KSectionHeader('Avatars'),
+          const Padding(padding: EdgeInsets.symmetric(horizontal: 20), child: _AvatarGallery()),
           const KSectionHeader('Buttons', action: 'See all'),
           Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Column(children: [
             KButton(label: 'Place order · ₹289', icon: LucideIcons.arrowRight, onPressed: () {}),
@@ -67,4 +69,59 @@ class _GalleryState extends State<Gallery> {
       );
     }));
   }
+}
+
+/// Every avatar at 40 / 72 / 120 px, on the customer (light) and driver (dark) themes side by side.
+class _AvatarGallery extends StatelessWidget {
+  const _AvatarGallery();
+  @override
+  Widget build(BuildContext context) => Column(children: [
+        _AvatarPanel(title: 'Customer (light)', theme: KraveoTheme.customer()),
+        const SizedBox(height: 16),
+        _AvatarPanel(title: 'Driver (dark)', theme: KraveoTheme.driver()),
+      ]);
+}
+
+class _AvatarPanel extends StatefulWidget {
+  const _AvatarPanel({required this.title, required this.theme});
+  final String title;
+  final ThemeData theme;
+  @override
+  State<_AvatarPanel> createState() => _AvatarPanelState();
+}
+
+class _AvatarPanelState extends State<_AvatarPanel> {
+  int? picked = 10;
+  @override
+  Widget build(BuildContext context) => Theme(
+        data: widget.theme,
+        child: Builder(builder: (context) {
+          final k = context.k;
+          Widget label(String t) => Padding(padding: const EdgeInsets.only(top: 14, bottom: 8), child: Text(t, style: KraveoType.bodySm.copyWith(color: k.inkMuted)));
+          Widget wrap(double size, {double gap = 8}) => Wrap(spacing: gap, runSpacing: gap, children: [for (var i = 1; i <= kAvatarCount; i++) KAvatar(id: i, size: size)]);
+          return Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(color: k.bg, borderRadius: BorderRadius.circular(20), border: Border.all(color: k.line)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(widget.title, style: KraveoType.titleLg.copyWith(color: k.ink)),
+              label('40 px'),
+              wrap(40),
+              label('72 px'),
+              wrap(72),
+              label('120 px'),
+              wrap(120, gap: 12),
+              label('ring: true, placeholder (null / 0 / 16), picker'),
+              Wrap(spacing: 10, runSpacing: 10, children: [
+                const KAvatar(id: 1, size: 72, ring: true),
+                const KAvatar(id: 11, size: 56, ring: true),
+                const KAvatar(id: null, size: 56),
+                const KAvatar(id: 0, size: 56),
+                const KAvatar(id: 16, size: 40),
+              ]),
+              const SizedBox(height: 14),
+              KAvatarPicker(selectedId: picked, onChanged: (v) => setState(() => picked = v)),
+            ]),
+          );
+        }),
+      );
 }
