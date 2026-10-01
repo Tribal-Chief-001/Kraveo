@@ -7,6 +7,8 @@ import { OrdersTable } from './components/OrdersTable';
 import { VendorManager } from './components/VendorManager';
 import { DriverManager } from './components/DriverManager';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
+import { ApplicationsPanel } from './components/ApplicationsPanel';
+import { CustomersPanel } from './components/CustomersPanel';
 import { AdminProfile, DriverPartner, DriverPin, Order, OrderStatus, TabType, Vendor, normalizeOrder } from './types';
 import { ApiError, apiService, clearAuthToken, getAuthToken, isAuthenticated as hasSession, SOCKET_URL } from './services/api';
 import { LoginScreen } from './components/LoginScreen';
@@ -30,6 +32,8 @@ export const App: React.FC = () => {
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [driverPartners, setDriverPartners] = useState<DriverPartner[]>([]);
   const [drivers, setDrivers] = useState<DriverPin[]>([]);
+  const [pendingApplications, setPendingApplications] = useState(0);
+  const [applicationsKey, setApplicationsKey] = useState(0);
 
   const handleAuthFailure = useCallback((error: unknown) => {
     if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
@@ -38,6 +42,23 @@ export const App: React.FC = () => {
       setAdminProfile(undefined);
     }
     setErrorMessage(error instanceof Error ? error.message : 'The operations request failed.');
+  }, []);
+
+  // Panels keep their own inline error message; this only logs the admin out when the session is no longer valid.
+  const handleSessionError = useCallback((error: unknown) => {
+    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+      clearAuthToken();
+      setIsAuth(false);
+      setAdminProfile(undefined);
+    }
+  }, []);
+
+  const refreshPendingCount = useCallback(async () => {
+    if (!getAuthToken()) return;
+    try {
+      const result = await apiService.fetchApplications('PENDING');
+      setPendingApplications(result.counts.PENDING);
+    } catch { /* the badge is a nicety; the Applications tab shows real errors */ }
   }, []);
 
   const fetchBackendData = useCallback(async () => {
@@ -58,7 +79,8 @@ export const App: React.FC = () => {
     const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (firstError) handleAuthFailure(firstError.reason);
     setIsLoading(false);
-  }, [handleAuthFailure]);
+    refreshPendingCount();
+  }, [handleAuthFailure, refreshPendingCount]);
 
   useEffect(() => {
     if (!hasSession()) {
@@ -104,6 +126,16 @@ export const App: React.FC = () => {
       const newOrder = normalizeOrder(rawOrder);
       setOrders((previous) => [newOrder, ...previous.filter((order) => order.id !== newOrder.id)]);
     });
+    socket.on('partner_application', (info: { kind?: string; name?: string; resubmitted?: boolean }) => {
+      const who = info?.kind === 'VENDOR' ? 'A restaurant' : 'A rider';
+      toast.info(info?.resubmitted ? 'Application updated' : 'New application', `${who}${info?.name ? ` (${info.name})` : ''} is waiting for your approval.`);
+      setApplicationsKey((key) => key + 1);
+      refreshPendingCount();
+    });
+    socket.on('partner_application_updated', () => {
+      setApplicationsKey((key) => key + 1);
+      refreshPendingCount();
+    });
     socket.on('driver_location_update', (location: DriverPin) => {
       setDrivers((previous) => {
         const exists = previous.some((driver) => driver.id === location.id);
@@ -113,7 +145,7 @@ export const App: React.FC = () => {
     return () => {
       socket.disconnect();
     };
-  }, [fetchBackendData, isAuth]);
+  }, [fetchBackendData, isAuth, refreshPendingCount, toast]);
 
   const handleStatusChange = async (orderId: string, status: OrderStatus, otpCode?: string) => {
     const previous = orders;
@@ -145,17 +177,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleAddVendor = async (vendorInput: Pick<Vendor, 'name' | 'category' | 'address'>) => {
-    try {
-      const created = await apiService.createVendor(vendorInput);
-      setVendors((current) => [...current, created]);
-      setErrorMessage('');
-    } catch (error) {
-      handleAuthFailure(error);
-      throw error;
-    }
-  };
-
   const handleReassignDriver = async (orderId: string, driverId: string | null) => {
     const previous = orders;
     setOrders((current) => current.map((order) => order.id === orderId ? { ...order, driverId: driverId || undefined, driverName: driverId ? 'Updating assignment…' : undefined } : order));
@@ -177,6 +198,7 @@ export const App: React.FC = () => {
     setVendors([]);
     setDriverPartners([]);
     setDrivers([]);
+    setPendingApplications(0);
     setSearchQuery('');
     setMobileNavOpen(false);
   };
@@ -212,7 +234,7 @@ export const App: React.FC = () => {
         isLiveConnected={isLiveConnected}
         mobileOpen={mobileNavOpen}
         onCloseMobile={closeMobileNav}
-        badges={{ orders: activeOrderCount }}
+        badges={{ orders: activeOrderCount, applications: pendingApplications }}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <Header
@@ -239,8 +261,10 @@ export const App: React.FC = () => {
           <div key={activeTab} className="animate-fade-up">
             {activeTab === 'map' && <LiveCommandCenter drivers={drivers} orders={orders} driverPartners={driverPartners} onReassignDriver={handleReassignDriver} loading={isLoading} query={searchQuery} />}
             {activeTab === 'orders' && <OrdersTable orders={orders} onStatusChange={handleStatusChange} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
-            {activeTab === 'vendors' && <VendorManager vendors={vendors} onToggleVendor={handleToggleVendor} onAddVendor={handleAddVendor} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
-            {activeTab === 'drivers' && <DriverManager drivers={driverPartners} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'applications' && <ApplicationsPanel refreshKey={applicationsKey} query={searchQuery} onChanged={fetchBackendData} onAuthError={handleSessionError} />}
+            {activeTab === 'vendors' && <VendorManager vendors={vendors} onToggleVendor={handleToggleVendor} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'drivers' && <DriverManager drivers={driverPartners} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'customers' && <CustomersPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} />}
             {activeTab === 'analytics' && <AnalyticsPanel />}
           </div>
         </main>

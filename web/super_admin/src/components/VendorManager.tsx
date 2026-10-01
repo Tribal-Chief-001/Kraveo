@@ -1,68 +1,27 @@
 import React, { useMemo, useState } from 'react';
-import { Loader2, MapPin, Plus, SearchX, Star, Store, UtensilsCrossed } from 'lucide-react';
+import { MapPin, Plus, SearchX, Star, Store } from 'lucide-react';
 import { Vendor } from '../types';
+import { AddPartnerDrawer } from './AddPartnerDrawer';
+import { ApprovalPill } from './ui/ApprovalPill';
 import { Avatar } from './ui/Avatar';
-import { Drawer } from './ui/Drawer';
 import { EmptyState } from './ui/EmptyState';
-import { Field } from './ui/Field';
 import { SkeletonCard } from './ui/Skeleton';
 import { Switch } from './ui/Switch';
-import { useToast } from './ui/Toast';
 
 interface VendorManagerProps {
   vendors: Vendor[];
   onToggleVendor: (vendorId: string) => void;
-  onAddVendor?: (vendor: Pick<Vendor, 'name' | 'category' | 'address'>) => Promise<void> | void;
+  /** Called after a restaurant (with its owner login) was created, so the list reloads. */
+  onCreated?: () => void;
   loading?: boolean;
   query?: string;
   onClearQuery?: () => void;
 }
 
 type VendorFilter = 'ALL' | 'OPEN' | 'CLOSED';
-type FormErrors = Partial<Record<'name' | 'category' | 'address', string>>;
-
-const validate = (name: string, category: string, address: string): FormErrors => {
-  const errors: FormErrors = {};
-  if (name.trim().length < 2) errors.name = 'Enter the dhaba or mess name (at least 2 characters).';
-  if (!category.trim()) errors.category = 'Enter a cuisine or category.';
-  if (address.trim().length < 3) errors.address = 'Enter where the dhaba is located.';
-  return errors;
-};
-
-export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleVendor, onAddVendor, loading = false, query = '', onClearQuery }) => {
-  const toast = useToast();
+export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleVendor, onCreated, loading = false, query = '', onClearQuery }) => {
   const [showDrawer, setShowDrawer] = useState(false);
   const [filter, setFilter] = useState<VendorFilter>('ALL');
-  const [dhabaName, setDhabaName] = useState('');
-  const [category, setCategory] = useState('');
-  const [address, setAddress] = useState('');
-  const [touched, setTouched] = useState<Record<string, boolean>>({});
-  const [saving, setSaving] = useState(false);
-  const [formError, setFormError] = useState('');
-
-  const errors = validate(dhabaName, category, address);
-  const showError = (field: keyof FormErrors) => (touched[field] ? errors[field] : undefined);
-  const touch = (field: string) => () => setTouched((current) => ({ ...current, [field]: true }));
-
-  const closeDrawer = () => {
-    if (saving) return;
-    setShowDrawer(false);
-    setFormError('');
-  };
-
-  const handleCreateDhaba = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setTouched({ name: true, category: true, address: true });
-    if (Object.keys(errors).length > 0) return;
-    setSaving(true); setFormError('');
-    try {
-      await onAddVendor?.({ name: dhabaName.trim(), category: category.trim(), address: address.trim() });
-      toast.success('Dhaba onboarded', `${dhabaName.trim()} is now in the vendor network.`);
-      setShowDrawer(false); setDhabaName(''); setCategory(''); setAddress(''); setTouched({});
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Vendor could not be created.');
-    } finally { setSaving(false); }
-  };
 
   const counts = useMemo(() => ({
     ALL: vendors.length,
@@ -82,7 +41,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
   const initialLoad = loading && vendors.length === 0;
   const onboardButton = (
     <button onClick={() => setShowDrawer(true)} className="k-btn-accent">
-      <Plus className="h-4 w-4" aria-hidden="true" /> Onboard dhaba
+      <Plus className="h-4 w-4" aria-hidden="true" /> Add restaurant
     </button>
   );
 
@@ -104,7 +63,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
         {initialLoad && Array.from({ length: 6 }).map((_, index) => <SkeletonCard key={index} lines={3} />)}
         {!initialLoad && vendors.length === 0 && (
           <div className="k-card sm:col-span-2 2xl:col-span-3">
-            <EmptyState icon={Store} title="No vendors yet" description="Onboard your first dhaba to start receiving orders." action={onboardButton} />
+            <EmptyState icon={Store} title="No vendors yet" description="Add a restaurant here, or approve one that applied in the Applications tab." action={onboardButton} />
           </div>
         )}
         {!initialLoad && vendors.length > 0 && visible.length === 0 && (
@@ -119,6 +78,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
               <div className="min-w-0 flex-1">
                 <h3 className="truncate font-display text-lg font-bold leading-tight text-kraveo-ink">{v.name}</h3>
                 <p className="truncate text-xs font-semibold text-kraveo-g300">{v.category}</p>
+                <ApprovalPill status={v.approvalStatus} className="mt-1.5" />
                 <p className="mt-1.5 flex items-center gap-1 text-xs text-kraveo-ink3"><MapPin className="h-3 w-3 shrink-0" aria-hidden="true" /><span className="truncate">{v.address}</span></p>
               </div>
               <span className="flex shrink-0 items-center gap-1 rounded-full bg-kraveo-surface2 px-2.5 py-1 text-xs font-bold text-kraveo-ink" title={v.totalRatingsCount ? `${v.totalRatingsCount} ratings` : 'No ratings yet'}>
@@ -152,34 +112,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
         ))}
       </div>
 
-      <Drawer
-        open={showDrawer}
-        onClose={closeDrawer}
-        title="Onboard a dhaba"
-        subtitle="Adds a vendor to the Kraveo network"
-        icon={UtensilsCrossed}
-        footer={
-          <div className="flex gap-3">
-            <button type="button" onClick={closeDrawer} disabled={saving} className="k-btn-ghost flex-1">Cancel</button>
-            <button type="submit" form="onboard-dhaba-form" disabled={saving} className="k-btn-primary flex-1" aria-busy={saving}>
-              {saving ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Saving…</> : 'Onboard dhaba'}
-            </button>
-          </div>
-        }
-      >
-        <form id="onboard-dhaba-form" onSubmit={handleCreateDhaba} className="space-y-5" noValidate>
-          {formError && <div role="alert" className="rounded-k-md border border-kraveo-danger/30 bg-kraveo-danger/10 px-4 py-3 text-sm text-kraveo-ink">{formError}</div>}
-          <Field label="Dhaba or mess name" htmlFor="dhaba-name" required error={showError('name')}>
-            <input id="dhaba-name" type="text" value={dhabaName} onChange={(e) => setDhabaName(e.target.value)} onBlur={touch('name')} placeholder="Name as students know it" aria-invalid={Boolean(showError('name'))} aria-describedby={showError('name') ? 'dhaba-name-msg' : undefined} className="k-input" />
-          </Field>
-          <Field label="Cuisine or category" htmlFor="dhaba-category" required error={showError('category')}>
-            <input id="dhaba-category" type="text" value={category} onChange={(e) => setCategory(e.target.value)} onBlur={touch('category')} placeholder="For example: North Indian" aria-invalid={Boolean(showError('category'))} aria-describedby={showError('category') ? 'dhaba-category-msg' : undefined} className="k-input" />
-          </Field>
-          <Field label="Location or address" htmlFor="dhaba-address" required error={showError('address')}>
-            <input id="dhaba-address" type="text" value={address} onChange={(e) => setAddress(e.target.value)} onBlur={touch('address')} placeholder="Where students can find it" aria-invalid={Boolean(showError('address'))} aria-describedby={showError('address') ? 'dhaba-address-msg' : undefined} className="k-input" />
-          </Field>
-        </form>
-      </Drawer>
+      <AddPartnerDrawer open={showDrawer} kind="VENDOR" onClose={() => setShowDrawer(false)} onCreated={() => onCreated?.()} />
     </div>
   );
 };

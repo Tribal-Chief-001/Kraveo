@@ -1,4 +1,7 @@
-export type TabType = 'map' | 'orders' | 'vendors' | 'drivers' | 'analytics';
+export type TabType = 'map' | 'orders' | 'applications' | 'vendors' | 'drivers' | 'customers' | 'analytics';
+
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED';
+export type PartnerKind = 'VENDOR' | 'DRIVER';
 
 export type OrderStatus =
   | 'PLACED'
@@ -56,6 +59,7 @@ export interface Vendor {
   lng?: number;
   activeOrdersCount: number;
   menuItems?: MenuItem[];
+  approvalStatus?: ApprovalStatus;
 }
 
 export interface MenuItem {
@@ -101,6 +105,7 @@ export interface DriverPartner {
   rating: number;
   upiId?: string;
   createdAt: string;
+  approvalStatus?: ApprovalStatus;
 }
 
 export interface AnalyticsData {
@@ -173,6 +178,7 @@ export const normalizeVendor = (raw: any): Vendor => ({
   lng: raw?.lng,
   activeOrdersCount: asNumber(raw?.activeOrdersCount ?? raw?._count?.orders),
   menuItems: Array.isArray(raw?.menuItems) ? raw.menuItems : undefined,
+  approvalStatus: raw?.approvalStatus,
 });
 
 export const normalizeDriver = (raw: any): DriverPartner => ({
@@ -193,4 +199,85 @@ export const normalizeDriver = (raw: any): DriverPartner => ({
   rating: asNumber(raw?.rating),
   upiId: raw?.upiId,
   createdAt: raw?.createdAt || new Date().toISOString(),
+  approvalStatus: raw?.approvalStatus,
 });
+
+/** One restaurant or rider account, as the Applications tab shows it. */
+export interface Application {
+  id: string;
+  kind: PartnerKind;
+  userId: string | null;
+  name: string;
+  phone: string | null;
+  status: ApprovalStatus;
+  rejectionReason: string | null;
+  /** true = they created the account themselves in the app; false = an admin added them. */
+  selfSignup: boolean;
+  appliedAt: string;
+  reviewedAt: string | null;
+  createdAt: string;
+  vendor?: { name: string; category: string; address: string; fssaiNumber: string | null; isAcceptingOrders: boolean };
+  driver?: { runnerCode: string; vehicleType: string; vehicleRegNo: string | null; emergencyPhone: string | null; upiId: string | null };
+}
+
+export type ApplicationCounts = Record<ApprovalStatus, number>;
+
+export interface CustomerRow {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  isStudent: boolean | null;
+  hostelBlock: string | null;
+  avatarId: number | null;
+  kraveoCoins: number;
+  createdAt: string;
+  deleted: boolean;
+  ordersCount: number;
+  totalSpent: number;
+  lastOrderAt: string | null;
+}
+
+export interface CustomerOrder {
+  id: string;
+  status: OrderStatus;
+  paymentStatus: PaymentStatus;
+  totalAmount: number;
+  deliveryFee: number;
+  dropoffHostel: string;
+  dropoffNotes: string | null;
+  createdAt: string;
+  vendor: { id: string; name: string } | null;
+  driver: { id: string; name: string; phone: string | null } | null;
+  items: Array<{ name: string; quantity: number; price: number }>;
+  payments: Array<{ id: string; razorpayPaymentId: string | null; amount: number; status: PaymentStatus; createdAt: string }>;
+}
+
+export interface CustomerDetail extends Omit<CustomerRow, 'ordersCount' | 'totalSpent' | 'lastOrderAt'> {
+  stats: {
+    ordersCount: number;
+    deliveredCount: number;
+    cancelledCount: number;
+    activeCount: number;
+    paidOrdersCount: number;
+    totalSpent: number;
+    firstOrderAt: string | null;
+    lastOrderAt: string | null;
+  };
+  orders: CustomerOrder[];
+}
+
+export interface NewPartnerInput {
+  role: PartnerKind;
+  name: string;
+  phone: string;
+  password: string;
+  restaurantName?: string;
+  category?: string;
+  address?: string;
+  fssaiNumber?: string;
+  vehicleType?: string;
+  vehicleRegNo?: string;
+  emergencyPhone?: string;
+  upiId?: string;
+}

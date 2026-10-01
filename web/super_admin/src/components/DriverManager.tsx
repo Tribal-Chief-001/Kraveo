@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Bike, ChevronRight, Clock, Phone, SearchX, Star, Users, Wallet, Zap } from 'lucide-react';
+import { Bike, ChevronRight, Clock, Phone, Plus, SearchX, Star, Users, Wallet, Zap } from 'lucide-react';
 import { DriverPartner } from '../types';
 import { inr } from '../lib/tokens';
+import { AddPartnerDrawer } from './AddPartnerDrawer';
 import { AnimatedNumber } from './ui/AnimatedNumber';
+import { ApprovalPill } from './ui/ApprovalPill';
 import { Avatar } from './ui/Avatar';
 import { Drawer } from './ui/Drawer';
 import { EmptyState } from './ui/EmptyState';
@@ -12,6 +14,8 @@ import { SkeletonCard } from './ui/Skeleton';
 interface DriverManagerProps {
   drivers: DriverPartner[];
   onToggleStatus?: (driverId: string) => void;
+  /** Called after a rider was created, so the list reloads. */
+  onCreated?: () => void;
   loading?: boolean;
   query?: string;
   onClearQuery?: () => void;
@@ -43,8 +47,9 @@ const DetailRow: React.FC<{ label: string; children: React.ReactNode }> = ({ lab
   </div>
 );
 
-export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, loading = false, query = '', onClearQuery }) => {
+export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, onCreated, loading = false, query = '', onClearQuery }) => {
   const [filter, setFilter] = useState<DutyFilter>('ALL');
+  const [showAdd, setShowAdd] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedDriver = drivers.find((d) => d.id === selectedId) ?? null;
 
@@ -52,7 +57,7 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, loading =
     const q = query.trim().toLowerCase();
     return drivers.filter((d) => {
       const matchesFilter = filter === 'ALL' || d.dutyStatus === filter;
-      const matchesSearch = !q || d.name.toLowerCase().includes(q) || d.studentRegNo.toLowerCase().includes(q) || d.runnerCode.toLowerCase().includes(q);
+      const matchesSearch = !q || d.name.toLowerCase().includes(q) || d.studentRegNo.toLowerCase().includes(q) || d.runnerCode.toLowerCase().includes(q) || d.phone.toLowerCase().includes(q) || d.vehicleRegNo.toLowerCase().includes(q);
       return matchesFilter && matchesSearch;
     });
   }, [drivers, filter, query]);
@@ -86,6 +91,7 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, loading =
           value={<AnimatedNumber value={avgCompletion} decimals={1} suffix={avgCompletion === null ? '' : ' min'} />} note={avgCompletion === null ? 'No completed trips reported' : `Across ${timed.length} runner${timed.length === 1 ? '' : 's'}`} />
       </section>
 
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 scrollbar-none sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0" role="group" aria-label="Filter by duty status">
         {([['ALL', 'All runners'], ['ONLINE', 'Online'], ['IN_TRANSIT', 'In transit'], ['OFFLINE', 'Offline']] as const).map(([id, label]) => (
           <button key={id} className="k-chip" aria-pressed={filter === id} onClick={() => setFilter(id)}>
@@ -94,10 +100,12 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, loading =
           </button>
         ))}
       </div>
+      <button onClick={() => setShowAdd(true)} className="k-btn-accent"><Plus className="h-4 w-4" aria-hidden="true" /> Add rider</button>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 2xl:grid-cols-3">
         {initialLoad && Array.from({ length: 6 }).map((_, index) => <SkeletonCard key={index} lines={2} />)}
-        {!initialLoad && !hasData && <div className="k-card sm:col-span-2 2xl:col-span-3"><EmptyState icon={Bike} title="No runners yet" description="Runner partners appear here once they register through the driver app." /></div>}
+        {!initialLoad && !hasData && <div className="k-card sm:col-span-2 2xl:col-span-3"><EmptyState icon={Bike} title="No runners yet" description="Riders appear here once you add one or approve an application from the Applications tab." action={<button className="k-btn-accent" onClick={() => setShowAdd(true)}><Plus className="h-4 w-4" aria-hidden="true" /> Add rider</button>} /></div>}
         {!initialLoad && hasData && filtered.length === 0 && (
           <div className="k-card sm:col-span-2 2xl:col-span-3">
             <EmptyState icon={SearchX} title="No runners match" description="Nothing matches the current filter and search." action={<button className="k-btn-ghost" onClick={() => { setFilter('ALL'); onClearQuery?.(); }}>Clear filters</button>} />
@@ -118,8 +126,8 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, loading =
               <Avatar name={d.name} imageUrl={d.avatarUrl} size="lg" />
               <div className="min-w-0 flex-1">
                 <h3 className="truncate font-display text-lg font-bold leading-tight text-kraveo-ink">{d.name}</h3>
-                <p className="truncate text-xs text-kraveo-ink3">{d.studentRegNo ? `Reg ${d.studentRegNo}` : 'Reg no. not provided'}</p>
-                <div className="mt-2"><DutyPill status={d.dutyStatus} /></div>
+                <p className="truncate text-xs text-kraveo-ink3">{d.runnerCode ? `Runner ${d.runnerCode}` : 'No runner code'}{d.phone ? ` · ${d.phone}` : ''}</p>
+                <div className="mt-2 flex flex-wrap gap-1.5"><DutyPill status={d.dutyStatus} /><ApprovalPill status={d.approvalStatus} /></div>
               </div>
               <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-kraveo-ink3" aria-hidden="true" />
             </div>
@@ -156,7 +164,8 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, loading =
               <DetailRow label="Trips today">{selectedDriver.ordersToday}</DetailRow>
               <DetailRow label="Earned today">{inr(selectedDriver.totalEarningsToday)}</DetailRow>
             </div>
-            <DetailRow label="Student reg no.">{dash(selectedDriver.studentRegNo)}</DetailRow>
+            {selectedDriver.approvalStatus && selectedDriver.approvalStatus !== 'APPROVED' && <DetailRow label="Approval"><ApprovalPill status={selectedDriver.approvalStatus} /></DetailRow>}
+            {selectedDriver.studentRegNo && <DetailRow label="Student reg no.">{dash(selectedDriver.studentRegNo)}</DetailRow>}
             <DetailRow label="Phone">
               {selectedDriver.phone ? <a className="inline-flex items-center gap-1.5 text-kraveo-g300 hover:underline" href={`tel:${selectedDriver.phone}`}><Phone className="h-3.5 w-3.5" aria-hidden="true" />{selectedDriver.phone}</a> : '-'}
             </DetailRow>
@@ -168,6 +177,7 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, loading =
           </div>
         )}
       </Drawer>
+      <AddPartnerDrawer open={showAdd} kind="DRIVER" onClose={() => setShowAdd(false)} onCreated={() => onCreated?.()} />
     </div>
   );
 };

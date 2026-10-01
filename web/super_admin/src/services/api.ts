@@ -2,6 +2,13 @@
 import {
   AdminProfile,
   AnalyticsData,
+  Application,
+  ApplicationCounts,
+  ApprovalStatus,
+  CustomerDetail,
+  CustomerRow,
+  NewPartnerInput,
+  PartnerKind,
   DriverPartner,
   DriverPin,
   Order,
@@ -61,6 +68,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(response.status, body?.message || `Request failed (${response.status}).`);
   }
   return body?.data ?? body;
+}
+
+/** Like request(), but keeps the whole body (counts, cursors, totals) instead of only `data`. */
+async function requestFull<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers: { ...getHeaders(), ...(init.headers || {}) } });
+  } catch {
+    throw new ApiError(0, 'The operations API is unreachable. Check the network connection and try again.');
+  }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new ApiError(response.status, body?.message || `Request failed (${response.status}).`);
+  return body as T;
 }
 
 export const apiService = {
@@ -141,5 +161,42 @@ export const apiService = {
       method: 'PATCH',
       body: JSON.stringify({ driverId }),
     }));
+  },
+
+  // ── Partner applications and accounts ──
+  async fetchApplications(status: ApprovalStatus | 'ALL' = 'PENDING', kind?: PartnerKind): Promise<{ counts: ApplicationCounts; data: Application[] }> {
+    const params = new URLSearchParams({ status });
+    if (kind) params.set('kind', kind);
+    const body = await requestFull<{ counts: ApplicationCounts; data: Application[] }>(`/api/admin/applications?${params.toString()}`);
+    return { counts: body.counts, data: Array.isArray(body.data) ? body.data : [] };
+  },
+
+  async setPartnerStatus(kind: PartnerKind, id: string, status: ApprovalStatus, reason?: string): Promise<Application> {
+    return request<Application>(`/api/admin/partners/${kind.toLowerCase()}/${encodeURIComponent(id)}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status, ...(reason ? { reason } : {}) }),
+    });
+  },
+
+  async resetPartnerPassword(userId: string, password: string): Promise<void> {
+    await request<unknown>(`/api/admin/partners/${encodeURIComponent(userId)}/reset-password`, { method: 'POST', body: JSON.stringify({ password }) });
+  },
+
+  async createPartner(input: NewPartnerInput): Promise<{ profileId: string | null }> {
+    const body = await requestFull<{ profileId: string | null }>('/api/admin/partners', { method: 'POST', body: JSON.stringify(input) });
+    return { profileId: body.profileId ?? null };
+  },
+
+  // ── Customers ──
+  async fetchCustomers(search: string, cursor?: string | null): Promise<{ total: number; nextCursor: string | null; data: CustomerRow[] }> {
+    const params = new URLSearchParams({ limit: '30' });
+    if (search.trim()) params.set('search', search.trim());
+    if (cursor) params.set('cursor', cursor);
+    const body = await requestFull<{ total: number; nextCursor: string | null; data: CustomerRow[] }>(`/api/admin/customers?${params.toString()}`);
+    return { total: body.total ?? 0, nextCursor: body.nextCursor ?? null, data: Array.isArray(body.data) ? body.data : [] };
+  },
+
+  async fetchCustomer(id: string): Promise<CustomerDetail> {
+    return request<CustomerDetail>(`/api/admin/customers/${encodeURIComponent(id)}`);
   },
 };

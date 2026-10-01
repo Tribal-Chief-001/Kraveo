@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bike, MapPinned, PanelLeftClose, PanelLeftOpen, ShoppingBag, Store, TrendingUp, X } from 'lucide-react';
+import { Bike, ClipboardCheck, MapPinned, PanelLeftClose, PanelLeftOpen, ShoppingBag, Store, TrendingUp, Users, X } from 'lucide-react';
 import { TabType } from '../types';
 import { LogoBadge, LogoMark } from './ui/Logo';
 
@@ -16,8 +16,10 @@ interface SidebarProps {
 const NAV_ITEMS: Array<{ id: TabType; label: string; hint: string; icon: React.ElementType }> = [
   { id: 'map', label: 'Live map', hint: 'Dispatch and runner positions', icon: MapPinned },
   { id: 'orders', label: 'Orders', hint: 'Every order and its status', icon: ShoppingBag },
+  { id: 'applications', label: 'Applications', hint: 'Approve new restaurants and riders', icon: ClipboardCheck },
   { id: 'vendors', label: 'Vendors', hint: 'Dhabas and availability', icon: Store },
   { id: 'drivers', label: 'Drivers', hint: 'Runner partners and duty', icon: Bike },
+  { id: 'customers', label: 'Customers', hint: 'Everyone who ordered', icon: Users },
   { id: 'analytics', label: 'Analytics', hint: 'Campus delivery numbers', icon: TrendingUp },
 ];
 

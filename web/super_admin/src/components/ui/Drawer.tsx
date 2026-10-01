@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 interface DrawerProps {
@@ -9,12 +10,14 @@ interface DrawerProps {
   icon?: React.ElementType;
   children: React.ReactNode;
   footer?: React.ReactNode;
+  /** Wider panel for detail views (tablet and up). */
+  wide?: boolean;
 }
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 /** Right-hand drawer on >=640px, bottom sheet on phones. Esc closes, focus is trapped and restored, body scroll is locked. */
-export const Drawer: React.FC<DrawerProps> = ({ open, onClose, title, subtitle, icon: Icon, children, footer }) => {
+export const Drawer: React.FC<DrawerProps> = ({ open, onClose, title, subtitle, icon: Icon, children, footer, wide = false }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   // Keep the latest onClose in a ref so re-renders (e.g. typing in a form) never re-run the focus/scroll-lock effect.
@@ -54,7 +57,9 @@ export const Drawer: React.FC<DrawerProps> = ({ open, onClose, title, subtitle, 
 
   if (!open) return null;
 
-  return (
+  // Rendered into <body>: the tab content sits inside an animated (transformed) wrapper, which would otherwise become the
+  // containing block of this fixed overlay and shrink the drawer to the content area.
+  return createPortal(
     <div className="fixed inset-0 z-[70] flex items-end justify-end sm:items-stretch">
       <div className="absolute inset-0 animate-fade-in bg-black/70 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
       <div
@@ -63,7 +68,7 @@ export const Drawer: React.FC<DrawerProps> = ({ open, onClose, title, subtitle, 
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="relative flex max-h-[92vh] w-full animate-slide-up flex-col rounded-t-k-2xl border border-kraveo-line bg-kraveo-surface shadow-k-lift outline-none sm:max-h-none sm:max-w-md sm:animate-slide-in-right sm:rounded-none sm:rounded-l-k-2xl sm:border-y-0 sm:border-r-0"
+        className={`relative flex max-h-[92vh] w-full animate-slide-up flex-col rounded-t-k-2xl border border-kraveo-line bg-kraveo-surface shadow-k-lift outline-none sm:max-h-none ${wide ? 'sm:max-w-xl' : 'sm:max-w-md'} sm:animate-slide-in-right sm:rounded-none sm:rounded-l-k-2xl sm:border-y-0 sm:border-r-0`}
       >
         <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-kraveo-line sm:hidden" aria-hidden="true" />
         <header className="flex items-start justify-between gap-3 border-b border-kraveo-line px-5 py-4">
@@ -79,6 +84,7 @@ export const Drawer: React.FC<DrawerProps> = ({ open, onClose, title, subtitle, 
         <div className="flex-1 overflow-y-auto px-5 py-5">{children}</div>
         {footer && <footer className="pb-safe border-t border-kraveo-line px-5 pt-4">{footer}</footer>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
