@@ -15,9 +15,18 @@ class DriverApiService {
   /// app can drop the dead token and return to the login screen.
   static void Function()? onUnauthorized;
 
-  /// A 401 on an authenticated call means the JWT is expired or revoked.
+  /// Set by the session gate. Called when Kraveo answers 403 PARTNER_NOT_APPROVED, i.e. an admin suspended
+  /// this account while the app was open, so the app can re-check its status and move to the status screen.
+  static void Function()? onNotApproved;
+
+  /// A 401 on an authenticated call means the JWT is expired or revoked; a 403 with the
+  /// PARTNER_NOT_APPROVED code means the account was suspended (or never approved).
   static void _checkUnauthorized(http.Response response) {
-    if (response.statusCode == 401) onUnauthorized?.call();
+    if (response.statusCode == 401) {
+      onUnauthorized?.call();
+    } else if (response.statusCode == 403 && response.body.contains('PARTNER_NOT_APPROVED')) {
+      onNotApproved?.call();
+    }
   }
 
   /// Retrieves stored JWT auth token from SharedPreferences or memory cache

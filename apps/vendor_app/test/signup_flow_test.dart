@@ -352,6 +352,54 @@ void main() {
     });
   });
 
+  group('Suspended while the app is open', () {
+    test('a 403 PARTNER_NOT_APPROVED fires onNotApproved; a plain 403 or a 200 does not', () async {
+      var fired = 0;
+      VendorApiService.onNotApproved = () => fired++;
+      await VendorApiService.saveToken('jwt-abc');
+      var status = 200;
+      var body = '{}';
+      await http.runWithClient(() async {
+        await VendorApiService.updateOrderStatus('ord-1', 'PREPARING');
+        expect(fired, 0);
+        status = 403;
+        body = jsonEncode({'success': false, 'message': 'Forbidden. You do not own this vendor.'});
+        await VendorApiService.toggleStoreStatus('ven-1', false);
+        expect(fired, 0);
+        body = jsonEncode({'success': false, 'code': 'PARTNER_NOT_APPROVED', 'approvalStatus': 'SUSPENDED'});
+        final ok = await VendorApiService.toggleStoreStatus('ven-1', false);
+        expect(ok, isFalse);
+      }, () => MockClient((request) async => http.Response(body, status)));
+      expect(fired, 1);
+      VendorApiService.onNotApproved = null;
+    });
+
+    testWidgets('an approved restaurant that gets suspended moves to the status screen, and again on app resume', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'kraveo_vendor_jwt_token': 'stored-jwt',
+        SessionController.sessionPrefKey: jsonEncode(_with(PartnerApproval.approved).toJson()),
+      });
+      final auth = FakeAuth()..profile = ProfileResult(ProfileOutcome.valid, _with(PartnerApproval.approved));
+      await _pumpApp(tester, auth);
+      expect(find.byType(VendorHomeScreen), findsOneWidget);
+
+      // The admin suspends the account; the next field action is refused with PARTNER_NOT_APPROVED.
+      auth.profile = ProfileResult(ProfileOutcome.valid, _with(PartnerApproval.suspended, reason: 'Hygiene complaint'));
+      VendorApiService.onNotApproved!.call();
+      await _settle(tester);
+      expect(find.byType(VendorHomeScreen), findsNothing);
+      expect(find.text('Your account is paused'), findsOneWidget);
+      expect(find.text('Hygiene complaint'), findsOneWidget);
+
+      // Reactivated while the phone was in the pocket: coming back to the app re-checks and reopens it.
+      auth.profile = ProfileResult(ProfileOutcome.valid, _with(PartnerApproval.approved));
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await _settle(tester);
+      expect(find.byType(VendorHomeScreen), findsOneWidget);
+      await _unmount(tester);
+    });
+  });
+
   group('API layer', () {
     Future<SignupResult> signUpWith(http.Response Function(http.Request) h, {Object? throws}) => http.runWithClient(
           () => ApiPartnerAuthService().signUp(const PartnerSignupForm(ownerName: 'R', phone: '9811100001', password: 'Passw0rd!x', restaurantName: 'Shiv', address: 'Gate 2', category: 'Biryani')),

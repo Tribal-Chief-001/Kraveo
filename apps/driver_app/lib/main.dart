@@ -58,19 +58,23 @@ class AuthGate extends StatefulWidget {
   State<AuthGate> createState() => _AuthGateState();
 }
 
-class _AuthGateState extends State<AuthGate> {
+class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   SessionController get _session => widget.session;
 
   @override
   void initState() {
     super.initState();
     DriverApiService.onUnauthorized = _handleUnauthorized;
+    DriverApiService.onNotApproved = _handleNotApproved;
+    WidgetsBinding.instance.addObserver(this);
     _session.restore();
   }
 
   @override
   void dispose() {
     if (DriverApiService.onUnauthorized == _handleUnauthorized) DriverApiService.onUnauthorized = null;
+    if (DriverApiService.onNotApproved == _handleNotApproved) DriverApiService.onNotApproved = null;
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -82,6 +86,19 @@ class _AuthGateState extends State<AuthGate> {
         onSubmit: existing == null ? _session.signUp : _session.resubmit,
       ),
     ));
+  }
+
+  /// An admin suspended this account while the app was open (the server answered 403 PARTNER_NOT_APPROVED), or
+  /// the app has just come back to the foreground: ask Kraveo, and the gate swaps in the status screen if needed.
+  void _handleNotApproved() {
+    if (!mounted || _session.status != SessionStatus.signedIn) return;
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    _session.refreshApproval();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _session.status == SessionStatus.signedIn) _session.refreshApproval();
   }
 
   /// A 401 came back from an authenticated call: back to login with an explanation.
