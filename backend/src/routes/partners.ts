@@ -235,6 +235,24 @@ partnerRouter.get('/partner/me', requireAuth, requireRole('VENDOR', 'DRIVER'), a
   }
 });
 
+// Rider goes on / off duty. The dashboard's "online" counts and the dispatch list read this.
+// A rider who is mid-delivery shows as IN_TRANSIT, never plain ONLINE.
+partnerRouter.post('/drivers/duty-status', requireAuth, requireRole('DRIVER'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (typeof req.body?.isOnline !== 'boolean') return res.status(400).json({ success: false, field: 'isOnline', message: 'isOnline (true or false) is required.' });
+    const driver = await prisma.driverPartner.findUnique({ where: { userId: req.user!.id } });
+    if (!driver) return res.status(404).json({ success: false, message: 'No rider profile is linked to this account.' });
+    const active = await prisma.order.count({ where: { driverId: req.user!.id, status: { in: ['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'ARRIVED_AT_GATE'] } } });
+    const dutyStatus = !req.body.isOnline ? 'OFFLINE' : active > 0 ? 'IN_TRANSIT' : 'ONLINE';
+    const updated = await prisma.driverPartner.update({ where: { id: driver.id }, data: { dutyStatus } });
+    notifyAdmins(req, 'driver_duty_update', { id: updated.id, userId: updated.userId, dutyStatus });
+    return res.json({ success: true, dutyStatus });
+  } catch (err) {
+    console.error('duty-status failed:', err);
+    return res.status(500).json({ success: false, message: 'Could not update duty status.' });
+  }
+});
+
 // Fix and re-send the application (allowed while PENDING, or after a REJECTED decision).
 partnerRouter.put('/partner/application', requireAuth, requireRole('VENDOR', 'DRIVER'), async (req: AuthenticatedRequest, res: Response) => {
   try {

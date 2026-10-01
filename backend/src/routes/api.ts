@@ -376,7 +376,11 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthenticatedRequest, re
 // Logout: the JWT is stateless, so the useful server-side step is to stop pushing to this device.
 apiRouter.post('/auth/logout', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    if (req.user?.id) await prisma.user.update({ where: { id: req.user.id }, data: { fcmToken: null } });
+    if (req.user?.id) {
+      await prisma.user.update({ where: { id: req.user.id }, data: { fcmToken: null } });
+      // A rider who logs out is off duty; otherwise the dashboard keeps counting them as online.
+      if (req.user.role === Role.DRIVER) await prisma.driverPartner.updateMany({ where: { userId: req.user.id }, data: { dutyStatus: 'OFFLINE' } });
+    }
     return res.json({ success: true });
   } catch {
     return res.json({ success: true });

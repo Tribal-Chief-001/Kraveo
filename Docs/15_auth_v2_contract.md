@@ -48,6 +48,7 @@ Accounts created by an admin are approved straight away. `approvalStatus` is `PE
   - DRIVER extras: `vehicleType`* (`Bike|Scooter|Cycle|On foot`), `vehicleRegNo` (required unless Cycle/On foot), `emergencyPhone`, `upiId`.
   - 400 `{ field, message }`, 409 `{ field:'phone' }` (number already has an account), 429 (3 tries per phone per hour, 80 per hour overall).
   - The new restaurant starts closed (`isAcceptingOrders:false`). The rider gets a `runnerCode`. Riders are not VIT students: there is no student registration number.
+- `POST /drivers/duty-status` `{ isOnline:boolean }` (approved riders only) -> `{ dutyStatus }`: `OFFLINE`, `ONLINE`, or `IN_TRANSIT` when the rider has a live order. Logging out sets `OFFLINE`. The admins room receives `driver_duty_update`.
 - `GET /partner/me` -> `{ user, approvalStatus, rejectionReason, vendor? | driver? }`. The apps poll this while pending.
 - `PUT /partner/application` (only while `PENDING` or `REJECTED`) same fields as sign-up minus phone/password -> sets `PENDING` again.
 - `POST /auth/partner-login` now also returns `approvalStatus` and `rejectionReason`. Pending, rejected and suspended partners **can** log in (so the app can show where they stand).

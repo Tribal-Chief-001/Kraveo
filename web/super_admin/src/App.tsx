@@ -132,6 +132,10 @@ export const App: React.FC = () => {
       setApplicationsKey((key) => key + 1);
       refreshPendingCount();
     });
+    socket.on('driver_duty_update', (update: { id?: string; dutyStatus?: DriverPartner['dutyStatus'] }) => {
+      if (!update?.id || !update.dutyStatus) return;
+      setDriverPartners((previous) => previous.map((driver) => driver.id === update.id ? { ...driver, dutyStatus: update.dutyStatus! } : driver));
+    });
     socket.on('partner_application_updated', () => {
       setApplicationsKey((key) => key + 1);
       refreshPendingCount();

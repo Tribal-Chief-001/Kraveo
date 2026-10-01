@@ -294,6 +294,106 @@ describe('Partner approval pipeline', () => {
     });
   });
 
+  describe('rider duty status', () => {
+    const phone = '9000000341';
+    let token = '';
+    let driverId = '';
+
+    beforeAll(async () => {
+      __resetSignupLimiter();
+      const res = await request.post('/api/admin/partners').set(adminHeader()).send(driverBody(phone));
+      driverId = res.body.profileId;
+      __resetLoginLimiter();
+      const login = await request.post('/api/auth/partner-login').send({ phone, password: PW, role: 'DRIVER' });
+      token = login.body.token;
+    });
+
+    const duty = (isOnline: unknown, t = token) => request.post('/api/drivers/duty-status').set(getAuthHeader(t)).send({ isOnline });
+    const dbDuty = async () => (await prisma.driverPartner.findUniqueOrThrow({ where: { id: driverId } })).dutyStatus;
+
+    test('going on and off duty is saved on the server', async () => {
+      expect((await duty(true)).body.dutyStatus).toBe('ONLINE');
+      expect(await dbDuty()).toBe('ONLINE');
+      expect((await duty(false)).body.dutyStatus).toBe('OFFLINE');
+      expect(await dbDuty()).toBe('OFFLINE');
+    });
+
+    test('a rider who is mid-delivery shows as IN_TRANSIT, not plain ONLINE', async () => {
+      const userId = (await prisma.driverPartner.findUniqueOrThrow({ where: { id: driverId } })).userId!;
+      const order = await prisma.order.create({ data: { customerId: 'usr-1', vendorId: 'ven-1', driverId: userId, totalAmount: 100, dropoffHostel: 'Block 1', status: 'PICKED_UP', paymentStatus: 'PAID' } });
+      expect((await duty(true)).body.dutyStatus).toBe('IN_TRANSIT');
+      await prisma.order.delete({ where: { id: order.id } });
+      expect((await duty(true)).body.dutyStatus).toBe('ONLINE');
+    });
+
+    test('needs a boolean, a rider login, and an approved account', async () => {
+      expect((await duty('yes')).status).toBe(400);
+      expect((await request.post('/api/drivers/duty-status').send({ isOnline: true })).status).toBe(401);
+      expect((await duty(true, getStudentToken())).status).toBe(403);
+      await setStatus('driver', driverId, 'SUSPENDED', 'Testing a pause');
+      const blocked = await duty(true);
+      expect(blocked.status).toBe(403);
+      expect(blocked.body.code).toBe('PARTNER_NOT_APPROVED');
+      expect(await dbDuty()).toBe('OFFLINE'); // suspension already took them offline
+      await setStatus('driver', driverId, 'APPROVED');
+    });
+
+    test('logging out puts the rider off duty', async () => {
+      await duty(true);
+      expect(await dbDuty()).toBe('ONLINE');
+      expect((await request.post('/api/auth/logout').set(getAuthHeader(token))).status).toBe(200);
+      expect(await dbDuty()).toBe('OFFLINE');
+    });
+
+    test('the dashboard list shows the saved duty status', async () => {
+      await duty(true);
+      const list = await request.get('/api/drivers').set(adminHeader());
+      expect(list.body.data.find((d: any) => d.id === driverId).dutyStatus).toBe('ONLINE');
+    });
+  });
+
+  describe('what a suspended or approved partner can do (end to end)', () => {
+    test('suspending a restaurant: it vanishes for customers, its open orders stay readable, new orders are refused', async () => {
+      __resetSignupLimiter();
+      const created = await request.post('/api/admin/partners').set(adminHeader()).send(vendorBody('9000000351'));
+      const vendorId = created.body.profileId;
+      __resetLoginLimiter();
+      const token = (await request.post('/api/auth/partner-login').send({ phone: '9000000351', password: PW, role: 'VENDOR' })).body.token;
+      const item = await prisma.menuItem.create({ data: { vendorId, name: 'Roll', price: 60, category: 'Rolls', description: '', imageUrl: '' } });
+      const live = await prisma.order.create({ data: { customerId: 'usr-1', vendorId, totalAmount: 80, dropoffHostel: 'Block 1', status: 'PLACED', paymentStatus: 'PAID', items: { create: [{ menuItemId: item.id, name: 'Roll', quantity: 1, price: 60 }] } } });
+
+      // Before: customers see it and can order.
+      expect((await request.get('/api/vendors')).body.data.some((v: any) => v.id === vendorId)).toBe(true);
+      const ok = await request.post('/api/orders').set(getAuthHeader(getStudentToken())).send({ vendorId, items: [{ itemId: item.id, quantity: 1 }], dropoffHostel: 'Block 1' });
+      expect(ok.status).toBe(201);
+
+      await setStatus('vendor', vendorId, 'SUSPENDED', 'Hygiene complaint');
+
+      // After: hidden, closed, new orders refused, the owner cannot work, the admin still sees everything.
+      expect((await request.get('/api/vendors')).body.data.some((v: any) => v.id === vendorId)).toBe(false);
+      expect((await prisma.vendor.findUniqueOrThrow({ where: { id: vendorId } })).isAcceptingOrders).toBe(false);
+      const refused = await request.post('/api/orders').set(getAuthHeader(getStudentToken())).send({ vendorId, items: [{ itemId: item.id, quantity: 1 }], dropoffHostel: 'Block 1' });
+      expect(refused.status).toBe(400);
+      const accept = await request.patch(`/api/orders/${live.id}/status`).set(getAuthHeader(token)).send({ status: 'ACCEPTED' });
+      expect(accept.status).toBe(403);
+      expect(accept.body.code).toBe('PARTNER_NOT_APPROVED');
+      expect((await request.get(`/api/orders/${live.id}`).set(adminHeader())).status).toBe(200);
+      // The order that was already placed is NOT cancelled or moved by a suspension: the admin decides what to do with it.
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: live.id } })).status).toBe('PLACED');
+      await prisma.order.deleteMany({ where: { vendorId } });
+    });
+
+    test('approving a restaurant does not open it: the owner opens the store himself when the menu is ready', async () => {
+      __resetSignupLimiter();
+      const res = await signup(vendorBody('9000000352'));
+      const vendorId = res.body.vendor.id;
+      await setStatus('vendor', vendorId, 'APPROVED');
+      expect((await prisma.vendor.findUniqueOrThrow({ where: { id: vendorId } })).isAcceptingOrders).toBe(false);
+      const open = await request.patch(`/api/vendors/${vendorId}/status`).set(getAuthHeader(res.body.token)).send({ isAcceptingOrders: true });
+      expect(open.status).toBe(200);
+    });
+  });
+
   describe('admin creates partners directly', () => {
     test('a vendor is created together with its restaurant, already approved and open', async () => {
       const res = await request.post('/api/admin/partners').set(adminHeader()).send(vendorBody('9000000331', { fssaiNumber: '' }));
