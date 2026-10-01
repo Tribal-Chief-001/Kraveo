@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'models/partner_session.dart';
+import 'screens/application_status_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/signup_screen.dart';
 import 'screens/vendor_home_screen.dart';
 import 'services/order_queue_service.dart';
 import 'services/partner_auth_service.dart';
@@ -89,6 +92,16 @@ class _AuthGateState extends State<AuthGate> {
     }
   }
 
+  /// The sign-up form (new account), or the same form prefilled to fix a pending / rejected application.
+  void _openSignup({PartnerSession? existing}) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => SignupScreen(
+        existing: existing,
+        onSubmit: existing == null ? _session.signUp : _session.resubmit,
+      ),
+    ));
+  }
+
   /// A 401 came back from an authenticated call: back to login with an explanation.
   void _handleUnauthorized() {
     if (!mounted || _session.status != SessionStatus.signedIn) return;
@@ -120,8 +133,19 @@ class _AuthGateState extends State<AuthGate> {
           case SessionStatus.unreachable:
             return _SessionUnreachable(onRetry: _session.retryRestore);
           case SessionStatus.signedOut:
-            return LoginScreen(onSubmit: _session.login);
+            return LoginScreen(onSubmit: _session.login, onCreateAccount: _openSignup);
           case SessionStatus.signedIn:
+            final me = _session.session;
+            // Only an approved restaurant reaches the order screens; everyone else sees where they stand.
+            if (me != null && me.approval != PartnerApproval.approved) {
+              return ApplicationStatusScreen(
+                key: ValueKey('application-${me.approval.name}'),
+                session: me,
+                onRefresh: _session.refreshApproval,
+                onEdit: () => _openSignup(existing: me),
+                onLogout: _session.logout,
+              );
+            }
             return const VendorHomeScreen();
         }
       },

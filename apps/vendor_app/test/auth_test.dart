@@ -34,7 +34,11 @@ class FakeAuth implements PartnerAuthService {
       (_, __) => const LoginResult.success(token: 'jwt-123', session: _sessionFromLogin);
   ProfileResult profile = const ProfileResult(ProfileOutcome.valid, PartnerSession(userId: 'u1', name: 'Ramesh Sharma', phone: '+91 9876543210', avatarId: 3));
   Completer<void>? loginGate;
+  SignupResult Function(PartnerSignupForm form) onSignUp = (_) => const SignupResult.failure(SignupFailure.server);
+  SignupResult Function(PartnerSignupForm form) onResubmit = (_) => const SignupResult.failure(SignupFailure.server);
 
+  final signUpForms = <PartnerSignupForm>[];
+  final resubmitForms = <PartnerSignupForm>[];
   final loginCalls = <(String, String)>[];
   final profileTokens = <String>[];
   final loggedOutTokens = <String>[];
@@ -50,6 +54,18 @@ class FakeAuth implements PartnerAuthService {
   Future<ProfileResult> fetchProfile(String token) async {
     profileTokens.add(token);
     return profile;
+  }
+
+  @override
+  Future<SignupResult> signUp(PartnerSignupForm form) async {
+    signUpForms.add(form);
+    return onSignUp(form);
+  }
+
+  @override
+  Future<SignupResult> resubmit(String token, PartnerSignupForm form) async {
+    resubmitForms.add(form);
+    return onResubmit(form);
   }
 
   @override
