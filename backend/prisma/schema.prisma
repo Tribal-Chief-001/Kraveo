@@ -34,6 +34,13 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
 enum DutyStatus {
   ONLINE
   OFFLINE
@@ -78,6 +85,12 @@ model Vendor {
   isAcceptingOrders Boolean  @default(true)
   lat               Float    @default(23.0768)
   lng               Float    @default(76.8524)
+  // Partner approval: rows created by Kraveo are APPROVED; self sign-ups start PENDING.
+  approvalStatus    ApprovalStatus @default(APPROVED)
+  rejectionReason   String?
+  fssaiNumber       String?
+  appliedAt         DateTime?
+  reviewedAt        DateTime?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -85,6 +98,8 @@ model Vendor {
   menuItems MenuItem[]
   orders    Order[]
   reviews   ReviewRecord[]
+
+  @@index([approvalStatus])
 }
 
 model MenuItem {
@@ -167,12 +182,12 @@ model DriverPartner {
   userId                   String?    @unique
   name                     String
   phone                    String
-  studentRegNo             String
+  studentRegNo             String?
   runnerCode               String     @unique
-  avatarUrl                String
+  avatarUrl                String?
   vehicleType              String
-  vehicleRegNo             String
-  emergencyPhone           String
+  vehicleRegNo             String?
+  emergencyPhone           String?
   dutyStatus               DutyStatus @default(OFFLINE)
   ordersToday              Int        @default(0)
   totalEarningsToday       Float      @default(0.0)
@@ -180,10 +195,29 @@ model DriverPartner {
   onTimeRatePercent        Float      @default(100.0)
   rating                   Float      @default(5.0)
   upiId                    String?
+  approvalStatus           ApprovalStatus @default(APPROVED)
+  rejectionReason          String?
+  appliedAt                DateTime?
+  reviewedAt               DateTime?
   createdAt                DateTime   @default(now())
   updatedAt                DateTime   @updatedAt
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([approvalStatus])
+}
+
+// Who did what in the admin portal (approvals, suspensions, password resets, manual account creation).
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  targetType String
+  targetId   String
+  summary    String
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([targetType, targetId])
 }
 
 model ReviewRecord {

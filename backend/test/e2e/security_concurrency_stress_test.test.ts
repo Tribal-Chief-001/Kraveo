@@ -112,10 +112,14 @@ describe('Adversarial Security & Concurrency Stress Test Suite', () => {
 
       const responses = await Promise.all(requests);
 
-      // Exactly one request claims the OTP; concurrent losers receive a safe conflict.
+      // Exactly one request actually claims the OTP. Requests that lose the race get a conflict, and
+      // requests that land after the delivery finished get the idempotent "already DELIVERED" success.
+      // How many of each depends on request timing, so assert on who did the claiming, not on counts of 200.
       const statusCodes = responses.map((r) => r.status);
-      expect(statusCodes.filter((s) => s === 200)).toHaveLength(1);
       expect(statusCodes.every((s) => s === 200 || s === 409)).toBe(true);
+      const claims = responses.filter((r) => r.status === 200 && /verified successfully/i.test(r.body.message ?? ''));
+      expect(claims).toHaveLength(1);
+      expect(responses.filter((r) => r.status === 200 && !/verified successfully/i.test(r.body.message ?? '')).every((r) => /already DELIVERED/i.test(r.body.message ?? ''))).toBe(true);
 
       // Verify DB state is cleanly DELIVERED and OTP is invalidated to 'USED'
       const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });

@@ -11,8 +11,13 @@ import { hashPassword, verifyPassword, getDummyHash, passwordProblem } from '../
 import { isLocked, recordFailure, recordSuccess } from '../services/loginLimiter';
 import { verifyGoogleIdToken, GoogleAuthError } from '../services/googleAuth';
 import { randomInt, timingSafeEqual } from 'crypto';
+import { partnerRouter, requireApprovedPartner, validateVendorFields, validateDriverFields, newRunnerCode, writeAudit, DEFAULT_BANNER } from './partners';
+import { verifyToken } from '../middleware/auth';
 
 export const apiRouter = Router();
+
+// Partner sign-up, applications, approval and admin customer views live in ./partners.
+apiRouter.use(partnerRouter);
 
 const adminLoginAttempts = new Map<string, { count: number; resetAt: number }>();
 const secureOtp = () => randomInt(1000, 10000).toString(); // gate-handshake codes
@@ -47,6 +52,20 @@ const canManageVendor = async (vendorId: string, user: AuthenticatedRequest['use
   const vendor = await prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true } });
   return vendor?.userId === user.id;
 };
+
+/** Public catalogue routes do not require a login, but admins and the owning vendor may still see unapproved restaurants. */
+const optionalViewer = (req: Request): { id: string; role: Role } | null => {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith('Bearer ')) return null;
+  try {
+    const decoded = verifyToken(header.split(' ')[1]);
+    return { id: decoded.id, role: decoded.role as Role };
+  } catch {
+    return null;
+  }
+};
+const canSeeVendor = (vendor: { approvalStatus: string; userId: string | null }, viewer: { id: string; role: Role } | null) =>
+  vendor.approvalStatus === 'APPROVED' || viewer?.role === Role.ADMIN || (!!viewer && viewer.role === Role.VENDOR && vendor.userId === viewer.id);
 
 // ----------------------------------------------------
 // DRIVER PARTNER MANAGEMENT ENDPOINTS
@@ -185,14 +204,19 @@ apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
     }
     recordSuccess(key);
 
-    const vendor = role === 'VENDOR' ? await prisma.vendor.findFirst({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true } }) : null;
-    const driver = role === 'DRIVER' ? await prisma.driverPartner.findFirst({ where: { userId: user.id }, select: { id: true, runnerCode: true } }) : null;
+    const vendors = role === 'VENDOR' ? await prisma.vendor.findMany({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true, approvalStatus: true, rejectionReason: true }, orderBy: { createdAt: 'asc' } }) : [];
+    const vendor = vendors.find((v) => v.approvalStatus === 'APPROVED') ?? vendors[0] ?? null;
+    const driver = role === 'DRIVER' ? await prisma.driverPartner.findFirst({ where: { userId: user.id }, select: { id: true, runnerCode: true, approvalStatus: true, rejectionReason: true } }) : null;
+    const approvalStatus = (vendor ?? driver)?.approvalStatus ?? 'APPROVED';
+    const rejectionReason = (vendor ?? driver)?.rejectionReason ?? null;
 
     const token = generateToken({ id: user.id, phone: user.phone, role: user.role });
     return res.json({
       success: true,
       token,
       user: { id: user.id, name: user.name, phone: user.phone, role: user.role, avatarId: user.avatarId ?? null },
+      approvalStatus,
+      rejectionReason,
       ...(vendor ? { vendor } : {}),
       ...(driver ? { driver } : {}),
     });
@@ -382,8 +406,9 @@ apiRouter.delete('/auth/account', requireAuth, requireRole('STUDENT'), async (re
 // ----------------------------------------------------
 apiRouter.post('/admin/partners', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { role, name, password, vendorId } = req.body ?? {};
-    const phone = canonicalPhone(req.body?.phone);
+    const b = req.body ?? {};
+    const { role, name, password, vendorId } = b;
+    const phone = canonicalPhone(b.phone);
     const bad = (field: string, message: string) => res.status(400).json({ success: false, field, message });
     if (!['VENDOR', 'DRIVER'].includes(role)) return bad('role', 'Role must be VENDOR or DRIVER.');
     const cleanedName = String(name ?? '').trim().replace(/\s+/g, ' ');
@@ -395,35 +420,49 @@ apiRouter.post('/admin/partners', requireAuth, requireRole('ADMIN'), async (req:
     if (await prisma.user.findFirst({ where: { phone: { endsWith: last10(phone) } } })) {
       return res.status(409).json({ success: false, field: 'phone', message: 'This phone number already has an account.' });
     }
-    if (role === 'VENDOR' && vendorId) {
-      const vendor = await prisma.vendor.findUnique({ where: { id: String(vendorId) } });
-      if (!vendor) return bad('vendorId', 'That restaurant does not exist.');
-      if (vendor.userId) return res.status(409).json({ success: false, field: 'vendorId', message: 'That restaurant already has an owner account.' });
+
+    // Vendor: either link an existing restaurant (vendorId) or create the restaurant together with its owner.
+    let vendorData: { name: string; category: string; address: string; fssaiNumber: string | null } | null = null;
+    if (role === 'VENDOR') {
+      if (vendorId) {
+        const vendor = await prisma.vendor.findUnique({ where: { id: String(vendorId) } });
+        if (!vendor) return bad('vendorId', 'That restaurant does not exist.');
+        if (vendor.userId) return res.status(409).json({ success: false, field: 'vendorId', message: 'That restaurant already has an owner account.' });
+      } else {
+        const v = validateVendorFields(b);
+        if (!v.ok) return bad(v.error.field, v.error.message);
+        vendorData = v.data;
+      }
+    }
+    let driverData: { vehicleType: string; vehicleRegNo: string | null; emergencyPhone: string | null; upiId: string | null } | null = null;
+    if (role === 'DRIVER') {
+      const d = validateDriverFields({ vehicleType: 'Scooter', ...b }, phone, false);
+      if (!d.ok) return bad(d.error.field, d.error.message);
+      driverData = d.data;
     }
 
     const passwordHash = await hashPassword(password);
-    const user = await prisma.$transaction(async (tx) => {
+    const runnerCode = role === 'DRIVER' ? String(b.runnerCode || '').trim() || await newRunnerCode() : '';
+    const result = await prisma.$transaction(async (tx) => {
       const created = await tx.user.create({ data: { name: cleanedName, phone, role: role as Role, passwordHash } });
-      if (role === 'VENDOR' && vendorId) await tx.vendor.update({ where: { id: String(vendorId) }, data: { userId: created.id } });
-      if (role === 'DRIVER') {
-        const b = req.body ?? {};
-        await tx.driverPartner.create({
-          data: {
-            userId: created.id,
-            name: cleanedName,
-            phone,
-            studentRegNo: String(b.studentRegNo || 'N/A'),
-            runnerCode: String(b.runnerCode || `RUN-${Math.floor(1000 + Math.random() * 9000)}`),
-            avatarUrl: String(b.avatarUrl || ''),
-            vehicleType: String(b.vehicleType || 'Scooter'),
-            vehicleRegNo: String(b.vehicleRegNo || 'N/A'),
-            emergencyPhone: String(b.emergencyPhone || phone),
-          },
-        });
+      let profileId: string | null = null;
+      if (role === 'VENDOR' && vendorId) {
+        await tx.vendor.update({ where: { id: String(vendorId) }, data: { userId: created.id } });
+        profileId = String(vendorId);
+      } else if (role === 'VENDOR' && vendorData) {
+        const lat = typeof b.lat === 'number' ? b.lat : undefined;
+        const lng = typeof b.lng === 'number' ? b.lng : undefined;
+        const v = await tx.vendor.create({ data: { ...vendorData, userId: created.id, bannerImage: DEFAULT_BANNER, isAcceptingOrders: true, approvalStatus: 'APPROVED', ...(lat !== undefined ? { lat } : {}), ...(lng !== undefined ? { lng } : {}) } });
+        profileId = v.id;
       }
-      return created;
+      if (role === 'DRIVER' && driverData) {
+        const d = await tx.driverPartner.create({ data: { userId: created.id, name: cleanedName, phone, runnerCode, ...driverData, approvalStatus: 'APPROVED' } });
+        profileId = d.id;
+      }
+      return { created, profileId };
     });
-    return res.status(201).json({ success: true, user: { id: user.id, name: user.name, phone: user.phone, role: user.role } });
+    await writeAudit('PARTNER_CREATED', role, result.profileId ?? result.created.id, `Admin created ${String(role).toLowerCase()} ${cleanedName} (${phone})`);
+    return res.status(201).json({ success: true, user: { id: result.created.id, name: result.created.name, phone: result.created.phone, role: result.created.role }, profileId: result.profileId });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message || 'Could not create the partner.' });
   }
@@ -433,7 +472,7 @@ apiRouter.get('/admin/partners', requireAuth, requireRole('ADMIN'), async (_req:
   try {
     const users = await prisma.user.findMany({
       where: { role: { in: [Role.VENDOR, Role.DRIVER] } },
-      select: { id: true, name: true, phone: true, role: true, createdAt: true, vendorsOwned: { select: { id: true, name: true } } },
+      select: { id: true, name: true, phone: true, role: true, createdAt: true, vendorsOwned: { select: { id: true, name: true, approvalStatus: true } }, driverProfile: { select: { id: true, runnerCode: true, approvalStatus: true } } },
       orderBy: { createdAt: 'desc' },
     });
     return res.json({ success: true, data: users });
@@ -657,8 +696,10 @@ apiRouter.post('/notifications/register-token', requireAuth, async (req: Authent
 // ----------------------------------------------------
 apiRouter.get('/vendors', async (req: Request, res: Response) => {
   try {
+    const viewer = optionalViewer(req);
     const dbVendors = await prisma.vendor.findMany({ include: { menuItems: true } });
-    return res.json({ success: true, count: dbVendors.length, data: dbVendors });
+    const visible = dbVendors.filter((v) => canSeeVendor(v, viewer));
+    return res.json({ success: true, count: visible.length, data: visible });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message || 'Error fetching vendors' });
   }
@@ -670,7 +711,7 @@ apiRouter.get('/vendors/:id', async (req: Request, res: Response) => {
       where: { id: req.params.id },
       include: { menuItems: true }
     });
-    if (!dbVendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+    if (!dbVendor || !canSeeVendor(dbVendor, optionalViewer(req))) return res.status(404).json({ success: false, message: 'Vendor not found' });
     return res.json({ success: true, data: { ...dbVendor, menu: dbVendor.menuItems } });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message || 'Error fetching vendor' });
@@ -703,7 +744,7 @@ apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: Authen
   }
 });
 
-apiRouter.patch('/vendors/:id/status', requireAuth, requireRole('VENDOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.patch('/vendors/:id/status', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { isAcceptingOrders } = req.body;
     const vendor = await prisma.vendor.findUnique({ where: { id: req.params.id } });
@@ -723,7 +764,7 @@ apiRouter.patch('/vendors/:id/status', requireAuth, requireRole('VENDOR', 'ADMIN
   }
 });
 
-apiRouter.patch('/vendors/:id/toggle', requireAuth, requireRole('VENDOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.patch('/vendors/:id/toggle', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const vendor = await prisma.vendor.findUnique({ where: { id: req.params.id } });
     if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
@@ -739,7 +780,7 @@ apiRouter.patch('/vendors/:id/toggle', requireAuth, requireRole('VENDOR', 'ADMIN
   }
 });
 
-apiRouter.post('/vendors/:id/items', requireAuth, requireRole('VENDOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.post('/vendors/:id/items', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { name, price, category, description, isVeg, imageUrl } = req.body;
     if (!name || price === undefined) {
@@ -771,6 +812,8 @@ apiRouter.post('/vendors/:id/items', requireAuth, requireRole('VENDOR', 'ADMIN')
 // ----------------------------------------------------
 apiRouter.get('/menus/:vendorId', async (req: Request, res: Response) => {
   try {
+    const owner = await prisma.vendor.findUnique({ where: { id: req.params.vendorId }, select: { approvalStatus: true, userId: true } });
+    if (!owner || !canSeeVendor(owner, optionalViewer(req))) return res.json({ success: true, count: 0, data: [] });
     const dbItems = await prisma.menuItem.findMany({ where: { vendorId: req.params.vendorId } });
     return res.json({ success: true, count: dbItems.length, data: dbItems });
   } catch (err: any) {
@@ -778,7 +821,7 @@ apiRouter.get('/menus/:vendorId', async (req: Request, res: Response) => {
   }
 });
 
-apiRouter.patch('/menus/:itemId/toggle', requireAuth, requireRole('VENDOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.patch('/menus/:itemId/toggle', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const dbItem = await prisma.menuItem.findUnique({ where: { id: req.params.itemId } });
     if (!dbItem) return res.status(404).json({ success: false, message: 'Menu item not found' });
@@ -915,6 +958,7 @@ apiRouter.patch('/orders/:id/reassign', requireAuth, requireRole('ADMIN'), async
     if (driverId) {
       const driver = await prisma.driverPartner.findFirst({ where: { OR: [{ id: driverId }, { userId: driverId }] } });
       if (!driver?.userId) return res.status(400).json({ success: false, message: 'Selected runner is not linked to an active user account.' });
+      if (driver.approvalStatus !== 'APPROVED') return res.status(400).json({ success: false, message: 'Only an approved rider can be assigned to an order.' });
       resolvedDriverId = driver.userId;
     }
 
@@ -959,6 +1003,9 @@ apiRouter.post('/orders', requireAuth, requireRole('STUDENT'), async (req: Authe
 
   try {
     const vendor = await prisma.vendor.findUnique({ where: { id: vendorId } });
+    if (vendor && vendor.approvalStatus !== 'APPROVED') {
+      return res.status(400).json({ success: false, message: 'This restaurant is not available right now.' });
+    }
     if (vendor && !vendor.isAcceptingOrders) {
       return res.status(400).json({ success: false, message: 'This Dhaba is currently CLOSED for new orders.' });
     }
@@ -1004,7 +1051,7 @@ apiRouter.post('/orders', requireAuth, requireRole('STUDENT'), async (req: Authe
 });
 
 // Update Order Status (Enforces State Machine Transitions & Prisma Persistence)
-apiRouter.patch('/orders/:id/status', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.patch('/orders/:id/status', requireAuth, requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   const { status } = req.body as { status: OrderStatus };
   const user = req.user;
 
@@ -1107,7 +1154,7 @@ apiRouter.patch('/orders/:id/status', requireAuth, async (req: AuthenticatedRequ
 });
 
 // Dedicated Gate Handshake OTP Verification Endpoint
-apiRouter.post('/orders/:id/verify-gate-otp', requireAuth, requireRole('DRIVER', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.post('/orders/:id/verify-gate-otp', requireAuth, requireRole('DRIVER', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   const providedOtp = String(req.body.otpCode ?? req.body.otp ?? '').trim();
 
   try {
@@ -1163,7 +1210,7 @@ apiRouter.post('/orders/:id/verify-gate-otp', requireAuth, requireRole('DRIVER',
 });
 
 // Update Menu Item Stock Availability & Price (Prisma DB Persistence)
-apiRouter.patch('/vendors/items/:itemId', requireAuth, requireRole('VENDOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.patch('/vendors/items/:itemId', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   const { isAvailable, price } = req.body;
 
   const updateData: any = {};
@@ -1182,7 +1229,7 @@ apiRouter.patch('/vendors/items/:itemId', requireAuth, requireRole('VENDOR', 'AD
 });
 
 // Accept Driver Assignment (Prisma DB Persistence)
-apiRouter.post('/orders/:id/accept-driver', requireAuth, requireRole('DRIVER', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.post('/orders/:id/accept-driver', requireAuth, requireRole('DRIVER', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   const driverId = req.user?.id;
   if (!driverId) {
     return res.status(401).json({ success: false, message: 'Unauthorized' });
@@ -1224,7 +1271,7 @@ apiRouter.post('/orders/:id/accept-driver', requireAuth, requireRole('DRIVER', '
 // DRIVER LOCATION ENDPOINTS (Prisma DB Persistence)
 // ----------------------------------------------------
 
-apiRouter.post('/drivers/location', requireAuth, requireRole('DRIVER', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.post('/drivers/location', requireAuth, requireRole('DRIVER', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   const { lat, lng, heading, driverId: requestedDriverId } = req.body;
 
   if (!isValidCoordinate(lat, lng)) {
