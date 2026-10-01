@@ -140,6 +140,13 @@ function initMotion() {
     .to('.loader', { yPercent: -100, duration: 0.9, ease: 'power4.inOut' }, '+=0.35')
     .add(() => intro.play(), '-=0.45');
 
+  // Safety net: if the tab was in the background or a font stalled, never leave the page locked behind the intro.
+  setTimeout(() => {
+    if (loader.progress() < 1) loader.progress(1);
+    if (intro.progress() < 1) { intro.play(); intro.progress(1); }
+    lenis.start();
+  }, 8000);
+
   /* ── generic scroll reveals ── */
   otherSplits.forEach(({ el, words }) => {
     gsap.from(words, {

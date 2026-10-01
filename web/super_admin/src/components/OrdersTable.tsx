@@ -199,7 +199,7 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, onStatusChange
       </p>
 
       {/* Desktop table */}
-      <div className="k-card hidden max-h-[calc(100vh-15rem)] overflow-auto md:block">
+      <div className="k-card hidden max-h-[calc(100vh-15rem)] overflow-auto xl:block">
         <table className="w-full min-w-[980px] border-separate border-spacing-0 text-left text-sm">
           <thead>
             <tr>
@@ -264,9 +264,9 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, onStatusChange
       </div>
 
       {/* Mobile cards */}
-      <div className="space-y-3 md:hidden">
+      <div className="grid items-start gap-3 md:grid-cols-2 xl:hidden">
         {initialLoad && Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-40 w-full !rounded-k-xl" />)}
-        {!initialLoad && filteredOrders.length === 0 && <div className="k-card">{emptyState}</div>}
+        {!initialLoad && filteredOrders.length === 0 && <div className="k-card md:col-span-2">{emptyState}</div>}
         {filteredOrders.map((order, index) => {
           const isOpen = expanded === order.id;
           return (
