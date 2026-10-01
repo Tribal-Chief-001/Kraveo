@@ -13,6 +13,12 @@ class SignedInAuth implements PartnerAuthService {
       const ProfileResult(ProfileOutcome.valid, PartnerSession(userId: 'u1', name: 'Test Rider', runnerCode: 'RUN-1'));
 
   @override
+  Future<SignupResult> signUp(PartnerSignupForm form) async => const SignupResult.failure(SignupFailure.server);
+
+  @override
+  Future<SignupResult> resubmit(String token, PartnerSignupForm form) async => const SignupResult.failure(SignupFailure.server);
+
+  @override
   Future<void> logout(String token) async {}
 }
 

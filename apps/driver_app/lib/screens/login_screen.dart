@@ -8,9 +8,12 @@ import '../widgets/ui/phone_input.dart';
 /// Delivery partner login: phone + password on the OLED-dark driver theme.
 /// [onSubmit] performs the sign-in; on success the session gate swaps this screen out.
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, required this.onSubmit});
+  const LoginScreen({super.key, required this.onSubmit, this.onCreateAccount});
 
   final Future<LoginResult> Function(String phone, String password) onSubmit;
+
+  /// Opens the "create account" form. When null the link is not shown (older tests pump the screen alone).
+  final VoidCallback? onCreateAccount;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -273,9 +276,22 @@ class _LoginScreenState extends State<LoginScreen> {
                         onPressed: locked ? null : _submit,
                       ),
                     ),
+                    if (widget.onCreateAccount != null) ...[
+                      const SizedBox(height: 14),
+                      KReveal(
+                        index: 5,
+                        child: KButton(
+                          key: const ValueKey('create-account-button'),
+                          label: 'New rider? Create account',
+                          kind: KButtonKind.ghost,
+                          icon: LucideIcons.userPlus,
+                          onPressed: _busy ? null : widget.onCreateAccount,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 22),
                     KReveal(
-                      index: 5,
+                      index: 6,
                       child: KCard(
                         color: k.brandSoft,
                         elevated: false,

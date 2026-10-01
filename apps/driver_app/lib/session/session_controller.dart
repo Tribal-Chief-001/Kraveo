@@ -65,6 +65,17 @@ class SessionController extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// `GET /partner/me` carries the account, the rider profile and the approval state. If a response ever lacks
+  /// the rider profile, keep the details we already stored and take only the fresh account + approval fields.
+  static PartnerSession _mergeFresh(PartnerSession? stored, PartnerSession fresh) {
+    if (stored == null || fresh.driverId != null) return fresh;
+    return stored.withUserFrom(fresh).copyWith(
+          approval: fresh.approval,
+          rejectionReason: fresh.rejectionReason,
+          clearReason: fresh.rejectionReason == null,
+        );
+  }
+
   /// App start: validate the stored token, or fall through to the login screen.
   Future<void> restore() async {
     final token = await DriverApiService.getSavedToken();
@@ -76,8 +87,7 @@ class SessionController extends ChangeNotifier {
     final result = await auth.fetchProfile(token);
     switch (result.outcome) {
       case ProfileOutcome.valid:
-        final fresh = result.session!;
-        final merged = stored == null ? fresh : stored.withUserFrom(fresh);
+        final merged = _mergeFresh(stored, result.session!);
         await _persist(merged);
         _set(SessionStatus.signedIn, merged);
       case ProfileOutcome.unauthorized:
@@ -104,6 +114,56 @@ class SessionController extends ChangeNotifier {
       _set(SessionStatus.signedIn, result.session);
     }
     return result;
+  }
+
+  /// Creates a rider account. On success the new rider is signed in straight away and the gate
+  /// shows the "waiting for approval" screen.
+  Future<SignupResult> signUp(PartnerSignupForm form) async {
+    final result = await auth.signUp(form);
+    if (result.ok && result.token != null) {
+      await DriverApiService.saveToken(result.token!);
+      await _persist(result.session!);
+      _set(SessionStatus.signedIn, result.session);
+    }
+    return result;
+  }
+
+  /// Fixes and re-sends an application that is pending or was rejected.
+  Future<SignupResult> resubmit(PartnerSignupForm form) async {
+    final token = await DriverApiService.getSavedToken();
+    if (token == null || token.isEmpty) return const SignupResult.failure(SignupFailure.unauthorized);
+    final result = await auth.resubmit(token, form);
+    if (result.ok) {
+      await _persist(result.session!);
+      _set(SessionStatus.signedIn, result.session);
+    } else if (result.failure == SignupFailure.unauthorized) {
+      await expire();
+    }
+    return result;
+  }
+
+  /// Asks Kraveo where the application stands. Returns true when something changed. Safe to call
+  /// from a timer: a network problem keeps the current state.
+  Future<bool> refreshApproval() async {
+    if (_status != SessionStatus.signedIn) return false;
+    final token = await DriverApiService.getSavedToken();
+    if (token == null || token.isEmpty) return false;
+    final result = await auth.fetchProfile(token);
+    switch (result.outcome) {
+      case ProfileOutcome.valid:
+        final before = _session;
+        final fresh = _mergeFresh(before, result.session!);
+        final changed = before == null || before.approval != fresh.approval || before.rejectionReason != fresh.rejectionReason;
+        await _persist(fresh);
+        _session = fresh;
+        if (changed) notifyListeners();
+        return changed;
+      case ProfileOutcome.unauthorized:
+        await expire();
+        return true;
+      case ProfileOutcome.unreachable:
+        return false;
+    }
   }
 
   /// A 401 came back from an authenticated call: drop the token, show login.
