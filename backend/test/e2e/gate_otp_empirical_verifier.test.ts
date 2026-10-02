@@ -51,7 +51,8 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           driverId: 'usr-4',
           totalAmount: 250,
           dropoffHostel: 'Boys Hostel Block 3',
-          status: 'PICKED_UP'
+          status: 'PICKED_UP',
+          paymentStatus: 'PAID' // contract: riders only act on paid orders
         }
       });
 
@@ -63,18 +64,14 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data.status).toBe('ARRIVED_AT_GATE');
-      expect(res.body.data.otpCode).toBeDefined();
-
-      const generatedOtp = res.body.data.otpCode;
-      expect(typeof generatedOtp).toBe('string');
-      expect(generatedOtp).toHaveLength(4);
-      expect(generatedOtp).toMatch(/^\d{4}$/);
+      // Contract 2.1: the rider must never see the gate OTP (the customer tells it to them).
+      expect(res.body.data.otpCode).toBeNull();
 
       // Verify Prisma DB record directly
       const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
       expect(dbOrder).not.toBeNull();
       expect(dbOrder?.status).toBe('ARRIVED_AT_GATE');
-      expect(dbOrder?.otpCode).toBe(generatedOtp);
+      expect(dbOrder?.otpCode).toMatch(/^\d{4}$/);
     });
 
     test('EMP_OTP_02: Transitioning to ARRIVED_AT_GATE generates dynamic distinct 4-digit OTPs', async () => {
@@ -83,16 +80,20 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
 
       await prisma.order.createMany({
         data: [
-          { id: orderId1, customerId: 'usr-1', vendorId: 'ven-1', driverId: 'usr-4', totalAmount: 100, dropoffHostel: 'Block 1', status: 'PICKED_UP' },
-          { id: orderId2, customerId: 'usr-1', vendorId: 'ven-1', driverId: 'usr-4', totalAmount: 100, dropoffHostel: 'Block 1', status: 'PICKED_UP' }
+          { id: orderId1, customerId: 'usr-1', vendorId: 'ven-1', driverId: 'usr-4', totalAmount: 100, dropoffHostel: 'Block 1', status: 'PICKED_UP', paymentStatus: 'PAID' },
+          { id: orderId2, customerId: 'usr-1', vendorId: 'ven-1', driverId: 'usr-4', totalAmount: 100, dropoffHostel: 'Block 1', status: 'PICKED_UP', paymentStatus: 'PAID' }
         ]
       });
 
       const res1 = await request.patch(`/api/orders/${orderId1}/status`).set(getAuthHeader(driverToken)).send({ status: 'ARRIVED_AT_GATE' });
       const res2 = await request.patch(`/api/orders/${orderId2}/status`).set(getAuthHeader(driverToken)).send({ status: 'ARRIVED_AT_GATE' });
 
-      expect(res1.body.data.otpCode).toMatch(/^\d{4}$/);
-      expect(res2.body.data.otpCode).toMatch(/^\d{4}$/);
+      expect([res1.status, res2.status, res2.body.code]).toEqual([200, 200, undefined]);
+      expect(res1.body.data.otpCode).toBeNull(); // never shown to the rider
+      expect(res2.body.data.otpCode).toBeNull();
+      const [db1, db2] = await Promise.all([prisma.order.findUnique({ where: { id: orderId1 } }), prisma.order.findUnique({ where: { id: orderId2 } })]);
+      expect(db1?.otpCode).toMatch(/^\d{4}$/);
+      expect(db2?.otpCode).toMatch(/^\d{4}$/);
     });
   });
 
@@ -113,6 +114,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 150,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: expectedOtp
         }
       });
@@ -144,6 +146,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 180,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '8765'
         }
       });
@@ -174,6 +177,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 210,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '5432'
         }
       });
@@ -200,6 +204,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 220,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '9988'
         }
       });
@@ -231,6 +236,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 200,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '1122'
         }
       });
@@ -262,6 +268,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 230,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '3344'
         }
       });
@@ -288,6 +295,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 190,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '5566'
         }
       });
@@ -319,6 +327,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 300,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '6677'
         }
       });
@@ -359,6 +368,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 270,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '7788'
         }
       });
@@ -400,6 +410,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 140,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '1212'
         }
       });
@@ -424,6 +435,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 160,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '3434'
         }
       });
@@ -449,6 +461,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 170,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '5656'
         }
       });
@@ -474,6 +487,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 190,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '7878'
         }
       });
@@ -500,6 +514,7 @@ describe('Empirical Verification: Gate OTP & Delivery Security (Milestone 3 Subt
           totalAmount: 220,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '9090'
         }
       });

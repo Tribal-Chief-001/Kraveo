@@ -1,0 +1,666 @@
+{
+  "_about": "Real responses captured by backend/test/e2e/order_flow_v1.test.ts (WRITE_ORDER_FIXTURES=1). Contract: Docs/16_order_flow_contract.md. Ids, times and codes differ on every run; the shape does not.",
+  "_capturedAt": "2026-10-01T16:49:23.937Z",
+  "admin_needs_attention_row": {
+    "problem": "REFUND_FAILED",
+    "problems": [
+      "REFUND_FAILED"
+    ],
+    "detail": "Refund failed after 1 attempt(s): Razorpay is down",
+    "since": "2026-10-01T16:49:21.746Z",
+    "hint": "Razorpay refused or did not answer. The job retries every minute (up to 10 times). Check the payment in Razorpay; use retry-refund once fixed, or refund by hand there.",
+    "order": {
+      "id": "70bbd85b-3274-4cac-8ece-67c8514a03b2",
+      "status": "CANCELLED",
+      "paymentStatus": "PAID",
+      "totalAmount": 220,
+      "deliveryFee": 25,
+      "subtotal": 180,
+      "taxAndPackaging": 15,
+      "discount": 0,
+      "dropoffHostel": "Block 3",
+      "dropoffNotes": null,
+      "createdAt": "2026-10-01T16:49:21.724Z",
+      "updatedAt": "2026-10-01T16:49:21.746Z",
+      "paidAt": "2026-10-01T16:48:21.723Z",
+      "acceptedAt": null,
+      "pickedUpAt": null,
+      "deliveredAt": null,
+      "cancelledAt": "2026-10-01T16:49:21.730Z",
+      "cancelledBy": "ADMIN",
+      "cancelReason": "Restaurant closed early",
+      "items": [],
+      "vendorId": "ven-1",
+      "vendor": {
+        "id": "ven-1",
+        "name": "Sharma Highway Dhaba",
+        "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+        "lat": 23.0768,
+        "lng": 76.8524,
+        "phone": "+91 9876543212"
+      },
+      "customer": {
+        "id": "usr-1",
+        "name": "Rahul Sharma",
+        "phone": "+91 9876543210",
+        "hostelBlock": "Block 3"
+      },
+      "driver": null,
+      "otpCode": null,
+      "payBy": null,
+      "acceptBy": null,
+      "customerId": "usr-1",
+      "driverId": null,
+      "isReviewed": false,
+      "otpAttempts": 0,
+      "otpLocked": false,
+      "refundStatus": "FAILED",
+      "refundError": "Razorpay is down",
+      "refundAttempts": 1,
+      "payments": [
+        {
+          "id": "f85384da-662c-40b5-9989-366d586f118b",
+          "razorpayOrderId": "order_fx_6e6fd74f-750",
+          "razorpayPaymentId": "pay_fx_dd43f47e-912",
+          "razorpayRefundId": null,
+          "amount": 220,
+          "capturedAmountPaise": 22000,
+          "status": "PAID",
+          "createdAt": "2026-10-01T16:49:21.724Z",
+          "refundedAt": null
+        }
+      ]
+    }
+  },
+  "admin_view": {
+    "id": "e6349a70-2379-4197-8018-067a3905efb9",
+    "status": "ARRIVED_AT_GATE",
+    "paymentStatus": "PAID",
+    "totalAmount": 220,
+    "deliveryFee": 25,
+    "subtotal": 180,
+    "taxAndPackaging": 15,
+    "discount": 0,
+    "dropoffHostel": "Block 2",
+    "dropoffNotes": "Room 214, call 98xxxxxx",
+    "createdAt": "2026-10-01T16:49:16.861Z",
+    "updatedAt": "2026-10-01T16:49:17.300Z",
+    "paidAt": "2026-10-01T16:49:16.961Z",
+    "acceptedAt": "2026-10-01T16:49:16.996Z",
+    "pickedUpAt": "2026-10-01T16:49:17.103Z",
+    "deliveredAt": null,
+    "cancelledAt": null,
+    "cancelledBy": null,
+    "cancelReason": null,
+    "items": [
+      {
+        "id": "d95b7a88-8738-49d3-83a1-572ca30514cb",
+        "menuItemId": "item-1",
+        "name": "Special Shahi Paneer Thali",
+        "quantity": 1,
+        "price": 180
+      }
+    ],
+    "vendorId": "ven-1",
+    "vendor": {
+      "id": "ven-1",
+      "name": "Sharma Highway Dhaba",
+      "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+      "lat": 23.0768,
+      "lng": 76.8524,
+      "phone": "+91 9876543212"
+    },
+    "customer": {
+      "id": "usr-1",
+      "name": "Rahul Sharma",
+      "phone": "+91 9876543210",
+      "hostelBlock": "Block 3"
+    },
+    "driver": {
+      "id": "usr-4",
+      "name": "Vikram Singh (Runner)",
+      "phone": "+91 9876543213"
+    },
+    "otpCode": "5389",
+    "payBy": null,
+    "acceptBy": null,
+    "customerId": "usr-1",
+    "driverId": "usr-4",
+    "isReviewed": false,
+    "otpAttempts": 0,
+    "otpLocked": false,
+    "refundStatus": "NONE",
+    "refundError": null,
+    "refundAttempts": 0,
+    "payments": [
+      {
+        "id": "7e422d36-9441-4ef8-bdaf-45871e4e48a4",
+        "razorpayOrderId": "rzp_order_sim_4b78aeeadd6e7561",
+        "razorpayPaymentId": "pay_fcee2c8c-18e",
+        "razorpayRefundId": null,
+        "amount": 220,
+        "capturedAmountPaise": 22000,
+        "status": "PAID",
+        "createdAt": "2026-10-01T16:49:16.943Z",
+        "refundedAt": null
+      }
+    ]
+  },
+  "customer_view_ARRIVED_AT_GATE": {
+    "id": "e6349a70-2379-4197-8018-067a3905efb9",
+    "status": "ARRIVED_AT_GATE",
+    "paymentStatus": "PAID",
+    "totalAmount": 220,
+    "deliveryFee": 25,
+    "subtotal": 180,
+    "taxAndPackaging": 15,
+    "discount": 0,
+    "dropoffHostel": "Block 2",
+    "dropoffNotes": "Room 214, call 98xxxxxx",
+    "createdAt": "2026-10-01T16:49:16.861Z",
+    "updatedAt": "2026-10-01T16:49:17.300Z",
+    "paidAt": "2026-10-01T16:49:16.961Z",
+    "acceptedAt": "2026-10-01T16:49:16.996Z",
+    "pickedUpAt": "2026-10-01T16:49:17.103Z",
+    "deliveredAt": null,
+    "cancelledAt": null,
+    "cancelledBy": null,
+    "cancelReason": null,
+    "items": [
+      {
+        "id": "d95b7a88-8738-49d3-83a1-572ca30514cb",
+        "menuItemId": "item-1",
+        "name": "Special Shahi Paneer Thali",
+        "quantity": 1,
+        "price": 180
+      }
+    ],
+    "vendorId": "ven-1",
+    "vendor": {
+      "id": "ven-1",
+      "name": "Sharma Highway Dhaba",
+      "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+      "lat": 23.0768,
+      "lng": 76.8524
+    },
+    "customer": {
+      "id": "usr-1",
+      "name": "Rahul Sharma",
+      "phone": "+91 9876543210",
+      "hostelBlock": "Block 3"
+    },
+    "driver": {
+      "id": "usr-4",
+      "name": "Vikram Singh (Runner)",
+      "phone": "+91 9876543213"
+    },
+    "otpCode": "5389",
+    "payBy": null,
+    "acceptBy": null,
+    "refundStatus": "NONE",
+    "isReviewed": false
+  },
+  "customer_view_CANCELLED_REFUNDED": {
+    "id": "f49c983f-d565-4df6-a46c-244dde6fd8c0",
+    "status": "CANCELLED",
+    "paymentStatus": "REFUNDED",
+    "totalAmount": 220,
+    "deliveryFee": 25,
+    "subtotal": 180,
+    "taxAndPackaging": 15,
+    "discount": 0,
+    "dropoffHostel": "Block 2",
+    "dropoffNotes": "Room 214, call 98xxxxxx",
+    "createdAt": "2026-10-01T16:49:19.171Z",
+    "updatedAt": "2026-10-01T16:49:19.216Z",
+    "paidAt": null,
+    "acceptedAt": null,
+    "pickedUpAt": null,
+    "deliveredAt": null,
+    "cancelledAt": "2026-10-01T16:49:19.190Z",
+    "cancelledBy": "CUSTOMER",
+    "cancelReason": "Changed my mind",
+    "items": [
+      {
+        "id": "a790f632-ca3f-4489-8d2e-c750b79c3df4",
+        "menuItemId": "item-1",
+        "name": "Special Shahi Paneer Thali",
+        "quantity": 1,
+        "price": 180
+      }
+    ],
+    "vendorId": "ven-1",
+    "vendor": {
+      "id": "ven-1",
+      "name": "Sharma Highway Dhaba",
+      "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+      "lat": 23.0768,
+      "lng": 76.8524
+    },
+    "customer": {
+      "id": "usr-1",
+      "name": "Rahul Sharma",
+      "phone": "+91 9876543210",
+      "hostelBlock": "Block 3"
+    },
+    "driver": null,
+    "otpCode": null,
+    "payBy": null,
+    "acceptBy": null,
+    "refundStatus": "DONE",
+    "isReviewed": false
+  },
+  "customer_view_PAID": {
+    "id": "e6349a70-2379-4197-8018-067a3905efb9",
+    "status": "PLACED",
+    "paymentStatus": "PAID",
+    "totalAmount": 220,
+    "deliveryFee": 25,
+    "subtotal": 180,
+    "taxAndPackaging": 15,
+    "discount": 0,
+    "dropoffHostel": "Block 2",
+    "dropoffNotes": "Room 214, call 98xxxxxx",
+    "createdAt": "2026-10-01T16:49:16.861Z",
+    "updatedAt": "2026-10-01T16:49:16.962Z",
+    "paidAt": "2026-10-01T16:49:16.961Z",
+    "acceptedAt": null,
+    "pickedUpAt": null,
+    "deliveredAt": null,
+    "cancelledAt": null,
+    "cancelledBy": null,
+    "cancelReason": null,
+    "items": [
+      {
+        "id": "d95b7a88-8738-49d3-83a1-572ca30514cb",
+        "menuItemId": "item-1",
+        "name": "Special Shahi Paneer Thali",
+        "quantity": 1,
+        "price": 180
+      }
+    ],
+    "vendorId": "ven-1",
+    "vendor": {
+      "id": "ven-1",
+      "name": "Sharma Highway Dhaba",
+      "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+      "lat": 23.0768,
+      "lng": 76.8524
+    },
+    "customer": {
+      "id": "usr-1",
+      "name": "Rahul Sharma",
+      "phone": "+91 9876543210",
+      "hostelBlock": "Block 3"
+    },
+    "driver": null,
+    "otpCode": null,
+    "payBy": null,
+    "acceptBy": "2026-10-01T16:59:16.961Z",
+    "refundStatus": "NONE",
+    "isReviewed": false
+  },
+  "customer_view_PLACED_unpaid": {
+    "id": "e6349a70-2379-4197-8018-067a3905efb9",
+    "status": "PLACED",
+    "paymentStatus": "PENDING",
+    "totalAmount": 220,
+    "deliveryFee": 25,
+    "subtotal": 180,
+    "taxAndPackaging": 15,
+    "discount": 0,
+    "dropoffHostel": "Block 2",
+    "dropoffNotes": "Room 214, call 98xxxxxx",
+    "createdAt": "2026-10-01T16:49:16.861Z",
+    "updatedAt": "2026-10-01T16:49:16.861Z",
+    "paidAt": null,
+    "acceptedAt": null,
+    "pickedUpAt": null,
+    "deliveredAt": null,
+    "cancelledAt": null,
+    "cancelledBy": null,
+    "cancelReason": null,
+    "items": [
+      {
+        "id": "d95b7a88-8738-49d3-83a1-572ca30514cb",
+        "menuItemId": "item-1",
+        "name": "Special Shahi Paneer Thali",
+        "quantity": 1,
+        "price": 180
+      }
+    ],
+    "vendorId": "ven-1",
+    "vendor": {
+      "id": "ven-1",
+      "name": "Sharma Highway Dhaba",
+      "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+      "lat": 23.0768,
+      "lng": 76.8524
+    },
+    "customer": {
+      "id": "usr-1",
+      "name": "Rahul Sharma",
+      "phone": "+91 9876543210",
+      "hostelBlock": "Block 3"
+    },
+    "driver": null,
+    "otpCode": null,
+    "payBy": "2026-10-01T17:04:16.861Z",
+    "acceptBy": null,
+    "refundStatus": "NONE",
+    "isReviewed": false
+  },
+  "error_403_PARTNER_NOT_APPROVED": {
+    "success": false,
+    "code": "PARTNER_NOT_APPROVED",
+    "approvalStatus": "SUSPENDED",
+    "message": "Your account is suspended. Please contact Kraveo support."
+  },
+  "error_409_ALREADY_TAKEN": {
+    "success": false,
+    "code": "ALREADY_TAKEN",
+    "message": "Another rider has already taken this order."
+  },
+  "error_423_OTP_LOCKED": {
+    "success": false,
+    "code": "OTP_LOCKED",
+    "message": "Too many wrong codes. Kraveo support has to unlock this delivery."
+  },
+  "rider_assigned_view_ARRIVED_AT_GATE": {
+    "id": "e6349a70-2379-4197-8018-067a3905efb9",
+    "status": "ARRIVED_AT_GATE",
+    "paymentStatus": "PAID",
+    "totalAmount": 220,
+    "deliveryFee": 25,
+    "subtotal": 180,
+    "taxAndPackaging": 15,
+    "discount": 0,
+    "dropoffHostel": "Block 2",
+    "dropoffNotes": "Room 214, call 98xxxxxx",
+    "createdAt": "2026-10-01T16:49:16.861Z",
+    "updatedAt": "2026-10-01T16:49:17.300Z",
+    "paidAt": "2026-10-01T16:49:16.961Z",
+    "acceptedAt": "2026-10-01T16:49:16.996Z",
+    "pickedUpAt": "2026-10-01T16:49:17.103Z",
+    "deliveredAt": null,
+    "cancelledAt": null,
+    "cancelledBy": null,
+    "cancelReason": null,
+    "items": [
+      {
+        "id": "d95b7a88-8738-49d3-83a1-572ca30514cb",
+        "menuItemId": "item-1",
+        "name": "Special Shahi Paneer Thali",
+        "quantity": 1,
+        "price": 180
+      }
+    ],
+    "vendorId": "ven-1",
+    "vendor": {
+      "id": "ven-1",
+      "name": "Sharma Highway Dhaba",
+      "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+      "lat": 23.0768,
+      "lng": 76.8524
+    },
+    "customer": {
+      "id": "usr-1",
+      "name": "Rahul Sharma",
+      "phone": "+91 9876543210",
+      "hostelBlock": "Block 3"
+    },
+    "driver": {
+      "id": "usr-4",
+      "name": "Vikram Singh (Runner)",
+      "phone": "+91 9876543213"
+    },
+    "otpCode": null,
+    "payBy": null,
+    "acceptBy": null
+  },
+  "rider_assigned_view_after_claim": {
+    "id": "e6349a70-2379-4197-8018-067a3905efb9",
+    "status": "ACCEPTED",
+    "paymentStatus": "PAID",
+    "totalAmount": 220,
+    "deliveryFee": 25,
+    "subtotal": 180,
+    "taxAndPackaging": 15,
+    "discount": 0,
+    "dropoffHostel": "Block 2",
+    "dropoffNotes": "Room 214, call 98xxxxxx",
+    "createdAt": "2026-10-01T16:49:16.861Z",
+    "updatedAt": "2026-10-01T16:49:17.031Z",
+    "paidAt": "2026-10-01T16:49:16.961Z",
+    "acceptedAt": "2026-10-01T16:49:16.996Z",
+    "pickedUpAt": null,
+    "deliveredAt": null,
+    "cancelledAt": null,
+    "cancelledBy": null,
+    "cancelReason": null,
+    "items": [
+      {
+        "id": "d95b7a88-8738-49d3-83a1-572ca30514cb",
+        "menuItemId": "item-1",
+        "name": "Special Shahi Paneer Thali",
+        "quantity": 1,
+        "price": 180
+      }
+    ],
+    "vendorId": "ven-1",
+    "vendor": {
+      "id": "ven-1",
+      "name": "Sharma Highway Dhaba",
+      "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+      "lat": 23.0768,
+      "lng": 76.8524
+    },
+    "customer": {
+      "id": "usr-1",
+      "name": "Rahul Sharma",
+      "phone": "+91 9876543210",
+      "hostelBlock": "Block 3"
+    },
+    "driver": {
+      "id": "usr-4",
+      "name": "Vikram Singh (Runner)",
+      "phone": "+91 9876543213"
+    },
+    "otpCode": null,
+    "payBy": null,
+    "acceptBy": null
+  },
+  "rider_pool_view": {
+    "id": "e6349a70-2379-4197-8018-067a3905efb9",
+    "status": "ACCEPTED",
+    "paymentStatus": "PAID",
+    "totalAmount": 220,
+    "deliveryFee": 25,
+    "subtotal": 180,
+    "taxAndPackaging": 15,
+    "discount": 0,
+    "dropoffHostel": "Block 2",
+    "dropoffNotes": null,
+    "createdAt": "2026-10-01T16:49:16.861Z",
+    "updatedAt": "2026-10-01T16:49:16.997Z",
+    "paidAt": "2026-10-01T16:49:16.961Z",
+    "acceptedAt": "2026-10-01T16:49:16.996Z",
+    "pickedUpAt": null,
+    "deliveredAt": null,
+    "cancelledAt": null,
+    "cancelledBy": null,
+    "cancelReason": null,
+    "items": [
+      {
+        "id": "d95b7a88-8738-49d3-83a1-572ca30514cb",
+        "menuItemId": "item-1",
+        "name": "Special Shahi Paneer Thali",
+        "quantity": 1,
+        "price": 180
+      }
+    ],
+    "vendorId": "ven-1",
+    "vendor": {
+      "id": "ven-1",
+      "name": "Sharma Highway Dhaba",
+      "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+      "lat": 23.0768,
+      "lng": 76.8524
+    },
+    "customer": null,
+    "driver": null,
+    "otpCode": null,
+    "payBy": null,
+    "acceptBy": null
+  },
+  "socket_new_order_alert_vendor": {
+    "id": "e6349a70-2379-4197-8018-067a3905efb9",
+    "status": "PLACED",
+    "paymentStatus": "PAID",
+    "totalAmount": 220,
+    "deliveryFee": 25,
+    "subtotal": 180,
+    "taxAndPackaging": 15,
+    "discount": 0,
+    "dropoffHostel": "Block 2",
+    "dropoffNotes": "Room 214, call 98xxxxxx",
+    "createdAt": "2026-10-01T16:49:16.861Z",
+    "updatedAt": "2026-10-01T16:49:16.962Z",
+    "paidAt": "2026-10-01T16:49:16.961Z",
+    "acceptedAt": null,
+    "pickedUpAt": null,
+    "deliveredAt": null,
+    "cancelledAt": null,
+    "cancelledBy": null,
+    "cancelReason": null,
+    "items": [
+      {
+        "id": "d95b7a88-8738-49d3-83a1-572ca30514cb",
+        "menuItemId": "item-1",
+        "name": "Special Shahi Paneer Thali",
+        "quantity": 1,
+        "price": 180
+      }
+    ],
+    "vendorId": "ven-1",
+    "vendor": {
+      "id": "ven-1",
+      "name": "Sharma Highway Dhaba",
+      "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+      "lat": 23.0768,
+      "lng": 76.8524
+    },
+    "customer": {
+      "id": "usr-1",
+      "name": "Rahul",
+      "phone": null,
+      "hostelBlock": null
+    },
+    "driver": null,
+    "otpCode": null,
+    "payBy": null,
+    "acceptBy": "2026-10-01T16:59:16.961Z"
+  },
+  "socket_order_available": {
+    "id": "e6349a70-2379-4197-8018-067a3905efb9",
+    "status": "ACCEPTED",
+    "paymentStatus": "PAID",
+    "totalAmount": 220,
+    "deliveryFee": 25,
+    "subtotal": 180,
+    "taxAndPackaging": 15,
+    "discount": 0,
+    "dropoffHostel": "Block 2",
+    "dropoffNotes": null,
+    "createdAt": "2026-10-01T16:49:16.861Z",
+    "updatedAt": "2026-10-01T16:49:16.997Z",
+    "paidAt": "2026-10-01T16:49:16.961Z",
+    "acceptedAt": "2026-10-01T16:49:16.996Z",
+    "pickedUpAt": null,
+    "deliveredAt": null,
+    "cancelledAt": null,
+    "cancelledBy": null,
+    "cancelReason": null,
+    "items": [
+      {
+        "id": "d95b7a88-8738-49d3-83a1-572ca30514cb",
+        "menuItemId": "item-1",
+        "name": "Special Shahi Paneer Thali",
+        "quantity": 1,
+        "price": 180
+      }
+    ],
+    "vendorId": "ven-1",
+    "vendor": {
+      "id": "ven-1",
+      "name": "Sharma Highway Dhaba",
+      "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+      "lat": 23.0768,
+      "lng": 76.8524
+    },
+    "customer": null,
+    "driver": null,
+    "otpCode": null,
+    "payBy": null,
+    "acceptBy": null
+  },
+  "socket_order_unavailable": {
+    "id": "e6349a70-2379-4197-8018-067a3905efb9"
+  },
+  "socket_rider_location": {
+    "orderId": "e6349a70-2379-4197-8018-067a3905efb9",
+    "driverId": "usr-4",
+    "lat": 23.0771,
+    "lng": 76.8519,
+    "heading": 45,
+    "at": "2026-10-01T16:49:17.136Z"
+  },
+  "vendor_view_new_paid_order": {
+    "id": "e6349a70-2379-4197-8018-067a3905efb9",
+    "status": "PLACED",
+    "paymentStatus": "PAID",
+    "totalAmount": 220,
+    "deliveryFee": 25,
+    "subtotal": 180,
+    "taxAndPackaging": 15,
+    "discount": 0,
+    "dropoffHostel": "Block 2",
+    "dropoffNotes": "Room 214, call 98xxxxxx",
+    "createdAt": "2026-10-01T16:49:16.861Z",
+    "updatedAt": "2026-10-01T16:49:16.962Z",
+    "paidAt": "2026-10-01T16:49:16.961Z",
+    "acceptedAt": null,
+    "pickedUpAt": null,
+    "deliveredAt": null,
+    "cancelledAt": null,
+    "cancelledBy": null,
+    "cancelReason": null,
+    "items": [
+      {
+        "id": "d95b7a88-8738-49d3-83a1-572ca30514cb",
+        "menuItemId": "item-1",
+        "name": "Special Shahi Paneer Thali",
+        "quantity": 1,
+        "price": 180
+      }
+    ],
+    "vendorId": "ven-1",
+    "vendor": {
+      "id": "ven-1",
+      "name": "Sharma Highway Dhaba",
+      "address": "Ashta-Kothri Highway, 1.2km from VIT Bhopal Gate",
+      "lat": 23.0768,
+      "lng": 76.8524
+    },
+    "customer": {
+      "id": "usr-1",
+      "name": "Rahul",
+      "phone": null,
+      "hostelBlock": null
+    },
+    "driver": null,
+    "otpCode": null,
+    "payBy": null,
+    "acceptBy": "2026-10-01T16:59:16.961Z"
+  }
+}

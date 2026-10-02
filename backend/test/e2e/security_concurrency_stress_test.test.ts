@@ -57,7 +57,8 @@ describe('Adversarial Security & Concurrency Stress Test Suite', () => {
 
     await prisma.driverPartner.upsert({
       where: { id: 'usr-driver-2' },
-      update: {},
+      // cleanTestUsers() deletes the user between runs, which nulls this profile's userId: re-link it.
+      update: { userId: driverUser2.id, dutyStatus: 'ONLINE', approvalStatus: 'APPROVED' },
       create: {
         id: 'usr-driver-2',
         userId: driverUser2.id,
@@ -98,6 +99,7 @@ describe('Adversarial Security & Concurrency Stress Test Suite', () => {
           totalAmount: 250,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: validOtp
         }
       });
@@ -138,7 +140,8 @@ describe('Adversarial Security & Concurrency Stress Test Suite', () => {
           driverId: null,
           totalAmount: 300,
           dropoffHostel: 'Boys Hostel Block 1',
-          status: 'PLACED'
+          status: 'READY_FOR_PICKUP', // in the rider pool: paid, ready, unassigned
+          paymentStatus: 'PAID'
         }
       });
 
@@ -151,15 +154,17 @@ describe('Adversarial Security & Concurrency Stress Test Suite', () => {
         request.post(`/api/orders/${orderId}/accept-driver`).set(getAuthHeader(tokenDriver2)).send({})
       ]);
 
-      const successCount = [res1, res2].filter((r) => r.status === 200).length;
-      const failureCount = [res1, res2].filter((r) => r.status === 400).length;
-
-      // Note: If non-atomic, both can succeed (200), meaning Driver 2 overwrites Driver 1
-      // In a hardened atomic architecture, exactly 1 must succeed and 1 must fail with 400.
-      console.log(`[CONC_02 Result]: Success count: ${successCount}, 400 Rejected count: ${failureCount}`);
+      // Atomic claim (contract 2.4): exactly one rider wins, the other gets 409 ALREADY_TAKEN.
+      const winners = [res1, res2].filter((r) => r.status === 200);
+      const losers = [res1, res2].filter((r) => r.status === 409);
+      expect(winners).toHaveLength(1);
+      expect(losers).toHaveLength(1);
+      expect(losers[0].body.code).toBe('ALREADY_TAKEN');
 
       const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
-      expect(['usr-4', 'usr-driver-2']).toContain(dbOrder?.driverId);
+      expect(dbOrder?.driverId).toBe(winners[0] === res1 ? 'usr-4' : 'usr-driver-2');
+      expect(dbOrder?.status).toBe('READY_FOR_PICKUP'); // a claim never moves the status
+      await prisma.order.update({ where: { id: orderId }, data: { status: 'DELIVERED' } });
     });
 
     test('CONC_03: Gate OTP Brute-Force & Race between 1 valid and 10 invalid attempts', async () => {
@@ -175,11 +180,14 @@ describe('Adversarial Security & Concurrency Stress Test Suite', () => {
           totalAmount: 180,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: realOtp
         }
       });
 
-      const invalidOtps = ['0000', '1111', '2222', '3333', '4444', '5555', '6666', '7777', '8888', '9999'];
+      // Contract 4: 5 wrong codes lock the order. With 4 wrong codes racing the right one, the lock can never
+      // trigger, so the right code must always win. (10 concurrent wrong codes: see the order-flow suite.)
+      const invalidOtps = ['0000', '1111', '2222', '3333'];
       const attackPromises = invalidOtps.map((badOtp) =>
         request
           .post(`/api/orders/${orderId}/verify-gate-otp`)
@@ -231,35 +239,21 @@ describe('Adversarial Security & Concurrency Stress Test Suite', () => {
     test('AUTH_02: Unauthenticated WebSocket client connects, joins rooms, and broadcasts spoofed updates', async () => {
       let clientSocket: Socket | null = null;
       try {
-        // Connect with NO authentication token
+        // Connect with NO authentication token: contract 3 says the connection is refused.
         clientSocket = ClientSocket(serverInstance.baseUrl, {
           transports: ['websocket'],
           forceNew: true,
           reconnection: false
         });
 
-        await new Promise<void>((resolve, reject) => {
-          clientSocket!.on('connect', () => resolve());
-          clientSocket!.on('connect_error', (err) => reject(err));
-          setTimeout(() => reject(new Error('Connection timeout')), 4000);
+        const outcome = await new Promise<string>((resolve) => {
+          clientSocket!.on('connect', () => resolve('connected'));
+          clientSocket!.on('connect_error', (err) => resolve(`refused: ${err.message}`));
+          setTimeout(() => resolve('timeout'), 4000);
         });
 
-        expect(clientSocket.connected).toBe(true);
-
-        // Unauthenticated client joins arbitrary sensitive vendor and order rooms
-        clientSocket.emit('join_room', 'vendor_ven-1');
-        clientSocket.emit('join_room', 'order_sensitive_999');
-
-        // Unauthenticated client emits spoofed driver location
-        clientSocket.emit('update_driver_location', {
-          driverId: 'usr-4',
-          lat: 23.0775,
-          lng: 76.8513,
-          heading: 180
-        });
-
-        // Unauthenticated connection is accepted without handshake rejection
-        expect(clientSocket.id).toBeDefined();
+        expect(outcome).toBe('refused: Authentication required.');
+        expect(clientSocket.connected).toBe(false);
       } finally {
         if (clientSocket && clientSocket.connected) {
           clientSocket.disconnect();
@@ -314,7 +308,8 @@ describe('Adversarial Security & Concurrency Stress Test Suite', () => {
         .get(`/api/orders/${victimOrderId}`)
         .set(getAuthHeader(studentToken)); // usr-1 token
 
-      expect(res.status).toBe(403);
+      // 404, same as a missing order: another customer's order must not even be confirmed to exist.
+      expect(res.status).toBe(404);
       expect(res.body.success).toBe(false);
       expect(res.body.data?.otpCode).toBeUndefined();
     });

@@ -136,6 +136,28 @@ model Order {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
+  // Order flow v1 (Docs/16_order_flow_contract.md). Price parts are stored so history never changes.
+  subtotal         Float     @default(0)
+  taxAndPackaging  Float     @default(0)
+  discount         Float     @default(0)
+  // Idempotency key made by the app per checkout attempt (unique per customer).
+  clientRequestId  String?
+  paidAt           DateTime?
+  acceptedAt       DateTime?
+  pickedUpAt       DateTime?
+  deliveredAt      DateTime?
+  cancelledAt      DateTime?
+  cancelledBy      String? // CUSTOMER | VENDOR | ADMIN | SYSTEM
+  cancelReason     String?
+  // Gate OTP brute-force guard: 5 wrong attempts lock the order until an admin unlocks it.
+  otpAttempts      Int       @default(0)
+  otpLocked        Boolean   @default(false)
+  // Refund bookkeeping: null/NONE | PENDING | DONE | FAILED. The lease stops two workers refunding at once.
+  refundStatus     String?
+  refundError      String?
+  refundAttempts   Int       @default(0)
+  refundLeaseUntil DateTime?
+
   customer User          @relation("CustomerOrders", fields: [customerId], references: [id])
   vendor   Vendor        @relation(fields: [vendorId], references: [id])
   driver   User?         @relation("DriverOrders", fields: [driverId], references: [id])
@@ -143,10 +165,14 @@ model Order {
   payments Payment[]
   review   ReviewRecord?
 
+  @@unique([customerId, clientRequestId])
   @@index([customerId, createdAt])
   @@index([vendorId, status])
   @@index([driverId, status])
   @@index([status, createdAt])
+  @@index([status, driverId, paymentStatus])
+  @@index([paymentStatus, createdAt])
+  @@index([refundStatus])
 }
 
 model OrderItem {
@@ -171,6 +197,10 @@ model Payment {
   amount            Float
   status            PaymentStatus @default(PENDING)
   createdAt         DateTime      @default(now())
+  // What Razorpay says was captured (paise), the refund that returned it, and when.
+  capturedAmountPaise Int?
+  razorpayRefundId    String?
+  refundedAt          DateTime?
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 

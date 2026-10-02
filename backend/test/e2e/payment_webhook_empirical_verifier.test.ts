@@ -240,6 +240,9 @@ describe('Empirical Verification: Payment Webhook Functionality (Milestone 3 Sub
       }
     });
 
+    // /payments/create-order made a Razorpay order for it; the webhook fixture names only our order id.
+    await prisma.payment.create({ data: { orderId: order.id, razorpayOrderId: 'order_rzp_fallback_' + Date.now(), amount: 180, status: 'PENDING' } });
+
     const payload = {
       event: 'payment.captured',
       orderId: order.id

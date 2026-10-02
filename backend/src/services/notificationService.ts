@@ -59,9 +59,10 @@ export const sendPushNotification = async (payload: PushNotificationPayload): Pr
             },
           },
         });
-      } else {
+      } else if (payload.topic) {
+        // Never fall back to a broad topic: pushes can carry order data (and the gate OTP).
         await messaging.send({
-          topic: payload.topic || 'all',
+          topic: payload.topic,
           notification: {
             title: payload.title,
             body: payload.body,
@@ -100,9 +101,10 @@ export const triggerDhabaAlarmPushNotification = async (vendorId: string, orderI
 
 // Dispatch drop-off arrival alert to student phone
 export const triggerStudentArrivalNotification = async (targetFcmToken: string | undefined, orderId: string, otpCode: string): Promise<void> => {
+  // Only the customer's own device: the OTP must never go to a topic anyone could subscribe to.
+  if (!targetFcmToken) return;
   await sendPushNotification({
     targetFcmToken: targetFcmToken,
-    topic: `order_${orderId}`,
     title: '🛵 RUNNER ARRIVED AT HOSTEL GATE!',
     body: `Your runner is waiting at the gate. Handshake OTP code: ${otpCode}`,
     data: {

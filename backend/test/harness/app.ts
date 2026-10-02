@@ -4,6 +4,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
 import supertest from 'supertest';
 import { apiRouter } from '../../src/routes/api';
+import { attachRealtime } from '../../src/realtime';
 
 export interface TestServerInstance {
   app: Express;
@@ -47,26 +48,8 @@ export const createTestApp = (): { app: Express; server: http.Server; io: Socket
     });
   });
 
-  // Socket.io Real-time Event Subscriptions
-  io.on('connection', (socket) => {
-    socket.on('join_room', (room: string) => {
-      if (room && typeof room === 'string') {
-        socket.join(room);
-      }
-    });
-
-    socket.on('update_driver_location', (data) => {
-      if (data && typeof data === 'object') {
-        io.emit('driver_location_update', data);
-      }
-    });
-
-    socket.on('order_status_change', (data) => {
-      if (data && typeof data === 'object') {
-        io.emit('order_updated', data);
-      }
-    });
-  });
+  // The real Socket.io setup (token auth, room checks, per-viewer events), same as production.
+  attachRealtime(io);
 
   // 404 Non-Existent Route Guard
   app.use((req: express.Request, res: express.Response) => {

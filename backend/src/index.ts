@@ -4,8 +4,8 @@ import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { apiRouter } from './routes/api';
-import { verifyToken } from './middleware/auth';
-import { prisma } from './db';
+import { attachRealtime } from './realtime';
+import { startOrderMaintenance } from './services/orderMaintenance';
 
 dotenv.config();
 
@@ -101,56 +101,11 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
-io.use((socket, next) => {
-  try {
-    const rawToken = socket.handshake.auth?.token;
-    if (typeof rawToken !== 'string' || !rawToken.trim()) return next(new Error('Authentication required.'));
-    socket.data.user = verifyToken(rawToken.replace(/^Bearer\s+/i, ''));
-    return next();
-  } catch {
-    return next(new Error('Invalid or expired authentication token.'));
-  }
-});
+// Socket.io: token auth, server-checked rooms, per-viewer order events (src/realtime.ts).
+attachRealtime(io);
 
-// Socket.io Real-time Event Subscriptions
-io.on('connection', (socket) => {
-  console.log(`⚡ Kraveo Socket Client Connected: ${socket.id}`);
-  if (socket.data.user?.role === 'ADMIN') socket.join('admins');
-
-  socket.on('join_room', async (room: string) => {
-    const user = socket.data.user;
-    let isAllowed = false;
-    if (room === 'admins') isAllowed = user?.role === 'ADMIN';
-    if (typeof room === 'string' && room.startsWith('order_') && user) {
-      const order = await prisma.order.findUnique({ where: { id: room.slice('order_'.length) }, select: { customerId: true, driverId: true, vendor: { select: { userId: true } } } });
-      isAllowed = Boolean(order && (user.role === 'ADMIN' || order.customerId === user.id || order.driverId === user.id || order.vendor.userId === user.id));
-    }
-    if (typeof room === 'string' && room.startsWith('vendor_') && user?.role === 'VENDOR') {
-      const vendor = await prisma.vendor.findFirst({ where: { id: room.slice('vendor_'.length), userId: user.id }, select: { id: true } });
-      isAllowed = Boolean(vendor);
-    }
-    if (isAllowed) {
-      socket.join(room);
-      console.log(`📌 Socket ${socket.id} joined room: ${room}`);
-    }
-  });
-
-  socket.on('update_driver_location', (data) => {
-    if (socket.data.user?.role === 'DRIVER' && data && typeof data === 'object') {
-      io.to('admins').emit('driver_location_update', { ...data, driverId: socket.data.user.id });
-    }
-  });
-
-  socket.on('order_status_change', (data) => {
-    if (socket.data.user?.role === 'ADMIN' && data && typeof data === 'object') {
-      io.to('admins').emit('order_updated', data);
-    }
-  });
-
-  socket.on('disconnect', () => {
-    console.log(`❌ Kraveo Socket Client Disconnected: ${socket.id}`);
-  });
-});
+// Order housekeeping every 60 s: expire unpaid orders, auto-cancel unaccepted paid orders, retry refunds.
+if (process.env.NODE_ENV !== 'test') startOrderMaintenance();
 
 if (process.env.NODE_ENV === 'production' && !process.env.GOOGLE_WEB_CLIENT_ID) {
   console.warn('⚠️  GOOGLE_WEB_CLIENT_ID is not set: student Google sign-in will answer 503 until it is configured.');

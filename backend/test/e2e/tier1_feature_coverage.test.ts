@@ -118,7 +118,8 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
           vendorId: 'ven-1',
           totalAmount: 200,
           dropoffHostel: 'Boys Hostel Block 3',
-          status: 'PLACED'
+          status: 'ACCEPTED', // contract: riders only claim paid orders the restaurant accepted
+          paymentStatus: 'PAID'
         }
       });
 
@@ -133,7 +134,8 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
       // Verify update in database directly
       const updatedDbOrder = await prisma.order.findUnique({ where: { id: order.id } });
       expect(updatedDbOrder?.driverId).toBe('usr-4');
-      expect(updatedDbOrder?.status).toBe('ACCEPTED');
+      expect(updatedDbOrder?.status).toBe('ACCEPTED'); // accept-driver never changes the status
+      await prisma.order.update({ where: { id: order.id }, data: { status: 'DELIVERED' } }); // free the rider (max 1 active order)
     });
 
     test('T1_DB_05: Payment Record Relational Persistence in DB', async () => {
@@ -310,6 +312,9 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
         }
       });
 
+      // The order has a Razorpay payment record (made by /payments/create-order); the webhook names only our order id.
+      await prisma.payment.create({ data: { orderId: order.id, razorpayOrderId: 'order_pay04_' + Date.now(), amount: 220, status: 'PENDING' } });
+
       // Confirm status is PENDING initially
       let dbOrder = await prisma.order.findUnique({ where: { id: order.id } });
       expect(dbOrder?.paymentStatus).toBe('PENDING');
@@ -393,7 +398,8 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
           driverId: 'usr-4',
           totalAmount: 150,
           dropoffHostel: 'Boys Hostel Block 3',
-          status: 'PICKED_UP'
+          status: 'PICKED_UP',
+          paymentStatus: 'PAID'
         }
       });
 
@@ -420,7 +426,8 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
           driverId: 'usr-4',
           totalAmount: 170,
           dropoffHostel: 'Boys Hostel Block 3',
-          status: 'PICKED_UP'
+          status: 'PICKED_UP',
+          paymentStatus: 'PAID'
         }
       });
 
@@ -430,7 +437,9 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
         .send({ status: 'ARRIVED_AT_GATE' });
 
       expect(res.status).toBe(200);
-      const generatedOtp = res.body.data.otpCode;
+      // The rider never receives the OTP; it exists only on the server (and for the customer).
+      expect(res.body.data.otpCode).toBeNull();
+      const generatedOtp = (await prisma.order.findUnique({ where: { id: order.id } }))?.otpCode;
       expect(generatedOtp).toHaveLength(4);
     });
 
@@ -444,6 +453,7 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
           totalAmount: 200,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '7482'
         }
       });
@@ -471,6 +481,7 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
           totalAmount: 210,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '9123'
         }
       });
@@ -515,6 +526,7 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
           totalAmount: 160,
           dropoffHostel: 'Boys Hostel Block 3',
           status: 'ARRIVED_AT_GATE',
+          paymentStatus: 'PAID',
           otpCode: '5566'
         }
       });
@@ -601,9 +613,12 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
           vendorId: 'ven-1',
           totalAmount: 140,
           dropoffHostel: 'Boys Hostel Block 3',
-          status: 'PLACED'
+          status: 'READY_FOR_PICKUP',
+          paymentStatus: 'PAID'
         }
       });
+      // Earlier tests left orders at the gate for usr-4; a rider can carry only one order at a time.
+      await prisma.order.updateMany({ where: { driverId: 'usr-4', status: { notIn: ['DELIVERED', 'CANCELLED'] } }, data: { status: 'DELIVERED' } });
 
       // 1. Unauthorized STUDENT token trying to accept driver duty -> 403 Forbidden
       const studentRes = await request
@@ -710,15 +725,19 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
         data: { isAcceptingOrders: true }
       });
 
-      clientSocket = await connectTestSocket(serverInstance.baseUrl);
-      clientSocket.emit('join_room', 'vendor_ven-1');
-      await new Promise((r) => setTimeout(r, 150));
+      // Earlier tests left unpaid orders for usr-1 (max 3 unpaid open orders per customer).
+      await prisma.order.updateMany({ where: { customerId: 'usr-1', paymentStatus: { in: ['PENDING', 'FAILED'] }, status: 'PLACED' }, data: { status: 'CANCELLED' } });
 
-      // Set up listener promise for order alert
+      // The restaurant socket must authenticate; it joins vendor_ven-1 automatically (and may ask again).
+      clientSocket = await connectTestSocket(serverInstance.baseUrl, { auth: { token: vendorToken } });
+      expect((await clientSocket.emitWithAck('join_room', 'vendor_ven-1')).ok).toBe(true);
+
+      let alerts = 0;
+      clientSocket.on('new_order_alert', () => { alerts += 1; });
       const eventPromise = waitForSocketEvent(clientSocket, 'new_order_alert', 5000);
 
-      // Place new order
-      await request
+      // Place new order: contract 1.2 - the restaurant hears nothing until the order is paid.
+      const placed = await request
         .post('/api/orders')
         .set(getAuthHeader(studentToken))
         .send({
@@ -726,10 +745,20 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
           items: [{ itemId: 'item-1', quantity: 1 }],
           dropoffHostel: 'Boys Hostel Block 3'
         });
+      expect(placed.status).toBe(201);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(alerts).toBe(0);
+
+      const pay = await request.post('/api/payments/create-order').set(getAuthHeader(studentToken)).send({ orderId: placed.body.data.id });
+      const verified = await request.post('/api/payments/verify-signature').set(getAuthHeader(studentToken))
+        .send({ razorpayOrderId: pay.body.razorpayOrderId, razorpayPaymentId: 'pay_sim_soc01', razorpaySignature: 'sim' });
+      expect(verified.status).toBe(200);
 
       const eventData = await eventPromise;
       expect(eventData).toBeDefined();
       expect(eventData.vendorId).toBe('ven-1');
+      expect(eventData.paymentStatus).toBe('PAID');
+      expect(eventData.customer.phone).toBeNull(); // never the customer's phone to the restaurant
     });
 
     test('T1_SOC_02: Scoped Order Status Room Real-Time Sync', async () => {
@@ -740,12 +769,15 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
           vendorId: 'ven-1',
           totalAmount: 180,
           dropoffHostel: 'Boys Hostel Block 3',
-          status: 'PLACED'
+          status: 'PLACED',
+          paymentStatus: 'PAID',
+          paidAt: new Date()
         }
       });
 
-      clientSocket = await connectTestSocket(serverInstance.baseUrl);
-      clientSocket.emit('join_room', `order_${order.id}`);
+      // The customer's socket (with its token) may watch its own order.
+      clientSocket = await connectTestSocket(serverInstance.baseUrl, { auth: { token: studentToken } });
+      expect((await clientSocket.emitWithAck('join_room', `order_${order.id}`)).ok).toBe(true);
 
       const eventPromise = waitForSocketEvent(clientSocket, 'order_updated', 5000);
 
@@ -760,21 +792,24 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
     });
 
     test('T1_SOC_03: Real-Time Driver Location Stream Broadcast', async () => {
-      clientSocket = await connectTestSocket(serverInstance.baseUrl);
+      // Admin dashboard socket listens; the rider's socket streams its position.
+      clientSocket = await connectTestSocket(serverInstance.baseUrl, { auth: { token: adminToken } });
+      const riderSocket = await connectTestSocket(serverInstance.baseUrl, { auth: { token: driverToken } });
 
       const eventPromise = waitForSocketEvent(clientSocket, 'driver_location_update', 5000);
 
       const locationPayload = {
-        driverId: 'usr-4',
+        driverId: 'usr-someone-else', // ignored: the rider id always comes from the token
         driverName: 'Vikram Singh',
         lat: 23.0768,
         lng: 76.8524,
         heading: 90
       };
 
-      clientSocket.emit('update_driver_location', locationPayload);
+      riderSocket.emit('update_driver_location', locationPayload);
 
       const locationEvent = await eventPromise;
+      disconnectTestSocket(riderSocket);
       expect(locationEvent.driverId).toBe('usr-4');
       expect(locationEvent.lat).toBe(23.0768);
       expect(locationEvent.lng).toBe(76.8524);
@@ -802,12 +837,14 @@ describe('Tier 1: Feature Coverage E2E Test Suite (30 Test Cases Across 6 Featur
           vendorId: 'ven-1',
           totalAmount: 220,
           dropoffHostel: 'Boys Hostel Block 3',
-          status: 'ACCEPTED'
+          status: 'ACCEPTED',
+          paymentStatus: 'PAID',
+          paidAt: new Date()
         }
       });
 
-      clientSocket = await connectTestSocket(serverInstance.baseUrl);
-      clientSocket.emit('join_room', `order_${order.id}`);
+      clientSocket = await connectTestSocket(serverInstance.baseUrl, { auth: { token: studentToken } });
+      expect((await clientSocket.emitWithAck('join_room', `order_${order.id}`)).ok).toBe(true);
 
       const updatePromise = waitForSocketEvent(clientSocket, 'order_updated', 5000);
 

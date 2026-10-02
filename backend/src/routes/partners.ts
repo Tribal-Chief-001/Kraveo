@@ -5,6 +5,8 @@ import { generateToken, requireAuth, requireRole, AuthenticatedRequest } from '.
 import { canonicalPhone, last10 } from '../utils/phone';
 import { hashPassword, passwordProblem } from '../services/password';
 import { recordSuccess } from '../services/loginLimiter';
+import { writeAudit as writeAuditLog } from '../services/audit';
+import { dropFromPartnerRooms } from '../realtime';
 
 /**
  * Partner (restaurant / rider) applications and the admin tools around them.
@@ -31,8 +33,7 @@ const blankToNull = (v: unknown, max = 200): string | null => {
   return s ? s : null;
 };
 
-const audit = (action: string, targetType: string, targetId: string, summary: string) =>
-  prisma.adminAuditLog.create({ data: { action, targetType, targetId, summary: summary.slice(0, 300) } }).catch((e) => console.error('audit log failed:', e));
+const audit = writeAuditLog;
 
 const notifyAdmins = (req: Request, event: string, payload: unknown) => {
   const io = req.app.get('io');
@@ -369,6 +370,8 @@ partnerRouter.post('/admin/partners/:kind/:id/status', requireAuth, requireRole(
 
     const label = `${kind.toLowerCase()} ${row.name} (${row.user?.phone ?? 'no phone'})`;
     await audit(`PARTNER_${next}`, kind, row.id, `${next} ${label} from ${from}${reason ? `: ${reason}` : ''}`);
+    // A suspended rider must stop hearing about new orders at once (not only after a reconnect).
+    if (next !== 'APPROVED' && kind === 'DRIVER' && row.userId) await dropFromPartnerRooms(row.userId, ['drivers']);
     notifyAdmins(req, 'partner_application_updated', { kind, id: row.id, status: next });
     return res.json({ success: true, data: applicationRow(kind, updated) });
   } catch (err) {
