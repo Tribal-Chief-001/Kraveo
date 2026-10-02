@@ -1,9 +1,10 @@
-import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../config/api_config.dart';
+import '../models/order_model.dart';
+import 'vendor_backend.dart';
 
+/// Holds the partner's JWT and the session hooks (401 -> login, 403 PARTNER_NOT_APPROVED -> status screen).
+/// The network calls themselves live in [HttpVendorBackend].
 class VendorApiService {
   static const String _tokenPrefKey = 'kraveo_vendor_jwt_token';
   static String? _cachedToken;
@@ -21,7 +22,8 @@ class VendorApiService {
 
   /// A 401 on an authenticated call means the JWT is expired or revoked; a 403 with the
   /// PARTNER_NOT_APPROVED code means the account was suspended (or never approved).
-  static void _checkUnauthorized(http.Response response) {
+  /// Every authenticated call (see [HttpVendorBackend]) passes its response through here.
+  static void checkResponse(http.Response response) {
     if (response.statusCode == 401) {
       onUnauthorized?.call();
     } else if (response.statusCode == 403 && response.body.contains('PARTNER_NOT_APPROVED')) {
@@ -73,98 +75,15 @@ class VendorApiService {
     return headers;
   }
 
-  /// Updates Order Status on backend (e.g. PREPARING -> READY_FOR_PICKUP)
-  static Future<bool> updateOrderStatus(String orderId, String newStatus) async {
-    try {
-      final cleanId = orderId.replaceAll('#', '').trim();
-      final url = Uri.parse('${ApiConfig.baseUrl}/orders/$cleanId/status');
-      final headers = await getAuthHeaders();
+  /// `PATCH /orders/:id/status`. True when the server accepted the change.
+  static Future<bool> updateOrderStatus(String orderId, String newStatus) async =>
+      (await const HttpVendorBackend().updateStatus(orderId.replaceAll('#', '').trim(), OrderStatus.parse(newStatus))).ok;
 
-      final response = await http.patch(
-        url,
-        headers: headers,
-        body: jsonEncode({'status': newStatus}),
-      ).timeout(const Duration(seconds: 5));
+  /// `PATCH /vendors/:id/status`. True when the server saved the new value.
+  static Future<bool> toggleStoreStatus(String vendorId, bool isAcceptingOrders) async =>
+      (await const HttpVendorBackend().setStoreOpen(vendorId, isAcceptingOrders)).ok;
 
-      _checkUnauthorized(response);
-      if (response.statusCode == 200) {
-        debugPrint('🌐 [Vendor API] Successfully synced order $orderId status to $newStatus on AWS EC2 backend.');
-        return true;
-      }
-    } catch (e) {
-      debugPrint('⚠️ [Vendor API Notice] AWS EC2 sync delayed ($e). Action preserved locally.');
-    }
-    return false;
-  }
-
-  /// Toggles Dhaba Store OPEN / CLOSED status on backend
-  static Future<bool> toggleStoreStatus(String vendorId, bool isAcceptingOrders) async {
-    try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/vendors/$vendorId/status');
-      final headers = await getAuthHeaders();
-
-      final response = await http.patch(
-        url,
-        headers: headers,
-        body: jsonEncode({'isAcceptingOrders': isAcceptingOrders}),
-      ).timeout(const Duration(seconds: 5));
-
-      _checkUnauthorized(response);
-      if (response.statusCode == 200) {
-        debugPrint('🏪 [Vendor API] Successfully updated store status to ${isAcceptingOrders ? "OPEN" : "CLOSED"} on AWS backend.');
-        return true;
-      }
-    } catch (e) {
-      debugPrint('⚠️ [Vendor API Notice] Store status sync delayed ($e).');
-    }
-    return false;
-  }
-
-  /// Updates Dish Stock Availability (IN STOCK / SOLD OUT) or Price on backend
-  static Future<bool> updateDishStock(String itemId, {bool? isAvailable, double? price}) async {
-    try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/vendors/items/$itemId');
-      final headers = await getAuthHeaders();
-
-      final bodyMap = <String, dynamic>{};
-      if (isAvailable != null) bodyMap['isAvailable'] = isAvailable;
-      if (price != null) bodyMap['price'] = price;
-
-      final response = await http.patch(
-        url,
-        headers: headers,
-        body: jsonEncode(bodyMap),
-      ).timeout(const Duration(seconds: 5));
-
-      _checkUnauthorized(response);
-      if (response.statusCode == 200) {
-        debugPrint('📦 [Vendor API] Dish $itemId stock/price updated successfully on backend.');
-        return true;
-      }
-    } catch (e) {
-      debugPrint('⚠️ [Vendor API Notice] Dish stock sync delayed ($e).');
-    }
-    return false;
-  }
-
-  /// Fetches pending active orders for vendor from backend API
-  static Future<List<dynamic>> fetchIncomingOrders(String vendorId) async {
-    try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/vendors/$vendorId/orders?status=PLACED');
-      final headers = await getAuthHeaders();
-
-      final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
-
-      _checkUnauthorized(response);
-      if (response.statusCode == 200) {
-        final List<dynamic> data = jsonDecode(response.body);
-        debugPrint('📡 [Vendor API] Fetched ${data.length} active orders from backend.');
-        return data;
-      }
-    } catch (e) {
-      debugPrint('⚠️ [Vendor API Notice] Fetching incoming orders delayed ($e).');
-    }
-    return [];
-  }
+  /// `PATCH /vendors/items/:itemId`. True when the server saved the change.
+  static Future<bool> updateDishStock(String itemId, {bool? isAvailable, double? price}) async =>
+      (await const HttpVendorBackend().updateDish(itemId, isAvailable: isAvailable, price: price)).ok;
 }
-

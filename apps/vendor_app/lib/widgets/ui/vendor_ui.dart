@@ -149,3 +149,34 @@ class VMoneyCount extends StatelessWidget {
     );
   }
 }
+
+/// "7:42 PM" in the phone's local time.
+String formatClock(DateTime t) {
+  final l = t.toLocal();
+  final h = l.hour % 12 == 0 ? 12 : l.hour % 12;
+  return '$h:${l.minute.toString().padLeft(2, '0')} ${l.hour < 12 ? 'AM' : 'PM'}';
+}
+
+/// "mm:ss" for a countdown (never negative).
+String formatMmSs(Duration d) {
+  final s = d.isNegative ? 0 : d.inSeconds;
+  return '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+}
+
+/// Centres [child] in the space available but scrolls when it does not fit (short screens, big text),
+/// so an empty / error state can never overflow.
+class VScrollCenter extends StatelessWidget {
+  const VScrollCenter({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, c) => SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: c.maxHeight.isFinite ? c.maxHeight : 0),
+            child: Center(child: child),
+          ),
+        ),
+      );
+}

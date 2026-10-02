@@ -4,12 +4,21 @@ import 'package:kraveo_ui/kraveo_ui.dart';
 import '../models/order_model.dart';
 import '../widgets/ui/ui.dart';
 
-/// Earnings, kept honest and simple: everything below is computed from the orders the
-/// app is holding right now - nothing is invented.
+/// Earnings, kept honest and simple: everything below is computed from real orders the app has loaded from
+/// Kraveo (the active queue plus the history pages). Nothing is invented; when today's history could not be
+/// loaded completely the screen says so instead of showing a confident number.
 class SalesAnalyticsScreen extends StatelessWidget {
   final List<OrderModel> orders;
 
-  const SalesAnalyticsScreen({super.key, required this.orders});
+  /// "Now" (injected by tests); defaults to the phone's clock.
+  final DateTime? now;
+
+  /// False when some of today's orders may be missing (history still loading or failed to load).
+  final bool complete;
+  final bool loading;
+  final VoidCallback? onRetry;
+
+  const SalesAnalyticsScreen({super.key, required this.orders, this.now, this.complete = true, this.loading = false, this.onRetry});
 
   static String _h12(int h) => '${h % 12 == 0 ? 12 : h % 12}';
   static String _ampm(int h) => (h % 24) < 12 ? 'AM' : 'PM';
@@ -20,22 +29,31 @@ class SalesAnalyticsScreen extends StatelessWidget {
     return _ampm(h) == _ampm(next) ? '${_h12(h)}-${_h12(next)} ${_ampm(h)}' : '${_h12(h)} ${_ampm(h)}-${_h12(next)} ${_ampm(next)}';
   }
 
+  /// Orders that count as sales: paid and not cancelled.
+  static bool _counts(OrderModel o) => o.status != OrderStatus.cancelled && o.status != OrderStatus.unknown && o.isPaid;
+
   @override
   Widget build(BuildContext context) {
     final k = context.k;
+    final clock = (now ?? DateTime.now()).toLocal();
+    final startOfToday = DateTime(clock.year, clock.month, clock.day);
 
-    // Live metrics, same sources as before.
-    final counted = orders.where((o) => o.status != OrderStatus.cancelled).toList();
-    final totalSales = counted.fold<double>(0, (sum, o) => sum + o.totalAmount);
-    final totalOrdersCount = counted.length;
-    final avgPrepTime = counted.isNotEmpty ? (counted.fold<int>(0, (sum, o) => sum + o.prepTimeMinutes) / counted.length).round() : 0;
+    final counted = orders.where(_counts).toList();
+    final today = counted.where((o) => !o.createdAt.isBefore(startOfToday)).toList();
+    final cancelledToday = orders.where((o) => o.status == OrderStatus.cancelled && !o.createdAt.isBefore(startOfToday)).length;
+    final totalSales = today.fold<double>(0, (sum, o) => sum + o.foodValue);
+    final totalOrdersCount = today.length;
 
     if (counted.isEmpty) {
-      return const VMaxWidth(
-        child: KEmptyState(
-          icon: LucideIcons.chartColumn,
-          title: 'No orders yet',
-          message: 'Your earnings will show up here after your first order.\nपहला ऑर्डर आते ही कमाई यहाँ दिखेगी।',
+      if (loading) return const Center(child: CircularProgressIndicator());
+      return VMaxWidth(
+        child: VScrollCenter(
+          child: KEmptyState(
+            icon: LucideIcons.chartColumn,
+            title: 'No orders yet',
+            message: complete ? 'Your earnings will show up here after your first order.\nपहला ऑर्डर आते ही कमाई यहाँ दिखेगी।' : "Could not load your past orders.\nपुराने ऑर्डर नहीं आ पाए।",
+            action: (!complete && onRetry != null) ? KButton(label: 'Try again', sublabel: 'फिर कोशिश करें', kind: KButtonKind.tonal, large: true, onPressed: onRetry) : null,
+          ),
         ),
       );
     }
@@ -78,14 +96,36 @@ class SalesAnalyticsScreen extends StatelessWidget {
     final topNames = qty.keys.toList()..sort((a, b) => qty[b]!.compareTo(qty[a]!));
     final top = topNames.take(5).toList();
     final maxQty = top.isEmpty ? 1 : qty[top.first]!;
+    final oldest = counted.map((o) => o.createdAt).reduce((a, b) => a.isBefore(b) ? a : b);
+    final windowLabel = 'From your last ${counted.length} paid orders, since ${oldest.day}/${oldest.month}  ·  पिछले ${counted.length} ऑर्डर से';
 
-    final hasTrend = totalOrdersCount >= 3;
+    final hasTrend = counted.length >= 3;
 
     return VMaxWidth(
       child: ListView(
         padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 32),
         children: [
-          // 3 honest numbers
+          if (!complete)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: KCard(
+                key: const ValueKey('earnings-incomplete'),
+                color: Color.alphaBlend(KraveoPalette.warning.withValues(alpha: 0.16), k.surface),
+                elevated: false,
+                child: Row(children: [
+                  Icon(LucideIcons.triangleAlert, size: 22, color: k.ink),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      loading ? 'Loading today\'s orders… numbers may still grow.  ·  लोड हो रहा है' : 'Some of today\'s orders could not be loaded. Numbers may be low.  ·  पूरी जानकारी नहीं आई',
+                      style: KraveoType.bodySm.copyWith(color: k.ink, fontSize: 14),
+                    ),
+                  ),
+                  if (!loading && onRetry != null) TextButton(onPressed: onRetry, child: const Text('Retry')),
+                ]),
+              ),
+            ),
+          // 3 honest numbers, all for today (since midnight)
           KReveal(
             child: KStatTile(
               label: "TODAY'S EARNINGS",
@@ -98,16 +138,21 @@ class SalesAnalyticsScreen extends StatelessWidget {
               ),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
+            child: Text('Food items of today\'s paid orders (since midnight), before Kraveo fees.  ·  सिर्फ खाने का दाम', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 13)),
+          ),
           const SizedBox(height: 12),
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Expanded(
               child: KReveal(
                 index: 1,
                 child: KStatTile(
-                  label: 'ORDERS',
+                  label: 'ORDERS TODAY',
                   icon: LucideIcons.receipt,
-                  hint: 'ऑर्डर',
-                  value: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: KAnimatedNumber(value: totalOrdersCount, style: KraveoType.numeric.copyWith(fontSize: 44, color: k.ink))),
+                  hint: 'आज के ऑर्डर',
+                  value: FittedBox(
+                      fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: KAnimatedNumber(value: totalOrdersCount, style: KraveoType.numeric.copyWith(fontSize: 44, color: k.ink))),
                 ),
               ),
             ),
@@ -116,17 +161,22 @@ class SalesAnalyticsScreen extends StatelessWidget {
               child: KReveal(
                 index: 2,
                 child: KStatTile(
-                  label: 'AVG PREP TIME',
-                  icon: LucideIcons.timer,
-                  hint: 'औसत समय',
+                  label: 'CANCELLED TODAY',
+                  icon: LucideIcons.circleX,
+                  hint: 'आज रद्द',
                   tint: KraveoPalette.warning,
-                  value: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: KAnimatedNumber(value: avgPrepTime, suffix: ' min', style: KraveoType.numeric.copyWith(fontSize: 44, color: k.ink))),
+                  value:
+                      FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: KAnimatedNumber(value: cancelledToday, style: KraveoType.numeric.copyWith(fontSize: 44, color: k.ink))),
                 ),
               ),
             ),
           ]),
 
           const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+            child: Text(windowLabel, style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 13)),
+          ),
           const VSectionLabel(english: 'Busy hours', hindi: 'व्यस्त समय'),
           KReveal(
             index: 3,
@@ -136,9 +186,7 @@ class SalesAnalyticsScreen extends StatelessWidget {
                 VHourChart(
                   hours: hours,
                   counts: counts,
-                  semanticsLabel: hasTrend
-                      ? 'Orders per hour. Busiest: ${_hourRange(peakHour)}, ${perHour[peak]} orders.'
-                      : 'Orders per hour. Not enough orders yet.',
+                  semanticsLabel: hasTrend ? 'Orders per hour. Busiest: ${_hourRange(peakHour)}, ${perHour[peak]} orders.' : 'Orders per hour. Not enough orders yet.',
                 ),
                 const SizedBox(height: 16),
                 Container(

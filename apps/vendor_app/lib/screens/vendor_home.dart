@@ -1,55 +1,104 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:wakelock_plus/wakelock_plus.dart';
-import '../config/api_config.dart';
-import '../services/permission_service.dart';
-import '../services/vendor_api_service.dart';
+import '../services/audio_alert_service.dart';
+import '../services/failure_messages.dart';
+import '../services/menu_stock_controller.dart';
+import '../services/order_queue_controller.dart';
 import '../services/order_queue_service.dart';
+import '../services/order_socket.dart';
+import '../services/permission_service.dart';
+import '../services/vendor_backend.dart';
 import '../session/session_controller.dart';
 import '../models/partner_session.dart';
-import '../models/order_model.dart';
-import '../models/dish_model.dart';
 import 'kitchen_queue.dart';
 import 'stock_manager.dart';
 import 'sales_analytics.dart';
 import '../widgets/ui/ui.dart';
 
 class VendorHomeScreen extends StatefulWidget {
-  const VendorHomeScreen({super.key});
+  /// Network layer; tests pass a fake. Defaults to the real Kraveo API.
+  final VendorBackend? backend;
+
+  /// Live order events; tests pass a fake. Defaults to Socket.io. Pass a factory returning null-free fakes.
+  final OrderSocketFactory? socketFactory;
+
+  /// The loud alarm; tests pass a fake.
+  final AlarmSink? alarm;
+
+  /// Restaurant id when no session is in scope (tests). Normally read from the signed-in session.
+  final String? vendorId;
+
+  final Duration pollInterval;
+
+  const VendorHomeScreen({super.key, this.backend, this.socketFactory, this.alarm, this.vendorId, this.pollInterval = const Duration(seconds: 15)});
 
   @override
   State<VendorHomeScreen> createState() => _VendorHomeScreenState();
 }
 
-class _VendorHomeScreenState extends State<VendorHomeScreen> {
+class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBindingObserver {
   int _currentIndex = 0;
-  bool isStoreOpen = true;
-  IO.Socket? _socket;
-  final String vendorId = 'ven-1';
+  late final VendorBackend _backend = widget.backend ?? const HttpVendorBackend();
+  OrderQueueController? _orders;
+  MenuStockController? _menu;
+  String? _vendorId;
+  bool _initialised = false;
 
-  // Master State for Kitchen Orders
-  late List<OrderModel> _orders;
-
-  // Master State for Menu Stock
-  late List<DishModel> _dishes;
+  /// What the server last told us about the store (null until known).
+  bool? _storeOpen;
+  bool _storeBusy = false;
 
   @override
   void initState() {
     super.initState();
-    _initSampleData();
+    WidgetsBinding.instance.addObserver(this);
     PermissionService.requestVendorPermissions();
     _enableScreenWakeLock();
-    _initWebSocket();
-    _fetchBackendOrders();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialised) return;
+    _initialised = true;
+    final session = SessionScope.maybeOf(context)?.session;
+    // The REAL restaurant id of the signed-in owner. There is no fallback id: without one, no orders load.
+    _vendorId = widget.vendorId ?? session?.vendorId;
+    _storeOpen = session?.isAcceptingOrders;
+    final id = _vendorId;
+    if (id == null || id.isEmpty) return;
+    final orders = OrderQueueController(
+      backend: _backend,
+      vendorId: id,
+      socket: (widget.socketFactory ?? SocketIoOrderSocket.new)(),
+      alarm: widget.alarm,
+      pollInterval: widget.pollInterval,
+    );
+    orders.addListener(_onOrdersChanged);
+    _orders = orders;
+    _menu = MenuStockController(backend: _backend, vendorId: id);
+    orders.start();
+    _syncStoreStatus();
   }
 
   @override
   void dispose() {
-    _socket?.disconnect();
-    _socket?.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _orders?.removeListener(_onOrdersChanged);
+    _orders?.dispose();
+    _menu?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Back from the background (or the phone woke up): reload at once, never wait for the next tick.
+    if (state == AppLifecycleState.resumed) {
+      _orders?.onResumed();
+      _syncStoreStatus();
+    }
   }
 
   Future<void> _enableScreenWakeLock() async {
@@ -58,202 +107,61 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     } catch (_) {}
   }
 
-  void _initWebSocket() {
-    try {
-      _socket = IO.io(
-        ApiConfig.baseUrl,
-        IO.OptionBuilder()
-            .setTransports(['websocket', 'polling'])
-            .disableAutoConnect()
-            .build(),
-      );
-
-      _socket?.connect();
-
-      _socket?.onConnect((_) {
-        debugPrint('🌐 [Vendor Socket] Connected to backend. Joining vendor_$vendorId');
-        _socket?.emit('join_room', 'vendor_$vendorId');
-      });
-
-      _socket?.on('new_order_alert', (data) {
-        debugPrint('🚨 [Vendor Socket] Real-time new order alert received: $data');
-        if (data is Map && isStoreOpen) {
-          _handleIncomingBackendOrder(data);
-        }
-      });
-    } catch (e) {
-      debugPrint('⚠️ [Vendor Socket Notice] Connection delayed ($e).');
-    }
-  }
-
-  Future<void> _fetchBackendOrders() async {
-    try {
-      final backendOrders = await VendorApiService.fetchIncomingOrders(vendorId);
-      if (backendOrders.isNotEmpty && mounted) {
-        debugPrint('📦 [Vendor App] Loaded ${backendOrders.length} orders from backend.');
+  /// A paid order is waiting: open its full-screen takeover (queued one after another).
+  void _onOrdersChanged() {
+    final c = _orders;
+    if (c == null || !mounted) return;
+    final waiting = c.incoming;
+    if (waiting.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || c.isDisposed) return;
+      for (final o in c.incoming) {
+        OrderQueueService.enqueueIncomingOrder(context, o.id, c);
       }
-    } catch (_) {}
+    });
   }
 
-  void _handleIncomingBackendOrder(Map<dynamic, dynamic> data) {
+  void _openIncoming(String orderId) {
+    final c = _orders;
+    if (c == null) return;
+    OrderQueueService.enqueueIncomingOrder(context, orderId, c);
+  }
+
+  Future<void> _syncStoreStatus() async {
+    final id = _vendorId;
+    if (id == null || _storeBusy) return;
+    final res = await _backend.fetchStoreOpen(id);
+    if (!mounted || _storeBusy || !res.ok) return;
+    setState(() => _storeOpen = res.data);
+  }
+
+  void _toast(String text, {bool error = false}) {
     if (!mounted) return;
-    try {
-      final id = data['id']?.toString() ?? 'ord-new';
-      final total = (data['totalAmount'] as num?)?.toDouble() ?? 250.0;
-      final student = data['customer']?['name']?.toString() ?? 'VIT Student';
-      final location = data['customer']?['hostelBlock']?.toString() ?? 'Hostel Gate';
-
-      final itemsRaw = data['items'] as List<dynamic>? ?? [];
-      final parsedItems = itemsRaw.map((it) {
-        return OrderItem(
-          name: it['name']?.toString() ?? 'Dish',
-          quantity: (it['quantity'] as num?)?.toInt() ?? 1,
-          unitPrice: (it['price'] as num?)?.toDouble() ?? 100.0,
-        );
-      }).toList();
-
-      final newOrder = OrderModel(
-        id: '#$id',
-        studentName: student,
-        studentLocation: location,
-        items: parsedItems.isNotEmpty
-            ? parsedItems
-            : [OrderItem(name: 'Dhaba Thali', quantity: 1, unitPrice: total)],
-        totalAmount: total,
-        prepTimeMinutes: 15,
-        createdAt: DateTime.now(),
-        status: OrderStatus.placed,
-      );
-
-      OrderQueueService.enqueueIncomingOrder(
-        context,
-        newOrder,
-        (acceptedOrder) {
-          setState(() {
-            _orders.insert(0, acceptedOrder);
-            _currentIndex = 0;
-          });
-          VendorApiService.updateOrderStatus(acceptedOrder.id, 'PREPARING');
-        },
-      );
-    } catch (e) {
-      debugPrint('⚠️ [Vendor App Error] Error handling incoming order: $e');
-    }
-  }
-
-  void _initSampleData() {
-    _orders = [
-      OrderModel(
-        id: '#ord-8492',
-        studentName: 'Rahul Sharma',
-        studentLocation: 'Hostel Block A, R-304',
-        items: [
-          OrderItem(name: 'Paneer Butter Masala', quantity: 1, unitPrice: 180),
-          OrderItem(name: 'Tandoori Roti', quantity: 4, unitPrice: 15),
-          OrderItem(name: 'Mango Lassi', quantity: 2, unitPrice: 60),
-        ],
-        totalAmount: 360,
-        prepTimeMinutes: 15,
-        createdAt: DateTime.now().subtract(const Duration(minutes: 4)),
-        customerNote: 'Make it extra spicy please!',
-        status: OrderStatus.preparing,
-      ),
-      OrderModel(
-        id: '#ord-8493',
-        studentName: 'Ananya Verma',
-        studentLocation: 'Girls Gate 1, Block C',
-        items: [
-          OrderItem(name: 'Cheese Butter Maggi', quantity: 2, unitPrice: 90),
-          OrderItem(name: 'Paneer Sandwich', quantity: 1, unitPrice: 110),
-        ],
-        totalAmount: 290,
-        prepTimeMinutes: 10,
-        createdAt: DateTime.now().subtract(const Duration(minutes: 2)),
-        customerNote: 'No onions in sandwich',
-        status: OrderStatus.preparing,
-      ),
-      OrderModel(
-        id: '#ord-8494',
-        studentName: 'Vikram Patel',
-        studentLocation: 'Hostel Block B, R-102',
-        items: [
-          OrderItem(name: 'Paneer Butter Masala', quantity: 2, unitPrice: 180),
-          OrderItem(name: 'Tandoori Roti', quantity: 8, unitPrice: 15),
-        ],
-        totalAmount: 480,
-        prepTimeMinutes: 20,
-        createdAt: DateTime.now().subtract(const Duration(minutes: 18)),
-        status: OrderStatus.readyForPickup,
-      ),
-    ];
-
-    _dishes = [
-      DishModel(id: 'd1', name: 'Paneer Butter Masala', category: 'Main Course', price: 180, inStock: true),
-      DishModel(id: 'd2', name: 'Tandoori Roti', category: 'Breads', price: 15, inStock: true),
-      DishModel(id: 'd3', name: 'Mango Lassi', category: 'Beverages', price: 60, inStock: false),
-      DishModel(id: 'd4', name: 'Cheese Butter Maggi', category: 'Snacks', price: 90, inStock: true),
-      DishModel(id: 'd5', name: 'Paneer Sandwich', category: 'Snacks', price: 110, inStock: true),
-      DishModel(id: 'd6', name: 'Chicken Biryani', category: 'Main Course', price: 220, inStock: true),
-      DishModel(id: 'd7', name: 'Cold Coffee', category: 'Beverages', price: 70, inStock: true),
-    ];
-  }
-
-  void _triggerIncomingOrderAlert() {
-    if (!isStoreOpen) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Store is CLOSED. Open the store to get orders.  ·  दुकान बंद है, पहले खोलें'),
-        ),
-      );
-      return;
-    }
-
-    final newOrder = OrderModel(
-      id: '#ord-${(DateTime.now().millisecondsSinceEpoch % 10000).toString().padLeft(4, '0')}',
-      studentName: 'Siddharth Roy',
-      studentLocation: 'Hostel Block C, R-210',
-      items: [
-        OrderItem(name: 'Paneer Butter Masala', quantity: 1, unitPrice: 180),
-        OrderItem(name: 'Tandoori Roti', quantity: 4, unitPrice: 15),
-      ],
-      totalAmount: 240,
-      prepTimeMinutes: 15,
-      createdAt: DateTime.now(),
-      status: OrderStatus.placed,
-    );
-
-    OrderQueueService.enqueueIncomingOrder(
-      context,
-      newOrder,
-      (acceptedOrder) {
-        setState(() {
-          _orders.insert(0, acceptedOrder);
-          _currentIndex = 0; // Switch to Kitchen Queue tab
-        });
-
-        // Sync order status to backend API
-        VendorApiService.updateOrderStatus(acceptedOrder.id.replaceAll('#', ''), 'PREPARING');
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Order ${acceptedOrder.id} accepted!  ·  किचन में जुड़ गया'),
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      },
-    );
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(text),
+        backgroundColor: error ? kDangerDeep : null,
+        duration: Duration(seconds: error ? 5 : 2),
+      ));
   }
 
   /// Opening is instant (it is always safe). Closing asks first, because a mis-tap would
-  /// silently stop new orders in the middle of a rush.
+  /// silently stop new orders in the middle of a rush. Live orders are never touched by this switch.
   Future<void> _toggleStoreStatusWithConfirmation(bool newValue) async {
+    final id = _vendorId;
+    if (_storeBusy) return;
+    if (id == null) {
+      _toast('This login is not linked to a restaurant. Call Kraveo.  ·  Kraveo को फ़ोन करें', error: true);
+      return;
+    }
     if (!newValue) {
       final confirmed = await showConfirmSheet(
         context,
         icon: LucideIcons.powerOff,
         title: 'Close the store?',
         hindiTitle: 'दुकान बंद करें?',
-        message: 'You will stop getting new orders until you open again.\nनए ऑर्डर आना बंद हो जाएंगे।',
+        message: 'You will stop getting new orders until you open again. Orders you already have stay.\nनए ऑर्डर आना बंद हो जाएंगे। चालू ऑर्डर बने रहेंगे।',
         safeLabel: 'Keep open',
         safeSublabel: 'खुला रखें',
         confirmLabel: 'Yes, close store',
@@ -262,17 +170,44 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
       if (!confirmed || !mounted) return;
     }
 
-    setState(() => isStoreOpen = newValue);
+    final before = _storeOpen;
+    setState(() {
+      _storeOpen = newValue;
+      _storeBusy = true;
+    });
+    final res = await _backend.setStoreOpen(id, newValue);
+    if (!mounted) return;
+    setState(() {
+      _storeBusy = false;
+      // Never show a state the server did not save.
+      _storeOpen = res.ok ? res.data : before;
+    });
+    if (res.ok) {
+      _toast(res.data == true ? 'Store is now OPEN for orders  ·  दुकान खुली' : 'Store is now CLOSED  ·  दुकान बंद');
+    } else {
+      _toast('Could not ${newValue ? 'open' : 'close'} the store. ${failureText(res.failure!, serverMessage: res.message, code: res.code).both}', error: true);
+    }
+  }
 
-    // Sync status to backend
-    VendorApiService.toggleStoreStatus('ven-1', isStoreOpen);
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(isStoreOpen ? 'Store is now OPEN for orders  ·  दुकान खुली' : 'Store is now CLOSED  ·  दुकान बंद'),
-        duration: const Duration(seconds: 2),
-      ),
+  /// Plays the alarm so the owner can check the volume. No order is created.
+  Future<void> _testAlarm() async {
+    await AudioAlertService.startLoudAlarm();
+    if (!mounted) return;
+    await showConfirmSheet(
+      context,
+      icon: LucideIcons.bellRing,
+      title: 'Can you hear the alarm?',
+      hindiTitle: 'क्या अलार्म सुनाई दे रहा है?',
+      message: 'Turn the phone volume up if it is quiet.\nआवाज़ कम है तो फ़ोन की आवाज़ बढ़ाएं।',
+      safeLabel: 'Stop alarm',
+      safeSublabel: 'अलार्म बंद करें',
+      confirmLabel: 'Yes, I hear it',
+      confirmSublabel: 'हाँ, सुनाई दे रहा है',
+      destructive: false,
     );
+    await AudioAlertService.stopAlarm();
+    // A real order may be waiting: let it ring again.
+    _orders?.resyncAlarm();
   }
 
   void _callCampusAdminSupport() {
@@ -361,7 +296,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
               large: true,
               onPressed: () {
                 Navigator.of(sheetContext).pop();
-                _triggerIncomingOrderAlert();
+                _testAlarm();
               },
             ),
             if (partner != null) ...[
@@ -399,7 +334,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
   Widget build(BuildContext context) {
     final k = context.k;
     final partner = SessionScope.maybeOf(context)?.session;
-    final activeCount = _orders.where((o) => o.status == OrderStatus.preparing || o.status == OrderStatus.readyForPickup).length;
+    final orders = _orders;
+    final menu = _menu;
 
     return Scaffold(
       body: SafeArea(
@@ -451,41 +387,77 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
               padding: const EdgeInsets.symmetric(horizontal: KSpace.gutter),
               child: VMaxWidth(
                 child: VStoreStatusHero(
-                  isOpen: isStoreOpen,
-                  onTap: () => _toggleStoreStatusWithConfirmation(!isStoreOpen),
+                  isOpen: _storeOpen ?? true,
+                  onTap: () => _toggleStoreStatusWithConfirmation(!(_storeOpen ?? true)),
                 ),
               ),
             ),
 
             Expanded(
-              child: IndexedStack(
-                index: _currentIndex,
-                children: [
-                  KitchenQueueScreen(
-                    orders: _orders,
-                    onOrderUpdate: () => setState(() {}),
-                  ),
-                  StockManagerScreen(
-                    dishes: _dishes,
-                    onDishListChanged: () => setState(() {}),
-                  ),
-                  SalesAnalyticsScreen(
-                    orders: _orders,
-                  ),
-                ],
-              ),
+              child: (orders == null || menu == null)
+                  ? const _NoRestaurantLinked()
+                  : IndexedStack(
+                      index: _currentIndex,
+                      children: [
+                        KitchenQueueScreen(controller: orders, onOpenIncoming: _openIncoming),
+                        StockManagerScreen(controller: menu),
+                        ListenableBuilder(
+                          listenable: orders,
+                          builder: (context, _) {
+                            final now = DateTime.now();
+                            final today = DateTime(now.year, now.month, now.day);
+                            return SalesAnalyticsScreen(
+                              orders: orders.allOrders,
+                              now: now,
+                              complete: orders.historyCovers(today),
+                              loading: orders.historyLoading,
+                              onRetry: () => orders.loadHistorySince(today),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
             ),
           ],
         ),
       ),
-      bottomNavigationBar: VBigNav(
-        index: _currentIndex,
-        onChanged: (index) => setState(() => _currentIndex = index),
-        items: [
-          VNavItem(icon: LucideIcons.chefHat, label: 'Orders', hindi: 'ऑर्डर', badge: activeCount),
-          const VNavItem(icon: LucideIcons.utensils, label: 'Menu', hindi: 'मेनू'),
-          const VNavItem(icon: LucideIcons.wallet, label: 'Earnings', hindi: 'कमाई'),
-        ],
+      bottomNavigationBar: orders == null
+          ? null
+          : ListenableBuilder(
+              listenable: orders,
+              builder: (context, _) => VBigNav(
+                index: _currentIndex,
+                onChanged: (index) {
+                  setState(() => _currentIndex = index);
+                  if (index == 2) {
+                    final now = DateTime.now();
+                    orders.loadHistorySince(DateTime(now.year, now.month, now.day));
+                  }
+                },
+                items: [
+                  VNavItem(icon: LucideIcons.chefHat, label: 'Orders', hindi: 'ऑर्डर', badge: orders.incoming.length + orders.kitchen.length),
+                  const VNavItem(icon: LucideIcons.utensils, label: 'Menu', hindi: 'मेनू'),
+                  const VNavItem(icon: LucideIcons.wallet, label: 'Earnings', hindi: 'कमाई'),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+/// The signed-in account has no restaurant attached: say so instead of showing an empty kitchen.
+class _NoRestaurantLinked extends StatelessWidget {
+  const _NoRestaurantLinked();
+
+  @override
+  Widget build(BuildContext context) {
+    return const VMaxWidth(
+      child: VScrollCenter(
+        child: KEmptyState(
+          icon: LucideIcons.store,
+          title: 'No restaurant linked',
+          message: 'This login is not linked to a restaurant yet. Call Kraveo Campus Ops.\nयह खाता किसी रेस्टोरेंट से जुड़ा नहीं है। Kraveo को फ़ोन करें।',
+        ),
       ),
     );
   }

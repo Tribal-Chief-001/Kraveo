@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
 
@@ -11,7 +12,7 @@ class AudioAlertService {
     if (_isPlaying) return;
     _isPlaying = true;
 
-    print('🔊 [Kraveo Audio Engine] LOUD CONTINUOUS ORDER ALARM RINGING AT MAXIMUM VOLUME!');
+    debugPrint('🔊 [Kraveo Audio Engine] LOUD CONTINUOUS ORDER ALARM RINGING AT MAXIMUM VOLUME!');
 
     try {
       // Safely stop & dispose old player instance if it exists to prevent native audio daemon memory leaks
@@ -28,7 +29,7 @@ class AudioAlertService {
       // Configure Android Audio Context for maximum alert volume override
       await player.setAudioContext(
         AudioContext(
-          android: AudioContextAndroid(
+          android: const AudioContextAndroid(
             audioMode: AndroidAudioMode.normal,
             contentType: AndroidContentType.sonification,
             usageType: AndroidUsageType.alarm,
@@ -36,7 +37,7 @@ class AudioAlertService {
           ),
           iOS: AudioContextIOS(
             category: AVAudioSessionCategory.playback,
-            options: {
+            options: const {
               AVAudioSessionOptions.duckOthers,
             },
           ),
@@ -59,7 +60,7 @@ class AudioAlertService {
         return;
       }
     } catch (e) {
-      print('⚠️ [Audio Engine Notice] Network sound source delayed ($e). Continuous periodic audio chime active.');
+      debugPrint('⚠️ [Audio Engine Notice] Network sound source delayed ($e). Continuous periodic audio chime active.');
     }
 
     if (!_isPlaying) return;
@@ -71,7 +72,7 @@ class AudioAlertService {
         timer.cancel();
         return;
       }
-      print('🔔 BEEP! BEEP! INCOMING ORDER ALERT RINGING IN DHABA KITCHEN!');
+      debugPrint('🔔 BEEP! BEEP! INCOMING ORDER ALERT RINGING IN DHABA KITCHEN!');
     });
   }
 
@@ -89,10 +90,10 @@ class AudioAlertService {
         await playerToStop.dispose();
       }
     } catch (e) {
-      print('⚠️ [Audio Engine] Error stopping audio player: $e');
+      debugPrint('⚠️ [Audio Engine] Error stopping audio player: $e');
     }
 
-    print('🔕 [Kraveo Audio Engine] Audio Ringing Alarm Stopped.');
+    debugPrint('🔕 [Kraveo Audio Engine] Audio Ringing Alarm Stopped.');
   }
 
   static bool get isPlaying => _isPlaying;

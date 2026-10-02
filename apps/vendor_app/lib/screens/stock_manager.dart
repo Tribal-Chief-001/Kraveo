@@ -1,21 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
-import '../models/dish_model.dart';
 import '../widgets/stock_card.dart';
 import '../widgets/add_dish_modal.dart';
 import '../widgets/ui/ui.dart';
-import '../services/vendor_api_service.dart';
+import '../services/failure_messages.dart';
+import '../services/menu_stock_controller.dart';
 
+/// The Menu tab: the restaurant's real menu from Kraveo. Sold-out switches and prices save to the server
+/// and roll back (with a message) if saving fails.
 class StockManagerScreen extends StatefulWidget {
-  final List<DishModel> dishes;
-  final VoidCallback onDishListChanged;
+  final MenuStockController controller;
 
-  const StockManagerScreen({
-    super.key,
-    required this.dishes,
-    required this.onDishListChanged,
-  });
+  const StockManagerScreen({super.key, required this.controller});
 
   @override
   State<StockManagerScreen> createState() => _StockManagerScreenState();
@@ -28,33 +25,41 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
   String _searchQuery = '';
   _StockFilter _stockFilter = _StockFilter.all;
 
-  final List<String> _categories = [
-    'All',
-    'Main Course',
-    'Breads',
-    'Beverages',
-    'Snacks',
-    'Fast Food',
-  ];
+  MenuStockController get _c => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _c.onError = _showError;
+    if (!_c.loadedOnce && !_c.loading) _c.load();
+  }
+
+  @override
+  void dispose() {
+    if (_c.onError == _showError) _c.onError = null;
+    super.dispose();
+  }
+
+  void _showError(FailureText text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text('Not saved. ${text.both}'), backgroundColor: kDangerDeep, duration: const Duration(seconds: 4)));
+  }
 
   void _openAddDishModal() {
     showKSheet<void>(
       context,
       builder: (sheetContext) {
         return AddDishModal(
-          onDishAdded: (newDish) {
-            setState(() {
-              widget.dishes.add(newDish);
-            });
-            widget.onDishListChanged();
-            VendorApiService.updateDishStock(
-              newDish.id,
-              isAvailable: newDish.inStock,
-              price: newDish.price,
-            );
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('${newDish.name} added to menu!  ·  मेनू में जुड़ गया')),
-            );
+          onSubmit: (name, category, price, inStock) async {
+            final problem = await _c.addDish(name: name, category: category, price: price, inStock: inStock);
+            if (problem == null && mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('$name added to menu!  ·  मेनू में जुड़ गया')),
+              );
+            }
+            return problem;
           },
         );
       },
@@ -62,13 +67,34 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final k = context.k;
-    final totalDishes = widget.dishes.length;
-    final inStockCount = widget.dishes.where((d) => d.inStock).length;
-    final soldOutCount = widget.dishes.where((d) => !d.inStock).length;
+  Widget build(BuildContext context) => ListenableBuilder(listenable: _c, builder: (context, _) => _build(context));
 
-    final filteredDishes = widget.dishes.where((dish) {
+  Widget _build(BuildContext context) {
+    final k = context.k;
+    final dishes = _c.dishes;
+
+    if (!_c.loadedOnce) {
+      return VMaxWidth(
+        child: _c.loadFailure == null
+            ? const Center(child: CircularProgressIndicator())
+            : VScrollCenter(
+                child: KEmptyState(
+                  icon: LucideIcons.wifiOff,
+                  title: "Can't load your menu",
+                  message: failureText(_c.loadFailure!).both,
+                  action: KButton(label: 'Retry', sublabel: 'फिर कोशिश करें', icon: LucideIcons.rotateCcw, large: true, onPressed: _c.load),
+                ),
+              ),
+      );
+    }
+
+    final totalDishes = dishes.length;
+    final inStockCount = dishes.where((d) => d.inStock).length;
+    final soldOutCount = dishes.where((d) => !d.inStock).length;
+    final categories = ['All', ...{for (final d in dishes) d.category}];
+    if (!categories.contains(_selectedCategory)) _selectedCategory = 'All';
+
+    final filteredDishes = dishes.where((dish) {
       final matchesCategory = _selectedCategory == 'All' || dish.category == _selectedCategory;
       final matchesSearch = _searchQuery.isEmpty || dish.name.toLowerCase().contains(_searchQuery.toLowerCase());
       final matchesStock = switch (_stockFilter) {
@@ -82,7 +108,9 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
     return Material(
       color: Colors.transparent,
       child: VMaxWidth(
-        child: ListView(
+        child: RefreshIndicator(
+          onRefresh: _c.load,
+          child: ListView(
           padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 32),
           children: [
             // Tap a tile to show only that group
@@ -143,10 +171,10 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
               clipBehavior: Clip.none,
               child: Row(
                 children: [
-                  for (final cat in _categories) ...[
+                  for (final cat in categories) ...[
                     VChoiceChip(
                       label: cat,
-                      sublabel: hindiCategory(cat),
+                      sublabel: hindiCategory(cat).isEmpty ? null : hindiCategory(cat),
                       selected: _selectedCategory == cat,
                       onTap: () => setState(() => _selectedCategory = cat),
                     ),
@@ -158,12 +186,14 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
             const SizedBox(height: 18),
 
             if (filteredDishes.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 12),
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
                 child: KEmptyState(
                   icon: LucideIcons.utensils,
-                  title: 'No dishes found',
-                  message: 'Try another search, or tap the yellow + button.\nदूसरा नाम खोजें या पीला + दबाएं।',
+                  title: dishes.isEmpty ? 'Your menu is empty' : 'No dishes found',
+                  message: dishes.isEmpty
+                      ? 'Tap the yellow + button to add your first dish.\nपहला व्यंजन जोड़ने के लिए पीला + दबाएं।'
+                      : 'Try another search, or tap the yellow + button.\nदूसरा नाम खोजें या पीला + दबाएं।',
                 ),
               )
             else
@@ -175,32 +205,13 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
                     index: i,
                     child: StockCard(
                       dish: filteredDishes[i],
-                      onToggleStock: () {
-                        final dish = filteredDishes[i];
-                        setState(() {
-                          dish.inStock = !dish.inStock;
-                        });
-                        widget.onDishListChanged();
-                        VendorApiService.updateDishStock(
-                          dish.id,
-                          isAvailable: dish.inStock,
-                        );
-                      },
-                      onUpdatePrice: (newPrice) {
-                        final dish = filteredDishes[i];
-                        setState(() {
-                          dish.price = newPrice;
-                        });
-                        widget.onDishListChanged();
-                        VendorApiService.updateDishStock(
-                          dish.id,
-                          price: newPrice,
-                        );
-                      },
+                      onToggleStock: () => _c.toggleStock(filteredDishes[i]),
+                      onUpdatePrice: (newPrice) => _c.changePrice(filteredDishes[i], newPrice),
                     ),
                   ),
                 ),
           ],
+        ),
         ),
       ),
     );

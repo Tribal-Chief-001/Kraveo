@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
-import '../models/dish_model.dart';
+import '../services/failure_messages.dart';
 import 'ui/ui.dart';
 
 /// Content of the "Add dish" bottom sheet. Present it with `showKSheet` (it supplies the
 /// rounded sheet + drag handle); this widget only lays out the form.
 class AddDishModal extends StatefulWidget {
-  final Function(DishModel newDish) onDishAdded;
+  /// Saves the dish on Kraveo. Resolves to null on success (the sheet closes) or to what went wrong
+  /// (the sheet stays open with the message, nothing typed is lost).
+  final Future<FailureText?> Function(String name, String category, double price, bool inStock) onSubmit;
 
-  const AddDishModal({super.key, required this.onDishAdded});
+  const AddDishModal({super.key, required this.onSubmit});
 
   @override
   State<AddDishModal> createState() => _AddDishModalState();
@@ -21,6 +23,8 @@ class _AddDishModalState extends State<AddDishModal> {
   final _priceController = TextEditingController();
   String _selectedCategory = 'Main Course';
   bool _inStock = true;
+  bool _saving = false;
+  FailureText? _error;
 
   final List<String> _categories = [
     'Main Course',
@@ -38,20 +42,22 @@ class _AddDishModalState extends State<AddDishModal> {
     super.dispose();
   }
 
-  void _submitForm() {
-    if (_formKey.currentState!.validate()) {
-      final double price = double.parse(_priceController.text);
-      final newDish = DishModel(
-        id: 'dish-${DateTime.now().millisecondsSinceEpoch}',
-        name: _nameController.text.trim(),
-        category: _selectedCategory,
-        price: price,
-        inStock: _inStock,
-      );
-
-      widget.onDishAdded(newDish);
+  Future<void> _submitForm() async {
+    if (_saving || !_formKey.currentState!.validate()) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final problem = await widget.onSubmit(_nameController.text.trim(), _selectedCategory, double.parse(_priceController.text.trim()), _inStock);
+    if (!mounted) return;
+    if (problem == null) {
       Navigator.pop(context);
+      return;
     }
+    setState(() {
+      _saving = false;
+      _error = problem;
+    });
   }
 
   Widget _fieldLabel(KraveoTokens k, String en, String hi) => Padding(
@@ -144,8 +150,8 @@ class _AddDishModalState extends State<AddDishModal> {
                 if (val == null || val.trim().isEmpty) {
                   return 'Please enter price';
                 }
-                final p = double.tryParse(val);
-                if (p == null || p < 0) {
+                final p = double.tryParse(val.trim());
+                if (p == null || p <= 0) {
                   return 'Enter a valid price';
                 }
                 return null;
@@ -157,7 +163,12 @@ class _AddDishModalState extends State<AddDishModal> {
             VStockSwitch(inStock: _inStock, onToggle: () => setState(() => _inStock = !_inStock), dishName: 'New dish'),
             const SizedBox(height: 24),
 
-            KButton(label: 'Add to menu', sublabel: 'मेनू में जोड़ें', icon: LucideIcons.plus, large: true, onPressed: _submitForm),
+            if (_error != null) ...[
+              Text('Not saved: ${_error!.english}', key: const ValueKey('add-dish-error'), style: KraveoType.titleMd.copyWith(color: kDangerDeep, fontSize: 15)),
+              Text(_error!.hindi, style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
+              const SizedBox(height: 10),
+            ],
+            KButton(label: 'Add to menu', sublabel: 'मेनू में जोड़ें', icon: LucideIcons.plus, large: true, loading: _saving, onPressed: _saving ? null : _submitForm),
           ],
         ),
       ),

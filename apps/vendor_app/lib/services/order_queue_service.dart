@@ -1,94 +1,57 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
-import '../models/order_model.dart';
 import '../widgets/incoming_order_dialog.dart';
 import 'audio_alert_service.dart';
+import 'order_queue_controller.dart';
 
+/// Shows the full-screen "new order" takeover for each paid order waiting for an answer, one at a
+/// time, in the order they arrived. The orders and the alarm belong to [OrderQueueController]; this only
+/// sequences the dialogs (no duplicates, the next one opens when the current one closes).
 class OrderQueueService {
-  static final List<OrderModel> _incomingQueue = [];
-  static bool _isShowingDialog = false;
+  static final List<String> _queue = [];
+  static String? _showingId;
 
-  /// Enqueues a new incoming order alert and presents modal dialogs sequentially.
-  static void enqueueIncomingOrder(BuildContext context, OrderModel newOrder, Function(OrderModel acceptedOrder) onOrderAccepted) {
-    // Avoid duplicate order enqueuing
-    if (_incomingQueue.any((o) => o.id == newOrder.id)) {
-      print('⚠️ [Order Queue Engine] Order ${newOrder.id} already in queue. Skipping duplicate.');
+  static bool get isShowingDialog => _showingId != null;
+  static String? get showingOrderId => _showingId;
+
+  /// Orders waiting behind the dialog that is open now.
+  static int get pendingCount => _queue.length;
+
+  /// Queues the takeover for [orderId]. Ignored when that order is already showing or queued.
+  static void enqueueIncomingOrder(BuildContext context, String orderId, OrderQueueController controller) {
+    if (_showingId == orderId || _queue.contains(orderId)) return;
+    _queue.add(orderId);
+    if (_showingId == null) _showNext(context, controller);
+  }
+
+  static void _showNext(BuildContext context, OrderQueueController controller) {
+    while (_queue.isNotEmpty) {
+      final id = _queue.removeAt(0);
+      if (!context.mounted || controller.isDisposed) {
+        _queue.clear();
+        return;
+      }
+      // Answered on another phone, cancelled or expired before its turn came: nothing to ask.
+      if (controller.byId(id)?.isIncoming != true) continue;
+      if (!context.mounted) return;
+      _showingId = id;
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => IncomingOrderDialog(orderId: id, controller: controller),
+      ).whenComplete(() {
+        if (_showingId == id) _showingId = null;
+        // _showNext checks context.mounted before it uses the context.
+        // ignore: use_build_context_synchronously
+        _showNext(context, controller);
+      });
       return;
-    }
-
-    _incomingQueue.add(newOrder);
-    print('📥 [Order Queue Engine] Enqueued incoming order ${newOrder.id}. Queue length: ${_incomingQueue.length}');
-
-    if (!_isShowingDialog) {
-      _processNextOrderInQueue(context, onOrderAccepted);
     }
   }
 
-  static void _processNextOrderInQueue(BuildContext context, Function(OrderModel acceptedOrder) onOrderAccepted) {
-    if (_incomingQueue.isEmpty) {
-      _isShowingDialog = false;
-      AudioAlertService.stopAlarm();
-      print('🔕 [Order Queue Engine] All pending incoming order alerts resolved.');
-      return;
-    }
-
-    if (!context.mounted) {
-      print('⚠️ [Order Queue Engine] Context unmounted while processing queue. Retrying when context available.');
-      // Keep queue active so next interaction or screen resume can process
-      _isShowingDialog = false;
-      return;
-    }
-
-    _isShowingDialog = true;
-    final currentOrder = _incomingQueue.removeAt(0);
-
-    // Start loud continuous alarm for current order
-    AudioAlertService.startLoudAlarm();
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => IncomingOrderDialog(
-        order: currentOrder,
-        onAccept: (acceptedOrder) {
-          AudioAlertService.stopAlarm();
-          onOrderAccepted(acceptedOrder);
-
-          // Process next order in queue after short delay
-          Future.delayed(const Duration(milliseconds: 300), () {
-            _processNextOrderInQueue(context, onOrderAccepted);
-          });
-        },
-        onDecline: () {
-          AudioAlertService.stopAlarm();
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Order ${currentOrder.id} Declined / अस्वीकार किया'),
-                backgroundColor: const Color(0xFFBA1A1A),
-              ),
-            );
-          }
-
-          // Process next order in queue after short delay
-          Future.delayed(const Duration(milliseconds: 300), () {
-            _processNextOrderInQueue(context, onOrderAccepted);
-          });
-        },
-      ),
-    ).then((_) {
-      // Safety net: If dialog popped without onAccept/onDecline (e.g. unexpected pop), stop alarm
-      AudioAlertService.stopAlarm();
-    });
-  }
-
-  /// Reset queue state (useful for cleanup or testing)
+  /// Forgets every queued pop-up and silences the alarm (logout / session expiry).
   static void clearQueue() {
-    _incomingQueue.clear();
-    _isShowingDialog = false;
+    _queue.clear();
+    _showingId = null;
     AudioAlertService.stopAlarm();
   }
-
-  static int get pendingCount => _incomingQueue.length;
 }
-

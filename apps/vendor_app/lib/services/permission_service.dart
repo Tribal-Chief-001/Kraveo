@@ -1,14 +1,15 @@
+import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class PermissionService {
   /// Prompts dhaba cook for Notification, Alarm, Audio, and Background permissions on app start.
   static Future<void> requestVendorPermissions() async {
-    print('🔑 [Permission Engine] Requesting runtime Android system permissions for Vendor App...');
+    debugPrint('🔑 [Permission Engine] Requesting runtime Android system permissions for Vendor App...');
 
     try {
       // 1. Notification Permission (Android 13+)
       final notificationStatus = await Permission.notification.request();
-      print('🔔 Notification Permission Status: $notificationStatus');
+      debugPrint('🔔 Notification Permission Status: $notificationStatus');
 
       // 2. Exact Alarm Permission (Android 12+)
       if (await Permission.scheduleExactAlarm.isDenied) {
@@ -25,7 +26,7 @@ class PermissionService {
         await Permission.ignoreBatteryOptimizations.request();
       }
     } catch (e) {
-      print('⚠️ Permission Handler Notice: $e');
+      debugPrint('⚠️ Permission Handler Notice: $e');
     }
   }
 }

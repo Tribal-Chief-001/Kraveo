@@ -41,9 +41,9 @@ PartnerSession _with(PartnerApproval a, {String? reason}) => PartnerSession(
     );
 
 class FakeAuth implements PartnerAuthService {
-  SignupResult Function(PartnerSignupForm f) onSignUp = (_) => SignupResult.success(token: 'jwt-new', session: _pending);
-  SignupResult Function(PartnerSignupForm f) onResubmit = (_) => SignupResult.success(session: _pending);
-  ProfileResult profile = ProfileResult(ProfileOutcome.valid, _pending);
+  SignupResult Function(PartnerSignupForm f) onSignUp = (_) => const SignupResult.success(token: 'jwt-new', session: _pending);
+  SignupResult Function(PartnerSignupForm f) onResubmit = (_) => const SignupResult.success(session: _pending);
+  ProfileResult profile = const ProfileResult(ProfileOutcome.valid, _pending);
   final signUps = <PartnerSignupForm>[];
   final resubmits = <PartnerSignupForm>[];
   int profileCalls = 0;
