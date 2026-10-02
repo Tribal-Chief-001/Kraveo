@@ -2,22 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-/// Home hero: today's earnings as a giant count-up number + two glanceable stat tiles.
+/// Home hero: today's delivery fees (summed from the rider's real delivered orders) + two tiles.
+/// These are the orders' delivery fees, not a payout statement: Kraveo has no payout API yet.
 class EarningsCard extends StatelessWidget {
   final double todayEarnings;
   final int completedTrips;
+  final double weekFees;
   final VoidCallback? onTap;
-
-  /// Share of today's trips delivered within the promised window.
-  /// Placeholder until the backend exposes it (defaults to the previous mock figure).
-  final int onTimePercent;
 
   const EarningsCard({
     super.key,
     required this.todayEarnings,
     required this.completedTrips,
+    required this.weekFees,
     this.onTap,
-    this.onTimePercent = 96,
   });
 
   @override
@@ -38,7 +36,7 @@ class EarningsCard extends StatelessWidget {
               Row(children: [
                 Icon(LucideIcons.wallet, size: 18, color: k.inkMuted),
                 const SizedBox(width: 8),
-                Expanded(child: Text('TODAY\'S EARNINGS', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.inkMuted, letterSpacing: 1.2))),
+                Expanded(child: Text('DELIVERY FEES TODAY', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.inkMuted, letterSpacing: 1.2))),
                 if (onTap != null) Icon(LucideIcons.chevronRight, size: 22, color: k.inkFaint),
               ]),
               const SizedBox(height: 4),
@@ -62,17 +60,17 @@ class EarningsCard extends StatelessWidget {
             child: _MiniStat(
               icon: LucideIcons.bike,
               tint: KStatus.pickedUp.color,
-              label: 'Trips',
+              label: 'Trips today',
               value: KAnimatedNumber(value: completedTrips, style: KraveoType.numericSm.copyWith(color: k.ink, fontSize: 28)),
             ),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: _MiniStat(
-              icon: LucideIcons.clock,
+              icon: LucideIcons.calendarDays,
               tint: k.brand,
-              label: 'On time',
-              value: KAnimatedNumber(value: onTimePercent, suffix: '%', style: KraveoType.numericSm.copyWith(color: k.ink, fontSize: 28)),
+              label: 'Fees, 7 days',
+              value: KAnimatedNumber(value: weekFees, prefix: '₹', style: KraveoType.numericSm.copyWith(color: k.ink, fontSize: 28)),
             ),
           ),
         ]),

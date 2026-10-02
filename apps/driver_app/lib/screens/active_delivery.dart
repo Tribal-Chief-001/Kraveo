@@ -1,213 +1,456 @@
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import '../widgets/pipeline_stepper.dart';
+import '../models/order_view.dart';
+import '../state/rider_controller.dart';
 import '../widgets/gate_otp_dialog.dart';
+import '../widgets/pipeline_stepper.dart';
+import '../widgets/support_sheet.dart';
+import '../widgets/swipe_accept_card.dart' show OfferCard;
 import '../widgets/ui/screen_header.dart';
-import '../services/driver_api_service.dart';
 
-class ActiveDeliveryScreen extends StatefulWidget {
-  final int currentStep;
-  final ValueChanged<int> onStepChanged;
-  final VoidCallback onCompleted;
-  final VoidCallback? onCancel;
+/// The delivery the rider is carrying, driven only by the order's real status on the server:
+/// go to restaurant -> wait for READY_FOR_PICKUP -> Picked up -> ride to the drop point ->
+/// Arrived -> enter the customer's code -> delivered. Also shows how a delivery ended
+/// (delivered / cancelled / moved by Kraveo) until the rider acknowledges it.
+class ActiveDeliveryScreen extends StatelessWidget {
+  const ActiveDeliveryScreen({super.key, required this.controller, required this.onGoHome});
 
-  const ActiveDeliveryScreen({
-    super.key,
-    required this.currentStep,
-    required this.onStepChanged,
-    required this.onCompleted,
-    this.onCancel,
-  });
+  final RiderController controller;
+  final VoidCallback onGoHome;
 
   @override
-  State<ActiveDeliveryScreen> createState() => _ActiveDeliveryScreenState();
-}
-
-class _ActiveDeliveryScreenState extends State<ActiveDeliveryScreen> {
-  final String orderId = '#ord-8492';
-  final String customerName = 'Aman Sharma';
-  final String customerPhone = '+91 98765 43210';
-  final String dhabaName = 'FC Night Mess';
-  final String hostelGate = 'Boys Hostel Block 1 (Gate 2)';
-
-  bool _detailsOpen = false;
-
-  void _callCustomer() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        final k = context.k;
-        return AlertDialog(
-          title: Row(
-            children: [
-              Icon(LucideIcons.phoneCall, color: k.brand),
-              const SizedBox(width: 12),
-              Expanded(child: Text('Call $customerName', maxLines: 2, overflow: TextOverflow.ellipsis)),
-            ],
-          ),
-          content: Text(
-            'Dialing $customerPhone...\nMake sure to coordinate exact pickup/handshake gate.',
-            style: KraveoType.body.copyWith(color: k.inkMuted),
-          ),
-          actions: [
-            KButton(label: 'End call', kind: KButtonKind.danger, large: true, icon: LucideIcons.phone, onPressed: () => Navigator.pop(context)),
-          ],
-        );
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final notice = controller.notice;
+        final order = controller.active;
+        final Widget body;
+        if (notice != null) {
+          body = _NoticeView(
+            notice: notice,
+            onDone: () {
+              controller.dismissNotice();
+              if (controller.active == null) onGoHome();
+            },
+          );
+        } else if (order != null) {
+          body = _DeliveryView(controller: controller, order: order);
+        } else if (!controller.activeChecked) {
+          body = const Center(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 3)),
+              SizedBox(height: 16),
+              Text('Checking for a delivery in progress…'),
+            ]),
+          );
+        } else {
+          body = KEmptyState(
+            icon: LucideIcons.bike,
+            title: 'No active delivery',
+            message: 'Accept an order from Home to start step-by-step guidance.',
+            action: KButton(label: 'Go to home', icon: LucideIcons.house, large: true, expand: false, onPressed: onGoHome),
+          );
+        }
+        return Scaffold(body: SafeArea(bottom: false, child: body));
       },
     );
   }
+}
 
-  void _openMapRoute() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Opening Navigation Route to Campus Gate...'),
-        duration: Duration(seconds: 2),
-      ),
-    );
-  }
+class _DeliveryView extends StatefulWidget {
+  const _DeliveryView({required this.controller, required this.order});
+  final RiderController controller;
+  final OrderView order;
 
-  void _triggerGateOtp() {
-    showDialog(
+  @override
+  State<_DeliveryView> createState() => _DeliveryViewState();
+}
+
+class _DeliveryViewState extends State<_DeliveryView> {
+  bool _detailsOpen = false;
+
+  RiderController get c => widget.controller;
+  OrderView get o => widget.order;
+
+  Future<void> _openCodeEntry() async {
+    await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => GateOtpDialog(
-        orderId: orderId,
-        customerName: customerName,
-        gateName: hostelGate,
-        expectedOtp: '4829',
-        onVerified: (verifiedOtp) {
-          DriverApiService.updateDeliveryStatus(orderId, 'DELIVERED', otpCode: verifiedOtp);
-          widget.onCompleted();
-        },
+      builder: (_) => GateOtpDialog(
+        orderRef: o.shortRef,
+        customerName: o.customer?.name ?? 'the customer',
+        gateName: o.dropLabel,
+        initiallyLocked: c.activeLocked,
+        onSubmit: c.verifyOtp,
       ),
     );
   }
 
-  void _advanceStep() {
-    final nextStep = widget.currentStep + 1;
-    if (nextStep == 1) {
-      DriverApiService.updateDeliveryStatus(orderId, 'PICKED_UP');
-    } else if (nextStep == 2) {
-      DriverApiService.updateDeliveryStatus(orderId, 'ARRIVED_AT_GATE');
-    }
-    widget.onStepChanged(nextStep);
+  Future<void> _confirmRelease() async {
+    final yes = await showKSheet<bool>(
+      context,
+      builder: (ctx) {
+        final k = ctx.k;
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('Release this job?', textAlign: TextAlign.center, style: KraveoType.headline.copyWith(color: k.ink)),
+            const SizedBox(height: 8),
+            Text('Order ${o.shortRef} goes back to other riders. Only do this if you cannot pick it up.',
+                textAlign: TextAlign.center, style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 16)),
+            const SizedBox(height: 24),
+            KButton(label: 'Keep the job', large: true, onPressed: () => Navigator.of(ctx).pop(false)),
+            const SizedBox(height: 12),
+            KButton(
+              key: const ValueKey('confirm-release-button'),
+              label: 'Yes, release it',
+              kind: KButtonKind.danger,
+              large: true,
+              onPressed: () => Navigator.of(ctx).pop(true),
+            ),
+          ]),
+        );
+      },
+    );
+    if (yes == true) await c.release();
   }
 
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    final step = widget.currentStep.clamp(0, 3);
+    final status = o.status;
+    final step = PipelineStepper.stepFor(status);
+    final locked = c.activeLocked;
     final bottomInset = MediaQuery.paddingOf(context).bottom;
+    final phone = o.customer?.phone;
 
-    final (String headline, String where, String slideLabel, IconData slideIcon) = switch (step) {
-      0 => ('Go to restaurant', dhabaName, 'Slide · picked up', LucideIcons.package),
-      1 => ('Ride to the gate', hostelGate, 'Slide · at the gate', LucideIcons.mapPin),
-      2 => ('Meet the student', hostelGate, 'Slide · student here', LucideIcons.handshake),
-      _ => ('Hand over the order', 'Ask $customerName for the 4-digit PIN', '', LucideIcons.hash),
+    final (String headline, String where, IconData whereIcon) = switch (status) {
+      OrderStatus.pickedUp => ('Ride to the drop point', o.dropLabel, LucideIcons.mapPin),
+      OrderStatus.arrivedAtGate => ('Hand over the order', o.dropLabel, LucideIcons.mapPin),
+      _ => ('Go to the restaurant', o.restaurantName, LucideIcons.store),
     };
 
-    return Scaffold(
-      body: SafeArea(
-        bottom: false,
-        child: ListView(
-          padding: EdgeInsets.only(bottom: bottomInset + 24),
-          children: [
-            ScreenHeader(
-              title: 'Delivery',
-              subtitle: 'Order $orderId',
-              trailing: Container(
+    final Widget? banner = switch (status) {
+      _ when locked => const _Banner(
+          icon: LucideIcons.lock,
+          color: KraveoPalette.danger,
+          title: RiderController.supportMessage,
+          message: 'Too many wrong codes. Do not hand over the food until Kraveo support unlocks it.',
+        ),
+      OrderStatus.accepted || OrderStatus.preparing => _Banner(
+          icon: LucideIcons.chefHat,
+          color: KStatus.preparing.color,
+          title: 'Restaurant is still preparing',
+          message: 'You can mark it picked up once the restaurant marks it ready.',
+        ),
+      OrderStatus.readyForPickup => _Banner(
+          icon: LucideIcons.packageCheck,
+          color: KStatus.ready.color,
+          title: 'Food is ready',
+          message: 'Collect it from the counter and check the items.',
+        ),
+      OrderStatus.pickedUp => _Banner(
+          icon: LucideIcons.wallet,
+          color: KStatus.pickedUp.color,
+          title: 'Prepaid order',
+          message: 'The customer already paid online. Do not collect cash.',
+        ),
+      OrderStatus.arrivedAtGate => _Banner(
+          icon: LucideIcons.hash,
+          color: KStatus.atGate.color,
+          title: 'Ask the customer for their 4-digit code',
+          message: 'Only the customer has it. Type it in to finish the delivery.',
+        ),
+      _ => null,
+    };
+
+    final Widget action;
+    if (c.actionBusy) {
+      action = const KButton(label: 'Saving…', large: true, loading: true);
+    } else if (locked) {
+      action = KButton(
+        label: 'Call Kraveo support',
+        icon: LucideIcons.phone,
+        kind: KButtonKind.danger,
+        large: true,
+        onPressed: () => showSupportSheet(context, note: 'Delivery ${o.shortRef} is locked after too many wrong codes.'),
+      );
+    } else {
+      action = switch (status) {
+        OrderStatus.readyForPickup => Semantics(
+            label: 'Slide to confirm picked up',
+            button: true,
+            excludeSemantics: true,
+            onTap: () => c.advance(OrderStatus.pickedUp),
+            child: KSlideToConfirm(key: const ValueKey('slide-picked-up'), label: 'Slide · picked up', icon: LucideIcons.package, onConfirmed: () => c.advance(OrderStatus.pickedUp)),
+          ),
+        OrderStatus.pickedUp => Semantics(
+            label: 'Slide to confirm arrived at the drop point',
+            button: true,
+            excludeSemantics: true,
+            onTap: () => c.advance(OrderStatus.arrivedAtGate),
+            child: KSlideToConfirm(key: const ValueKey('slide-arrived'), label: 'Slide · arrived', icon: LucideIcons.mapPin, onConfirmed: () => c.advance(OrderStatus.arrivedAtGate)),
+          ),
+        OrderStatus.arrivedAtGate => KButton(
+            key: const ValueKey('enter-code-button'),
+            label: 'Enter customer\'s code',
+            icon: LucideIcons.hash,
+            kind: KButtonKind.accent,
+            large: true,
+            onPressed: _openCodeEntry,
+          ),
+        _ => const KButton(key: ValueKey('picked-up-disabled'), label: 'Picked up', icon: LucideIcons.package, large: true, onPressed: null),
+      };
+    }
+
+    return RefreshIndicator(
+      onRefresh: c.pollNow,
+      child: ListView(
+        padding: EdgeInsets.only(bottom: bottomInset + 24),
+        children: [
+          ScreenHeader(
+            title: 'Delivery',
+            subtitle: 'Order ${o.shortRef}',
+            trailing: Semantics(
+              label: 'Delivery fee ${OfferCard.rupees(o.deliveryFee)}',
+              excludeSemantics: true,
+              child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(color: k.brandSoft, borderRadius: BorderRadius.circular(KRadius.pill), border: Border.all(color: k.brand.withValues(alpha: 0.5))),
-                child: Text('₹40', style: KraveoType.headlineSm.copyWith(color: k.brand)),
+                child: Text(OfferCard.rupees(o.deliveryFee), style: KraveoType.headlineSm.copyWith(color: k.brand)),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 0),
-              child: PipelineStepper(
-                currentStep: step,
-                onStepTapped: (s) => widget.onStepChanged(s),
-              ),
-            ),
-            KReveal(
-              key: ValueKey('now-$step'),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(KSpace.gutter, 28, KSpace.gutter, 0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('STEP ${step + 1} OF 4', style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.2)),
-                    const SizedBox(height: 4),
-                    Text(headline, style: KraveoType.displayMd.copyWith(color: k.ink)),
-                    const SizedBox(height: 4),
-                    Row(children: [
-                      Icon(step == 0 ? LucideIcons.store : LucideIcons.mapPin, size: 18, color: k.inkMuted),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text(where, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.inkMuted))),
-                    ]),
-                  ],
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 24, KSpace.gutter, 0),
-              child: step < 3
-                  ? Semantics(
-                      label: slideLabel,
-                      button: true,
-                      excludeSemantics: true,
-                      onTap: _advanceStep,
-                      // Key per step so the slider resets after each confirmed step.
-                      child: KSlideToConfirm(key: ValueKey('slide-$step'), label: slideLabel, icon: slideIcon, onConfirmed: _advanceStep),
-                    )
-                  : KButton(label: 'Enter gate OTP', icon: LucideIcons.hash, kind: KButtonKind.accent, large: true, onPressed: _triggerGateOtp),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0),
-              child: Row(children: [
-                Expanded(child: KButton(label: 'Call', icon: LucideIcons.phone, kind: KButtonKind.tonal, large: true, onPressed: _callCustomer)),
-                const SizedBox(width: 12),
-                Expanded(child: KButton(label: 'Map', icon: LucideIcons.navigation, kind: KButtonKind.ghost, large: true, onPressed: _openMapRoute)),
+          ),
+          if (c.activeStale)
+            const _Inline(icon: LucideIcons.wifiOff, text: 'Can\'t reach Kraveo – showing the last known status. Retrying…'),
+          if (c.otherActiveCount > 0)
+            _Inline(icon: LucideIcons.info, text: 'Kraveo gave you ${c.otherActiveCount} more order(s). They appear after this one.'),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 0),
+            child: PipelineStepper(currentStep: step),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(KSpace.gutter, 24, KSpace.gutter, 0),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('STEP ${step + 1} OF 4', style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.2)),
+              const SizedBox(height: 4),
+              Text(headline, style: KraveoType.displayMd.copyWith(color: k.ink)),
+              const SizedBox(height: 4),
+              Row(children: [
+                Icon(whereIcon, size: 18, color: k.inkMuted),
+                const SizedBox(width: 8),
+                Expanded(child: Text(where, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.inkMuted))),
               ]),
+              if (status.isBeforePickup && (o.vendor?.address ?? '').isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(left: 26, top: 2),
+                  child: Text(o.vendor!.address!, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkFaint)),
+                ),
+              if (!status.isBeforePickup && (o.dropoffNotes ?? '').isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(left: 26, top: 2),
+                  child: Text(o.dropoffNotes!, maxLines: 3, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkFaint)),
+                ),
+            ]),
+          ),
+          if (banner != null) Padding(padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0), child: banner),
+          Padding(padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0), child: action),
+          if (c.actionError != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 10, KSpace.gutter, 0),
+              child: Text(c.actionError!, key: const ValueKey('action-error'), style: KraveoType.titleMd.copyWith(color: KraveoPalette.danger)),
             ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0),
+            child: phone != null
+                ? KCard(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    child: Row(children: [
+                      Icon(LucideIcons.user, size: 22, color: k.inkMuted),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(o.customer?.name ?? 'Customer', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.ink)),
+                          Text(phone, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+                        ]),
+                      ),
+                      const SizedBox(width: 8),
+                      KButton(
+                        label: 'Call',
+                        icon: LucideIcons.phone,
+                        kind: KButtonKind.tonal,
+                        expand: false,
+                        onPressed: () => showNumberSheet(context, title: 'Call ${o.customer?.name ?? 'the customer'}', number: phone),
+                      ),
+                    ]),
+                  )
+                : Text('The customer\'s number appears here when Kraveo shares it (at the drop point at the latest).',
+                    style: KraveoType.bodySm.copyWith(color: k.inkFaint)),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0),
+            child: _OrderDetails(open: _detailsOpen, onToggle: () => setState(() => _detailsOpen = !_detailsOpen), order: o),
+          ),
+          if (status.isBeforePickup && !c.actionBusy)
             Padding(
               padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0),
-              child: _OrderDetails(
-                open: _detailsOpen,
-                onToggle: () => setState(() => _detailsOpen = !_detailsOpen),
-                restaurant: dhabaName,
-                customer: customerName,
-                block: hostelGate,
-                items: 3,
-                amount: 40,
+              child: KButton(
+                key: const ValueKey('release-button'),
+                label: 'Release this job',
+                icon: LucideIcons.undo2,
+                kind: KButtonKind.ghost,
+                large: true,
+                onPressed: _confirmRelease,
               ),
             ),
-          ],
-        ),
+          if (c.lastSync != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 14, KSpace.gutter, 0),
+              child: Text('Status from Kraveo · updated ${OfferCard.ago(c.lastSync, c.services.now())}',
+                  style: KraveoType.caption.copyWith(color: k.inkFaint)),
+            ),
+        ],
       ),
+    );
+  }
+}
+
+class _NoticeView extends StatelessWidget {
+  const _NoticeView({required this.notice, required this.onDone});
+  final DeliveryNotice notice;
+  final VoidCallback onDone;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final o = notice.order;
+    final (IconData icon, Color color, String title, String message, String button) = switch (notice.kind) {
+      NoticeKind.delivered => (
+          LucideIcons.check,
+          k.brand,
+          'Delivered',
+          'Order ${o.shortRef} is complete. Delivery fee ${OfferCard.rupees(o.deliveryFee)}.',
+          'Back to home',
+        ),
+      NoticeKind.cancelled => (
+          LucideIcons.octagonX,
+          KraveoPalette.danger,
+          'Stop – this order was cancelled',
+          [
+            'Order ${o.shortRef} was cancelled${_by(o.cancelledBy)}.',
+            if (o.cancelReason != null) 'Reason: ${o.cancelReason}.',
+            if (o.isRefunded) 'The customer has been refunded.',
+            o.pickedUpAt != null
+                ? 'Do not hand over the food. Call Kraveo support to ask what to do with it.'
+                : 'Do not go to the restaurant for this order.',
+          ].join(' '),
+          'OK, got it',
+        ),
+      NoticeKind.reassigned => (
+          LucideIcons.arrowLeftRight,
+          KStatus.placed.color,
+          'This delivery was moved',
+          'Kraveo moved order ${o.shortRef} away from you (another rider or support has it now). You do not need to do anything more for it.',
+          'OK, got it',
+        ),
+    };
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(KSpace.gutter, 32, KSpace.gutter, 32),
+      children: [
+        Center(
+          child: Container(
+            width: 88,
+            height: 88,
+            decoration: BoxDecoration(color: color.withValues(alpha: 0.16), shape: BoxShape.circle),
+            child: Icon(icon, color: color, size: 46),
+          ),
+        ),
+        const SizedBox(height: 18),
+        Text(title, textAlign: TextAlign.center, style: KraveoType.displayMd.copyWith(color: k.ink)),
+        const SizedBox(height: 10),
+        Text(message, textAlign: TextAlign.center, style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 16)),
+        const SizedBox(height: 24),
+        KButton(key: const ValueKey('notice-done'), label: button, large: true, onPressed: onDone),
+        if (notice.kind == NoticeKind.cancelled) ...[
+          const SizedBox(height: 12),
+          KButton(label: 'Call Kraveo support', icon: LucideIcons.phone, kind: KButtonKind.ghost, large: true, onPressed: () => showSupportSheet(context)),
+        ],
+      ],
+    );
+  }
+
+  static String _by(String? who) => switch (who) {
+        'CUSTOMER' => ' by the customer',
+        'VENDOR' => ' by the restaurant',
+        'ADMIN' => ' by Kraveo',
+        'SYSTEM' => ' automatically',
+        _ => '',
+      };
+}
+
+class _Banner extends StatelessWidget {
+  const _Banner({required this.icon, required this.color, required this.title, required this.message});
+  final IconData icon;
+  final Color color;
+  final String title, message;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(KRadius.lg),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(icon, color: color, size: 24),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, style: KraveoType.titleMd.copyWith(color: k.ink)),
+            const SizedBox(height: 2),
+            Text(message, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+class _Inline extends StatelessWidget {
+  const _Inline({required this.icon, required this.text});
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(KSpace.gutter, 4, KSpace.gutter, 4),
+      child: Row(children: [
+        Icon(icon, size: 18, color: k.inkMuted),
+        const SizedBox(width: 8),
+        Expanded(child: Text(text, style: KraveoType.bodySm.copyWith(color: k.inkMuted))),
+      ]),
     );
   }
 }
 
 class _OrderDetails extends StatelessWidget {
-  const _OrderDetails({
-    required this.open,
-    required this.onToggle,
-    required this.restaurant,
-    required this.customer,
-    required this.block,
-    required this.items,
-    required this.amount,
-  });
+  const _OrderDetails({required this.open, required this.onToggle, required this.order});
 
   final bool open;
   final VoidCallback onToggle;
-  final String restaurant, customer, block;
-  final int items, amount;
+  final OrderView order;
 
   @override
   Widget build(BuildContext context) {
     final k = context.k;
+    final o = order;
     return KCard(
       padding: EdgeInsets.zero,
       child: Column(
@@ -225,7 +468,7 @@ class _OrderDetails extends StatelessWidget {
                   Icon(LucideIcons.receipt, size: 22, color: k.inkMuted),
                   const SizedBox(width: 12),
                   Expanded(child: Text('Order details', style: KraveoType.titleLg.copyWith(color: k.ink))),
-                  Text('$items items', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+                  Text('${o.itemCount} items', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
                   const SizedBox(width: 8),
                   Icon(open ? LucideIcons.chevronUp : LucideIcons.chevronDown, size: 22, color: k.inkFaint),
                 ]),
@@ -242,11 +485,12 @@ class _OrderDetails extends StatelessWidget {
                     child: Column(children: [
                       Divider(color: k.line, height: 1),
                       const SizedBox(height: 12),
-                      _Line(icon: LucideIcons.store, label: 'Restaurant', value: restaurant),
-                      _Line(icon: LucideIcons.user, label: 'Customer', value: customer),
-                      _Line(icon: LucideIcons.mapPin, label: 'Drop', value: block),
-                      _Line(icon: LucideIcons.package, label: 'Items', value: '$items'),
-                      _Line(icon: LucideIcons.wallet, label: 'Your payout', value: '₹$amount'),
+                      _Line(icon: LucideIcons.store, label: 'Restaurant', value: o.restaurantName),
+                      if (o.customer?.name != null) _Line(icon: LucideIcons.user, label: 'Customer', value: o.customer!.name!),
+                      _Line(icon: LucideIcons.mapPin, label: 'Drop', value: o.dropLabel),
+                      for (final item in o.items) _Line(icon: LucideIcons.package, label: '${item.quantity} ×', value: item.name),
+                      _Line(icon: LucideIcons.wallet, label: 'Delivery fee', value: OfferCard.rupees(o.deliveryFee)),
+                      _Line(icon: LucideIcons.receipt, label: 'Order total', value: '${OfferCard.rupees(o.totalAmount)} (prepaid)'),
                     ]),
                   )
                 : const SizedBox(width: double.infinity),

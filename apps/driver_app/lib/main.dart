@@ -9,6 +9,7 @@ import 'screens/signup_screen.dart';
 import 'services/driver_api_service.dart';
 import 'services/partner_auth_service.dart';
 import 'session/session_controller.dart';
+import 'state/rider_controller.dart';
 
 void main() {
   runApp(const KraveoDriverApp());
@@ -16,9 +17,11 @@ void main() {
 
 class KraveoDriverApp extends StatefulWidget {
   /// [auth] is the network layer for login / session checks; tests pass a fake.
-  const KraveoDriverApp({super.key, this.auth});
+  /// [riderServices] builds the order API, socket and GPS for the home screen (null = the real ones).
+  const KraveoDriverApp({super.key, this.auth, this.riderServices});
 
   final PartnerAuthService? auth;
+  final RiderServices Function()? riderServices;
 
   @override
   State<KraveoDriverApp> createState() => _KraveoDriverAppState();
@@ -41,7 +44,7 @@ class _KraveoDriverAppState extends State<KraveoDriverApp> {
         title: 'Kraveo Delivery Partner',
         debugShowCheckedModeBanner: false,
         theme: KraveoTheme.driver(),
-        home: AuthGate(session: _session),
+        home: AuthGate(session: _session, riderServices: widget.riderServices),
       ),
     );
   }
@@ -50,9 +53,10 @@ class _KraveoDriverAppState extends State<KraveoDriverApp> {
 /// Decides between splash, login, the "can't reach Kraveo" retry state and the app, and wires
 /// session expiry (HTTP 401 on any authenticated call) to the login screen.
 class AuthGate extends StatefulWidget {
-  const AuthGate({super.key, required this.session});
+  const AuthGate({super.key, required this.session, this.riderServices});
 
   final SessionController session;
+  final RiderServices Function()? riderServices;
 
   @override
   State<AuthGate> createState() => _AuthGateState();
@@ -145,7 +149,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
                 onLogout: _session.logout,
               );
             }
-            return const DriverHomeScreen();
+            return DriverHomeScreen(services: widget.riderServices?.call());
         }
       },
     );

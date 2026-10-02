@@ -12,6 +12,7 @@ import 'package:driver_app/models/partner_session.dart';
 import 'package:driver_app/screens/login_screen.dart';
 import 'package:driver_app/services/driver_api_service.dart';
 import 'package:driver_app/services/partner_auth_service.dart';
+import 'package:driver_app/services/rider_orders_api.dart';
 import 'package:driver_app/session/session_controller.dart';
 
 const _secret = 'Sup3r-Secret-pw';
@@ -447,7 +448,7 @@ void main() {
         await DriverApiService.toggleDutyStatus(true);
         expect(fired, 0);
         status = 401;
-        final ok = await DriverApiService.acceptJob('ord-1');
+        final ok = (await HttpRiderOrdersApi().claim('ord-1')).ok;
         expect(ok, isFalse);
       }, () => MockClient((request) async {
             sentAuth = request.headers['Authorization'];

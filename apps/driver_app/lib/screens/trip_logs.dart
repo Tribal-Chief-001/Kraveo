@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import '../models/trip_model.dart';
+import '../models/order_view.dart';
+import '../state/rider_controller.dart';
+import '../widgets/swipe_accept_card.dart' show OfferCard;
 import '../widgets/ui/screen_header.dart';
 
+/// The rider's finished orders from `GET /orders?scope=history` (paginated). No sample data.
 class TripLogsScreen extends StatefulWidget {
-  /// Optional trip source. When null the screen shows its built-in placeholder history.
-  final List<TripModel>? trips;
+  const TripLogsScreen({super.key, required this.controller});
 
-  const TripLogsScreen({super.key, this.trips});
+  final RiderController controller;
 
   @override
   State<TripLogsScreen> createState() => _TripLogsScreenState();
@@ -17,92 +19,117 @@ class TripLogsScreen extends StatefulWidget {
 class _TripLogsScreenState extends State<TripLogsScreen> {
   String selectedFilter = 'All';
 
-  final List<TripModel> dummyTrips = [
-    TripModel(
-      id: '#ord-8492',
-      pickupName: 'FC Night Mess',
-      pickupAddress: 'VIT Bhopal Entry Gate 1',
-      dropoffName: 'Boys Hostel Block 1',
-      dropoffAddress: 'Gate 2 Handshake',
-      distanceKm: 1.8,
-      payout: 40.0,
-      estimatedMinutes: '12 mins',
-      customerName: 'Aman Sharma',
-      customerPhone: '+91 98765 43210',
-      otpCode: '4829',
-      timestamp: DateTime.now().subtract(const Duration(minutes: 45)),
-    ),
-    TripModel(
-      id: '#ord-8488',
-      pickupName: 'Underdoggs Campus Cafe',
-      pickupAddress: 'Academic Block 2 Canteen',
-      dropoffName: 'Girls Hostel Block 2',
-      dropoffAddress: 'Security Counter Handshake',
-      distanceKm: 2.3,
-      payout: 45.0,
-      estimatedMinutes: '15 mins',
-      customerName: 'Priya Verma',
-      customerPhone: '+91 98123 45678',
-      otpCode: '9102',
-      timestamp: DateTime.now().subtract(const Duration(hours: 2, minutes: 15)),
-    ),
-    TripModel(
-      id: '#ord-8451',
-      pickupName: 'Southern Spice Dhaba',
-      pickupAddress: 'Kothri Kalan Highway Side',
-      dropoffName: 'Boys Hostel Block 4',
-      dropoffAddress: 'Main Entrance Gate 1',
-      distanceKm: 3.1,
-      payout: 55.0,
-      estimatedMinutes: '18 mins',
-      customerName: 'Rahul Nair',
-      customerPhone: '+91 97654 32109',
-      otpCode: '3341',
-      timestamp: DateTime.now().subtract(const Duration(hours: 5)),
-    ),
-    TripModel(
-      id: '#ord-8410',
-      pickupName: 'Amul Ice Cream Parlour',
-      pickupAddress: 'Student Activity Center',
-      dropoffName: 'Faculty Quarter B3',
-      dropoffAddress: 'Ground Floor Lobby',
-      distanceKm: 1.2,
-      payout: 35.0,
-      estimatedMinutes: '8 mins',
-      customerName: 'Dr. Suresh Mehta',
-      customerPhone: '+91 99001 12233',
-      otpCode: '7789',
-      timestamp: DateTime.now().subtract(const Duration(days: 1, hours: 2)),
-    ),
-  ];
+  static const _filters = ['All', 'Today', 'Yesterday', 'This Week'];
 
-  List<TripModel> get _allTrips => widget.trips ?? dummyTrips;
-
-  List<TripModel> get _filtered {
-    final now = DateTime.now();
+  List<OrderView> _filtered(RiderController c) {
+    final now = c.services.now().toLocal();
     final today = DateTime(now.year, now.month, now.day);
     bool sameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
-    return _allTrips.where((t) {
+    return c.history.where((t) {
+      final at = t.finishedAt?.toLocal();
+      if (selectedFilter == 'All') return true;
+      if (at == null) return false;
       switch (selectedFilter) {
         case 'Today':
-          return sameDay(t.timestamp, today);
+          return sameDay(at, today);
         case 'Yesterday':
-          return sameDay(t.timestamp, today.subtract(const Duration(days: 1)));
-        case 'This Week':
-          return t.timestamp.isAfter(today.subtract(const Duration(days: 6)));
+          return sameDay(at, today.subtract(const Duration(days: 1)));
         default:
-          return true;
+          return !at.isBefore(today.subtract(const Duration(days: 6)));
       }
     }).toList();
   }
 
-  static const _filters = ['All', 'Today', 'Yesterday', 'This Week'];
-
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(listenable: widget.controller, builder: (context, _) => _build(context));
+  }
+
+  Widget _build(BuildContext context) {
     final k = context.k;
-    final trips = _filtered;
+    final c = widget.controller;
+    final trips = _filtered(c);
     final bottomInset = MediaQuery.paddingOf(context).bottom;
+    final now = c.services.now();
+
+    final Widget list;
+    if (!c.historyLoaded && c.historyLoading) {
+      list = const Center(child: SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 3)));
+    } else if (!c.historyLoaded && c.historyError) {
+      list = KEmptyState(
+        icon: LucideIcons.wifiOff,
+        title: 'Could not load your trips',
+        message: 'Check your internet and try again.',
+        action: KButton(label: 'Retry', icon: LucideIcons.rotateCcw, large: true, expand: false, onPressed: c.loadHistory),
+      );
+    } else if (trips.isEmpty) {
+      list = Padding(
+        padding: EdgeInsets.only(bottom: bottomInset),
+        child: KEmptyState(
+          icon: LucideIcons.history,
+          title: 'No trips here yet',
+          message: selectedFilter == 'All' ? 'Finished deliveries show up here.' : 'No deliveries in this period. Try another filter.',
+        ),
+      );
+    } else {
+      list = RefreshIndicator(
+        onRefresh: c.loadHistory,
+        child: ListView.builder(
+          padding: EdgeInsets.fromLTRB(KSpace.gutter, 4, KSpace.gutter, bottomInset + 24),
+          itemCount: trips.length + 1,
+          itemBuilder: (context, index) {
+            if (index == trips.length) {
+              if (!c.historyHasMore || selectedFilter != 'All') return const SizedBox(height: 8);
+              return KButton(
+                key: const ValueKey('load-more-trips'),
+                label: c.historyError ? 'Could not load – try again' : 'Load older trips',
+                kind: KButtonKind.ghost,
+                loading: c.historyLoading,
+                onPressed: c.loadMoreHistory,
+              );
+            }
+            final trip = trips[index];
+            final delivered = trip.status == OrderStatus.delivered;
+            return KReveal(
+              index: index,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: KCard(
+                  onTap: () => _showTripDetails(context, trip),
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Expanded(child: Text(trip.shortRef, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.inkMuted))),
+                        KStatusPill(status: delivered ? KStatus.delivered : KStatus.cancelled, compact: true),
+                      ]),
+                      const SizedBox(height: 12),
+                      Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            _RouteLine(icon: LucideIcons.store, color: k.brand, text: trip.restaurantName),
+                            Padding(
+                              padding: const EdgeInsets.only(left: 9),
+                              child: Container(width: 2, height: 12, color: k.line),
+                            ),
+                            _RouteLine(icon: LucideIcons.mapPin, color: KStatus.atGate.color, text: trip.dropLabel),
+                          ]),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(delivered ? OfferCard.rupees(trip.deliveryFee) : '–', style: KraveoType.numeric.copyWith(color: k.ink, fontSize: 34)),
+                      ]),
+                      const SizedBox(height: 12),
+                      Text('${trip.itemCount} items · ${OfferCard.ago(trip.finishedAt, now)}', style: KraveoType.bodySm.copyWith(color: k.inkFaint)),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+    }
 
     return Scaffold(
       body: SafeArea(
@@ -124,74 +151,15 @@ class _TripLogsScreenState extends State<TripLogsScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            Expanded(
-              child: trips.isEmpty
-                  ? Padding(
-                      padding: EdgeInsets.only(bottom: bottomInset),
-                      child: KEmptyState(
-                        icon: LucideIcons.history,
-                        title: 'No trips here yet',
-                        message: selectedFilter == 'All' ? 'Finished deliveries show up here.' : 'No deliveries in this period. Try another filter.',
-                      ),
-                    )
-                  : ListView.builder(
-                      padding: EdgeInsets.fromLTRB(KSpace.gutter, 4, KSpace.gutter, bottomInset + 24),
-                      itemCount: trips.length,
-                      itemBuilder: (context, index) {
-                        final trip = trips[index];
-                        return KReveal(
-                          index: index,
-                          child: Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: KCard(
-                              onTap: () => _showTripDetails(context, trip),
-                              padding: const EdgeInsets.all(18),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(children: [
-                                    Expanded(child: Text(trip.id, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.inkMuted))),
-                                    const KStatusPill(status: KStatus.delivered, compact: true),
-                                  ]),
-                                  const SizedBox(height: 12),
-                                  Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                                    Expanded(
-                                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                        _RouteLine(icon: LucideIcons.store, color: k.brand, text: trip.pickupName),
-                                        Padding(
-                                          padding: const EdgeInsets.only(left: 9),
-                                          child: Container(width: 2, height: 12, color: k.line),
-                                        ),
-                                        _RouteLine(icon: LucideIcons.mapPin, color: KStatus.atGate.color, text: trip.dropoffName),
-                                      ]),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Text('₹${trip.payout.toInt()}', style: KraveoType.numeric.copyWith(color: k.ink, fontSize: 34)),
-                                  ]),
-                                  const SizedBox(height: 12),
-                                  Text('${trip.distanceKm} km · ${trip.estimatedMinutes} · ${_ago(trip.timestamp)}', style: KraveoType.bodySm.copyWith(color: k.inkFaint)),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
+            Expanded(child: list),
           ],
         ),
       ),
     );
   }
 
-  static String _ago(DateTime t) {
-    final d = DateTime.now().difference(t);
-    if (d.inMinutes < 60) return '${d.inMinutes.clamp(1, 59)} min ago';
-    if (d.inHours < 24) return '${d.inHours} h ago';
-    return '${d.inDays} d ago';
-  }
-
-  void _showTripDetails(BuildContext context, TripModel trip) {
+  void _showTripDetails(BuildContext context, OrderView trip) {
+    final delivered = trip.status == OrderStatus.delivered;
     showKSheet(
       context,
       builder: (ctx) {
@@ -203,25 +171,24 @@ class _TripLogsScreenState extends State<TripLogsScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(children: [
-                Expanded(child: Text(trip.id, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.headlineSm.copyWith(color: k.ink))),
-                Text('₹${trip.payout.toInt()}', style: KraveoType.numeric.copyWith(color: k.brand)),
+                Expanded(child: Text('Order ${trip.shortRef}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.headlineSm.copyWith(color: k.ink))),
+                Text(delivered ? OfferCard.rupees(trip.deliveryFee) : '–', style: KraveoType.numeric.copyWith(color: k.brand)),
               ]),
               const SizedBox(height: 6),
-              const KStatusPill(status: KStatus.delivered, compact: true),
+              KStatusPill(status: delivered ? KStatus.delivered : KStatus.cancelled, compact: true),
               const SizedBox(height: 20),
-              _SheetStop(icon: LucideIcons.store, color: k.brand, label: 'PICKUP', title: trip.pickupName, note: trip.pickupAddress),
+              _SheetStop(icon: LucideIcons.store, color: k.brand, label: 'PICKUP', title: trip.restaurantName, note: trip.vendor?.address ?? ''),
               const SizedBox(height: 14),
-              _SheetStop(icon: LucideIcons.mapPin, color: KStatus.atGate.color, label: 'DROP', title: trip.dropoffName, note: trip.dropoffAddress),
+              _SheetStop(icon: LucideIcons.mapPin, color: KStatus.atGate.color, label: 'DROP', title: trip.dropLabel, note: trip.dropoffNotes ?? ''),
               const SizedBox(height: 16),
               Divider(color: k.line),
               const SizedBox(height: 8),
-              Row(children: [
-                Icon(LucideIcons.user, size: 18, color: k.inkFaint),
-                const SizedBox(width: 10),
-                Text('Customer', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
-                const Spacer(),
-                Flexible(child: Text(trip.customerName, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.ink))),
-              ]),
+              Text(
+                delivered
+                    ? 'Delivery fee ${OfferCard.rupees(trip.deliveryFee)} · order ${OfferCard.rupees(trip.totalAmount)} (prepaid)'
+                    : 'Cancelled${trip.cancelReason != null ? ': ${trip.cancelReason}' : ''}',
+                style: KraveoType.bodySm.copyWith(color: k.inkMuted),
+              ),
               const SizedBox(height: 20),
               KButton(label: 'Close', kind: KButtonKind.tonal, large: true, onPressed: () => Navigator.of(ctx).pop()),
             ],
@@ -270,7 +237,7 @@ class _SheetStop extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(label, style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 1.2)),
           Text(title, style: KraveoType.titleLg.copyWith(color: k.ink)),
-          Text(note, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+          if (note.isNotEmpty) Text(note, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
         ]),
       ),
     ]);

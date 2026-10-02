@@ -7,10 +7,14 @@ class DutyToggle extends StatelessWidget {
   final bool isOnline;
   final ValueChanged<bool> onChanged;
 
+  /// Waiting for Kraveo to confirm "on duty": the switch stays OFF until the server says yes.
+  final bool busy;
+
   const DutyToggle({
     super.key,
     required this.isOnline,
     required this.onChanged,
+    this.busy = false,
   });
 
   static const double _height = 96;
@@ -21,9 +25,13 @@ class DutyToggle extends StatelessWidget {
     final k = context.k;
     final on = isOnline;
     return KPressable(
-      semanticLabel: on ? 'You are on duty. Double tap to go off duty.' : 'You are off duty. Double tap to go on duty.',
+      semanticLabel: busy
+          ? 'Going on duty, waiting for Kraveo.'
+          : on
+              ? 'You are on duty. Double tap to go off duty.'
+              : 'You are off duty. Double tap to go on duty.',
       scale: 0.98,
-      onTap: () => onChanged(!isOnline),
+      onTap: busy ? null : () => onChanged(!isOnline),
       child: ExcludeSemantics(
         child: AnimatedContainer(
           duration: KMotion.base,
@@ -52,9 +60,9 @@ class DutyToggle extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(on ? 'ON DUTY' : 'OFF DUTY',
+                          Text(busy ? 'CONNECTING' : (on ? 'ON DUTY' : 'OFF DUTY'),
                               style: KraveoType.displayMd.copyWith(color: on ? k.brand : k.inkMuted, fontSize: 32, letterSpacing: 0.4)),
-                          Text(on ? 'Live location on' : 'Tap to go online',
+                          Text(busy ? 'Asking Kraveo…' : (on ? 'Receiving orders' : 'Tap to go online'),
                               style: KraveoType.bodySm.copyWith(color: on ? k.inkMuted : k.inkFaint)),
                         ],
                       ),

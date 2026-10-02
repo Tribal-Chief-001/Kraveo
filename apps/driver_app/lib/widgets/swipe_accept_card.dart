@@ -1,47 +1,56 @@
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import '../models/order_view.dart';
 
-/// Job offer: payout first, route second, then one huge slide-to-accept.
-/// The 1-tap accept remains as a clearly secondary fallback.
-class SwipeAcceptCard extends StatefulWidget {
+/// One real order from the pool (`GET /orders/available` / socket `order_available`).
+///
+/// Shows only what the pool view carries: restaurant, drop point, delivery fee, order size and how
+/// long ago it was placed. Never a customer name or phone (the server hides them until a rider is
+/// assigned). The card does not decide anything: [onAccepted] asks the server, and the parent shows
+/// the job only once the server confirmed the claim.
+class OfferCard extends StatelessWidget {
+  final OrderView order;
   final VoidCallback onAccepted;
   final VoidCallback? onDeclined;
-  final int payout;
-  final double distanceKm;
-  final String pickupName;
-  final String pickupNote;
-  final String dropName;
-  final String dropNote;
 
-  const SwipeAcceptCard({
+  /// This offer's claim request is in flight.
+  final bool claiming;
+
+  /// Another offer is being claimed: this one cannot be taken at the same time.
+  final bool disabled;
+  final DateTime now;
+
+  const OfferCard({
     super.key,
+    required this.order,
     required this.onAccepted,
+    required this.now,
     this.onDeclined,
-    this.payout = 40,
-    this.distanceKm = 1.8,
-    this.pickupName = 'FC Night Mess',
-    this.pickupNote = 'VIT Bhopal Entry Gate 1',
-    this.dropName = 'Boys Hostel Block 1',
-    this.dropNote = 'Gate 2 handshake',
+    this.claiming = false,
+    this.disabled = false,
   });
 
-  @override
-  State<SwipeAcceptCard> createState() => _SwipeAcceptCardState();
-}
+  static String ago(DateTime? t, DateTime now) {
+    if (t == null) return 'just now';
+    final d = now.difference(t);
+    if (d.inMinutes < 1) return 'just now';
+    if (d.inMinutes < 60) return '${d.inMinutes} min ago';
+    if (d.inHours < 24) return '${d.inHours} h ago';
+    return '${d.inDays} d ago';
+  }
 
-class _SwipeAcceptCardState extends State<SwipeAcceptCard> {
-  bool _accepted = false;
-
-  void _accept() {
-    if (_accepted) return;
-    setState(() => _accepted = true);
-    widget.onAccepted();
+  static String rupees(double? v) {
+    if (v == null) return '–';
+    return v == v.roundToDouble() ? '₹${v.toInt()}' : '₹${v.toStringAsFixed(2)}';
   }
 
   @override
   Widget build(BuildContext context) {
     final k = context.k;
+    final ready = order.status == OrderStatus.readyForPickup;
+    final fee = rupees(order.deliveryFee);
+    final items = order.itemCount;
     return KCard(
       padding: const EdgeInsets.all(20),
       borderColor: k.brand.withValues(alpha: 0.55),
@@ -55,22 +64,22 @@ class _SwipeAcceptCardState extends State<SwipeAcceptCard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('YOU EARN', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.1)),
+                    Text('DELIVERY FEE', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.1)),
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.centerLeft,
-                      child: Text('₹${widget.payout}', style: KraveoType.displayLg.copyWith(fontSize: 64, height: 1.05, color: k.ink)),
+                      child: Text(fee, style: KraveoType.displayLg.copyWith(fontSize: 56, height: 1.05, color: k.ink)),
                     ),
                   ],
                 ),
               ),
               const SizedBox(width: 12),
-              _Chip(icon: LucideIcons.route, text: '${widget.distanceKm} km'),
-              if (widget.onDeclined != null) ...[
+              _Chip(icon: ready ? LucideIcons.packageCheck : LucideIcons.chefHat, text: ready ? 'Ready' : 'Preparing'),
+              if (onDeclined != null) ...[
                 const SizedBox(width: 8),
                 KPressable(
-                  semanticLabel: 'Decline this order',
-                  onTap: widget.onDeclined,
+                  semanticLabel: 'Hide this order',
+                  onTap: claiming ? null : onDeclined,
                   child: Container(
                     width: 48,
                     height: 48,
@@ -81,35 +90,44 @@ class _SwipeAcceptCardState extends State<SwipeAcceptCard> {
               ],
             ],
           ),
-          const SizedBox(height: 18),
-          _Stop(icon: LucideIcons.store, color: k.brand, title: widget.pickupName, note: widget.pickupNote, label: 'PICKUP'),
+          const SizedBox(height: 6),
+          Text(
+            '${items > 0 ? '$items item${items == 1 ? '' : 's'} · ' : ''}Order ${rupees(order.totalAmount)} prepaid · ${ago(order.offeredAt, now)}',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: KraveoType.bodySm.copyWith(color: k.inkMuted),
+          ),
+          const SizedBox(height: 16),
+          _Stop(icon: LucideIcons.store, color: k.brand, title: order.restaurantName, note: order.vendor?.address ?? '', label: 'PICKUP'),
           Padding(
             padding: const EdgeInsets.only(left: 19),
             child: Container(width: 2, height: 16, color: k.line),
           ),
-          _Stop(icon: LucideIcons.mapPin, color: KStatus.atGate.color, title: widget.dropName, note: widget.dropNote, label: 'DROP'),
+          _Stop(icon: LucideIcons.mapPin, color: KStatus.atGate.color, title: order.dropLabel, note: order.dropoffNotes ?? '', label: 'DROP'),
           const SizedBox(height: 20),
-          if (_accepted)
+          if (claiming)
             Container(
               height: 72,
               alignment: Alignment.center,
               decoration: BoxDecoration(color: k.brand.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(KRadius.pill)),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(LucideIcons.circleCheck, color: k.brand, size: 24),
-                const SizedBox(width: 10),
-                Text('Order accepted', style: KraveoType.titleLg.copyWith(color: k.brand)),
+                SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: k.brand)),
+                const SizedBox(width: 12),
+                Flexible(child: Text('Accepting…', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.brand))),
               ]),
             )
+          else if (disabled)
+            const KButton(label: 'Accept with one tap', kind: KButtonKind.ghost, icon: LucideIcons.hand, onPressed: null)
           else ...[
             Semantics(
-              label: 'Slide to accept order, earn ₹${widget.payout}',
+              label: 'Slide to accept order, delivery fee $fee',
               button: true,
               excludeSemantics: true,
-              onTap: _accept,
-              child: KSlideToConfirm(label: 'Slide to accept', icon: LucideIcons.arrowRight, onConfirmed: _accept),
+              onTap: onAccepted,
+              child: KSlideToConfirm(key: ValueKey('slide-${order.id}'), label: 'Slide to accept', icon: LucideIcons.arrowRight, onConfirmed: onAccepted),
             ),
             const SizedBox(height: 10),
-            KButton(label: 'Accept with one tap', kind: KButtonKind.ghost, icon: LucideIcons.hand, onPressed: _accept),
+            KButton(key: ValueKey('accept-${order.id}'), label: 'Accept with one tap', kind: KButtonKind.ghost, icon: LucideIcons.hand, onPressed: onAccepted),
           ],
         ],
       ),
@@ -131,7 +149,7 @@ class _Chip extends StatelessWidget {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, size: 16, color: k.inkMuted),
         const SizedBox(width: 6),
-        Text(text, style: KraveoType.label.copyWith(color: k.ink, fontSize: 14)),
+        Text(text, maxLines: 1, style: KraveoType.label.copyWith(color: k.ink, fontSize: 14)),
       ]),
     );
   }
@@ -162,7 +180,7 @@ class _Stop extends StatelessWidget {
             children: [
               Text(label, style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 1.2)),
               Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink)),
-              Text(note, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+              if (note.isNotEmpty) Text(note, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
             ],
           ),
         ),

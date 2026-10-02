@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import '../models/order_view.dart';
 
 /// Horizontal 4-step delivery tracker. The current step is enlarged and glowing,
-/// finished steps show a check, upcoming steps are muted.
+/// finished steps show a check, upcoming steps are muted. The step always comes from the order's
+/// real status on the server ([stepFor]); tapping a step never changes anything.
 class PipelineStepper extends StatelessWidget {
   final int currentStep; // 0 to 3
   final ValueChanged<int>? onStepTapped;
@@ -16,10 +18,18 @@ class PipelineStepper extends StatelessWidget {
 
   static const List<({String label, IconData icon})> steps = [
     (label: 'Go to\nrestaurant', icon: LucideIcons.store),
-    (label: 'Picked up', icon: LucideIcons.package),
-    (label: 'Reached\ngate', icon: LucideIcons.mapPin),
+    (label: 'Ride to\ndrop', icon: LucideIcons.package),
+    (label: 'At drop\npoint', icon: LucideIcons.mapPin),
     (label: 'Delivered', icon: LucideIcons.packageCheck),
   ];
+
+  /// Server status -> step index.
+  static int stepFor(OrderStatus status) => switch (status) {
+        OrderStatus.pickedUp => 1,
+        OrderStatus.arrivedAtGate => 2,
+        OrderStatus.delivered => 3,
+        _ => 0,
+      };
 
   @override
   Widget build(BuildContext context) {

@@ -1,11 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import '../models/order_view.dart';
+import '../state/rider_controller.dart';
 import '../widgets/duty_toggle.dart';
 import '../widgets/earnings_card.dart';
+import '../widgets/support_sheet.dart';
 import '../widgets/swipe_accept_card.dart';
 import '../widgets/pipeline_stepper.dart';
 import '../widgets/ui/icon_action.dart';
@@ -20,193 +21,63 @@ import 'earnings_history.dart';
 import 'trip_logs.dart';
 import 'runner_id_card_screen.dart';
 
+/// The rider's home: duty switch, GPS state, real offers from the pool, the delivery in progress,
+/// and today's delivery fees. All order data comes from [RiderController] (server truth).
 class DriverHomeScreen extends StatefulWidget {
-  const DriverHomeScreen({super.key});
+  /// Network, socket and GPS. Null means the real ones; tests pass fakes.
+  const DriverHomeScreen({super.key, this.services});
+
+  final RiderServices? services;
 
   @override
   State<DriverHomeScreen> createState() => _DriverHomeScreenState();
 }
 
-class _DriverHomeScreenState extends State<DriverHomeScreen> {
-  bool isOnline = true;
-  bool hasActiveJob = false;
-  int currentStep = 0;
-  double todayEarnings = 420.0;
-  int completedTrips = 11;
+class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBindingObserver {
+  late final RiderController _rider;
+  StreamSubscription<String>? _messages;
   int selectedTab = 0;
-  bool _offerDismissed = false;
-
-  Timer? _locationTimer;
-  static const String _dutyPrefKey = 'kraveo_driver_duty_online';
 
   @override
   void initState() {
     super.initState();
-    _loadSavedDutyState();
+    final partner = context.getInheritedWidgetOfExactType<SessionScope>()?.notifier?.session;
+    _rider = RiderController(
+      widget.services ?? RiderServices.real(),
+      myIds: {if (partner != null) partner.userId, if (partner?.driverId != null) partner!.driverId!},
+    );
+    _messages = _rider.messages.listen(_showMessage);
+    WidgetsBinding.instance.addObserver(this);
+    _rider.start();
   }
 
   @override
   void dispose() {
-    _stopLocationStreaming();
+    WidgetsBinding.instance.removeObserver(this);
+    _messages?.cancel();
+    _rider.dispose();
     super.dispose();
   }
 
-  Future<void> _loadSavedDutyState() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedOnline = prefs.getBool(_dutyPrefKey) ?? true;
-      if (mounted) {
-        setState(() {
-          isOnline = savedOnline;
-        });
-      }
-      DriverApiService.toggleDutyStatus(savedOnline);
-      if (savedOnline) {
-        _startLocationStreaming();
-      }
-    } catch (_) {
-      if (isOnline) _startLocationStreaming();
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _rider.resume();
+    } else if (state == AppLifecycleState.paused) {
+      _rider.pause();
     }
   }
 
-  Future<void> _toggleDuty(bool val) async {
-    setState(() {
-      isOnline = val;
-      if (val) _offerDismissed = false;
-    });
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_dutyPrefKey, val.toString());
-      await prefs.setBool(_dutyPrefKey, val);
-    } catch (_) {}
-
-    DriverApiService.toggleDutyStatus(val);
-
-    if (val) {
-      _startLocationStreaming();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You are on duty. Live location is on.'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    } else {
-      _stopLocationStreaming();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You are off duty. Location sharing paused.'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
+  void _showMessage(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
   }
 
-  void _startLocationStreaming() {
-    _locationTimer?.cancel();
-    _locationTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
-      if (!isOnline) {
-        timer.cancel();
-        return;
-      }
-      try {
-        final position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-          timeLimit: const Duration(seconds: 3),
-        );
-        DriverApiService.updateLocation(position.latitude, position.longitude, heading: position.heading);
-      } catch (_) {
-        // Background fail-safe coordinates for VIT Bhopal campus
-        const baseLat = 23.0775;
-        const baseLng = 76.8513;
-        final stepOffset = (timer.tick % 6) * 0.0001;
-        DriverApiService.updateLocation(baseLat + stepOffset, baseLng + stepOffset);
-      }
-    });
-  }
-
-  void _stopLocationStreaming() {
-    _locationTimer?.cancel();
-    _locationTimer = null;
-  }
-
-  void _acceptJob() {
-    setState(() {
-      hasActiveJob = true;
-      currentStep = 0;
-      selectedTab = 1; // Switch to Active Delivery tab
-    });
-
-    // Sync job acceptance to AWS EC2 backend
-    DriverApiService.acceptJob('ord-101');
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Job accepted. Opening your delivery...'),
-        duration: Duration(seconds: 2),
-      ),
-    );
-  }
-
-  void _completeJob() {
-    setState(() {
-      hasActiveJob = false;
-      todayEarnings += 40;
-      completedTrips += 1;
-      currentStep = 0;
-      selectedTab = 0; // Return to main dashboard
-      _offerDismissed = false;
-    });
-
-    // Sync delivery completion to backend
-    DriverApiService.updateDeliveryStatus('ord-101', 'DELIVERED', otpCode: '1234');
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        final k = context.k;
-        return AlertDialog(
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 88,
-                height: 88,
-                decoration: BoxDecoration(color: k.brand.withValues(alpha: 0.16), shape: BoxShape.circle, boxShadow: KShadow.glow(k.brand)),
-                child: Icon(LucideIcons.check, color: k.brand, size: 48),
-              ),
-              const SizedBox(height: 16),
-              Text('Delivered', style: KraveoType.displayMd.copyWith(color: k.ink)),
-              const SizedBox(height: 4),
-              KAnimatedNumber(value: 40, prefix: '+₹', style: KraveoType.displayLg.copyWith(color: k.brand, fontSize: 56)),
-              const SizedBox(height: 4),
-              Text('Order #ord-8492', style: KraveoType.bodySm.copyWith(color: k.inkFaint)),
-              const SizedBox(height: 2),
-              Text('Total today ₹${todayEarnings.toInt()}', style: KraveoType.titleMd.copyWith(color: k.inkMuted)),
-              const SizedBox(height: 20),
-              KButton(label: 'Back to home', icon: LucideIcons.house, large: true, onPressed: () => Navigator.pop(context)),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _callCampusAdminSupport() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(LucideIcons.phoneCall, color: context.k.accent),
-            const SizedBox(width: 10),
-            const Expanded(child: Text('Calling Kraveo Campus Dispatch SOS Hotline: +91 98765 43214')),
-          ],
-        ),
-        duration: const Duration(seconds: 4),
-      ),
-    );
+  Future<void> _claim(OrderView offer) async {
+    final ok = await _rider.claim(offer);
+    if (ok && mounted) setState(() => selectedTab = 1);
   }
 
   void _openRunnerPass() {
@@ -236,60 +107,44 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Future<void> _confirmLogout() async {
     final controller = SessionScope.maybeOf(context);
     if (controller == null) return;
-    final confirmed = await showLogoutConfirm(context, hasActiveJob: hasActiveJob);
+    final confirmed = await showLogoutConfirm(context, hasActiveJob: _rider.active != null);
     if (!confirmed || !mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(content: Text('Logging out...'), duration: Duration(seconds: 6)));
-    _stopLocationStreaming();
+    await _rider.stopForLogout();
     await controller.logout(beforeClear: () => DriverApiService.toggleDutyStatus(false));
     messenger.hideCurrentSnackBar();
   }
 
+  void _goTab(int i) => setState(() => selectedTab = i);
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBody: true,
-      body: IndexedStack(
-        index: selectedTab,
-        children: [
-          // Tab 0: Home / Duty Console
-          _buildHomeDutyTab(),
-
-          // Tab 1: Active Delivery Console
-          hasActiveJob
-              ? ActiveDeliveryScreen(
-                  currentStep: currentStep,
-                  onStepChanged: (step) {
-                    setState(() {
-                      currentStep = step;
-                    });
-                  },
-                  onCompleted: _completeJob,
-                )
-              : _buildNoActiveJobView(),
-
-          // Tab 2: Earnings History Screen
-          const EarningsHistoryScreen(),
-
-          // Tab 3: Trip History Screen
-          const TripLogsScreen(),
-        ],
-      ),
-      bottomNavigationBar: KGlassNav(
-        index: selectedTab,
-        onChanged: (index) {
-          setState(() {
-            selectedTab = index;
-          });
-        },
-        items: [
-          const KNavItem(LucideIcons.house, 'Home'),
-          KNavItem(LucideIcons.bike, 'Active', badge: hasActiveJob ? 1 : 0),
-          const KNavItem(LucideIcons.wallet, 'Earnings'),
-          const KNavItem(LucideIcons.history, 'Trips'),
-        ],
+    return ListenableBuilder(
+      listenable: _rider,
+      builder: (context, _) => Scaffold(
+        extendBody: true,
+        body: IndexedStack(
+          index: selectedTab,
+          children: [
+            _buildHomeDutyTab(),
+            ActiveDeliveryScreen(controller: _rider, onGoHome: () => _goTab(0)),
+            EarningsHistoryScreen(controller: _rider),
+            TripLogsScreen(controller: _rider),
+          ],
+        ),
+        bottomNavigationBar: KGlassNav(
+          index: selectedTab,
+          onChanged: _goTab,
+          items: [
+            const KNavItem(LucideIcons.house, 'Home'),
+            KNavItem(LucideIcons.bike, 'Active', badge: (_rider.active != null || _rider.notice != null) ? 1 : 0),
+            const KNavItem(LucideIcons.wallet, 'Earnings'),
+            const KNavItem(LucideIcons.history, 'Trips'),
+          ],
+        ),
       ),
     );
   }
@@ -297,207 +152,271 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Widget _buildHomeDutyTab() {
     final k = context.k;
     final partner = SessionScope.maybeOf(context)?.session;
+    final r = _rider;
+    final now = r.services.now();
+    final active = r.active;
+    final notice = r.notice;
     return SafeArea(
       bottom: false,
       child: Builder(builder: (context) {
         final bottomInset = MediaQuery.paddingOf(context).bottom;
-        return ListView(
-          padding: EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, bottomInset + 24),
-          children: [
-            // Header: brand + ID pass + SOS
-            Row(
-              children: [
-                const KBrandMark(height: 40),
-                const Spacer(),
-                KIconButton(icon: LucideIcons.badgeCheck, semanticLabel: 'Open runner ID pass', onTap: _openRunnerPass),
-                const SizedBox(width: 10),
-                KIconButton(icon: LucideIcons.siren, semanticLabel: 'Emergency campus support', tint: KraveoPalette.danger, onTap: _callCampusAdminSupport),
-              ],
-            ),
-            if (partner != null) ...[
-              const SizedBox(height: 16),
-              _GreetingRow(partner: partner, onTap: _openAccountSheet),
-            ],
-            const SizedBox(height: 20),
-
-            // Hero duty control
-            DutyToggle(isOnline: isOnline, onChanged: _toggleDuty),
-            const SizedBox(height: 16),
-
-            // Earnings hero + stat tiles
-            KReveal(
-              child: EarningsCard(
-                todayEarnings: todayEarnings,
-                completedTrips: completedTrips,
-                onTap: () {
-                  setState(() {
-                    selectedTab = 2; // Jump to Earnings tab
-                  });
-                },
-              ),
-            ),
-            const SizedBox(height: 8),
-
-            // Job area
-            if (!isOnline) ...[
-              const SectionLabel('Orders', padding: EdgeInsets.fromLTRB(4, 16, 4, 8)),
-              KCard(
-                child: KEmptyState(
-                  icon: LucideIcons.wifiOff,
-                  title: 'You are off duty',
-                  message: 'Go on duty to start receiving campus orders.',
-                  action: KButton(label: 'Go on duty', icon: LucideIcons.power, large: true, expand: false, onPressed: () => _toggleDuty(true)),
-                ),
-              ),
-            ] else if (!hasActiveJob && !_offerDismissed) ...[
-              const SectionLabel('New order', padding: EdgeInsets.fromLTRB(4, 16, 4, 8)),
-              KReveal(
-                child: SwipeAcceptCard(
-                  key: ValueKey('offer-$completedTrips'),
-                  onAccepted: _acceptJob,
-                  onDeclined: () => setState(() => _offerDismissed = true),
-                ),
-              ),
-            ] else if (!hasActiveJob) ...[
-              const SectionLabel('Orders', padding: EdgeInsets.fromLTRB(4, 16, 4, 8)),
-              const KCard(
-                padding: EdgeInsets.zero,
-                clip: true,
-                child: Stack(
-                  clipBehavior: Clip.hardEdge,
-                  alignment: Alignment.topCenter,
-                  children: [
-                    // Radar rings are centred on the KEmptyState icon circle (32px padding + 42px radius).
-                    Positioned(top: 74 - 130, left: 0, right: 0, child: Center(child: RadarPulse(size: 260))),
-                    KEmptyState(
-                      icon: LucideIcons.radar,
-                      title: 'You\'re online - waiting for orders',
-                      message: 'Stay near the campus gate. New orders appear here.',
-                    ),
-                  ],
-                ),
-              ),
-            ] else ...[
-              // Active Delivery Summary preview card on Home tab
-              const SectionLabel('In progress', padding: EdgeInsets.fromLTRB(4, 16, 4, 8)),
-              KCard(
-                padding: const EdgeInsets.all(20),
-                borderColor: k.brand.withValues(alpha: 0.55),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Delivery in progress', style: KraveoType.headlineSm.copyWith(color: k.ink)),
-                    const SizedBox(height: 16),
-                    PipelineStepper(
-                      currentStep: currentStep,
-                      onStepTapped: (step) {
-                        setState(() {
-                          currentStep = step;
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 20),
-                    KButton(
-                      label: 'Open active delivery',
-                      icon: LucideIcons.arrowRight,
-                      kind: KButtonKind.accent,
-                      large: true,
-                      onPressed: () {
-                        setState(() {
-                          selectedTab = 1;
-                        });
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ],
-
-            // Runner pass entry
-            const SizedBox(height: 16),
-            KCard(
-              onTap: _openRunnerPass,
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-              child: Row(
+        return RefreshIndicator(
+          onRefresh: r.pollNow,
+          child: ListView(
+            padding: EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, bottomInset + 24),
+            children: [
+              // Header: brand + ID pass + support
+              Row(
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(color: k.brandSoft, borderRadius: BorderRadius.circular(KRadius.md)),
-                    child: Icon(LucideIcons.badgeCheck, color: k.brand, size: 24),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Runner ID pass', style: KraveoType.titleLg.copyWith(color: k.ink)),
-                        Text('Show at the hostel gate', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
-                      ],
-                    ),
-                  ),
-                  Icon(LucideIcons.chevronRight, color: k.inkFaint),
+                  const KBrandMark(height: 40),
+                  const Spacer(),
+                  KIconButton(icon: LucideIcons.badgeCheck, semanticLabel: 'Open runner ID pass', onTap: _openRunnerPass),
+                  const SizedBox(width: 10),
+                  KIconButton(icon: LucideIcons.siren, semanticLabel: 'Emergency campus support', tint: KraveoPalette.danger, onTap: () => showSupportSheet(context)),
                 ],
               ),
-            ),
-            if (partner != null) ...[
-              const SizedBox(height: 12),
-              KCard(
-                key: const ValueKey('logout-card'),
-                onTap: _confirmLogout,
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                child: Semantics(
-                  label: 'Log out',
-                  excludeSemantics: true,
-                  child: Row(
+              if (partner != null) ...[
+                const SizedBox(height: 16),
+                _GreetingRow(partner: partner, onTap: _openAccountSheet),
+              ],
+              const SizedBox(height: 20),
+
+              // Hero duty control (truthful: ON only after Kraveo confirmed it)
+              DutyToggle(isOnline: r.onDuty, busy: r.dutyBusy, onChanged: (v) => r.setDuty(v)),
+              if (r.onDuty) _LocationLine(state: r.location, postFailed: r.lastLocationPostFailed, onFix: r.fixLocation),
+              const SizedBox(height: 16),
+
+              KReveal(
+                child: EarningsCard(
+                  todayEarnings: RiderController.feesOf(r.deliveredToday),
+                  completedTrips: r.deliveredToday.length,
+                  weekFees: RiderController.feesOf(r.deliveredThisWeek),
+                  onTap: () => _goTab(2),
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // Job area
+              if (notice != null) ...[
+                const SectionLabel('Update', padding: EdgeInsets.fromLTRB(4, 16, 4, 8)),
+                KCard(
+                  key: const ValueKey('home-notice'),
+                  onTap: () => _goTab(1),
+                  borderColor: notice.kind == NoticeKind.cancelled ? KraveoPalette.danger : k.brand.withValues(alpha: 0.55),
+                  padding: const EdgeInsets.all(18),
+                  child: Row(children: [
+                    Icon(notice.kind == NoticeKind.delivered ? LucideIcons.circleCheck : LucideIcons.triangleAlert,
+                        color: notice.kind == NoticeKind.cancelled ? KraveoPalette.danger : k.brand),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        switch (notice.kind) {
+                          NoticeKind.delivered => 'Order ${notice.order.shortRef} delivered',
+                          NoticeKind.cancelled => 'Stop – order ${notice.order.shortRef} was cancelled',
+                          NoticeKind.reassigned => 'Order ${notice.order.shortRef} was moved away from you',
+                        },
+                        style: KraveoType.titleLg.copyWith(color: k.ink),
+                      ),
+                    ),
+                    Icon(LucideIcons.chevronRight, color: k.inkFaint),
+                  ]),
+                ),
+              ],
+              if (active != null) ...[
+                const SectionLabel('In progress', padding: EdgeInsets.fromLTRB(4, 16, 4, 8)),
+                KCard(
+                  padding: const EdgeInsets.all(20),
+                  borderColor: k.brand.withValues(alpha: 0.55),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(color: KraveoPalette.danger.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(KRadius.md)),
-                        child: const Icon(LucideIcons.logOut, color: KraveoPalette.danger, size: 24),
+                      Text('Order ${active.shortRef} · ${active.restaurantName}',
+                          maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.headlineSm.copyWith(color: k.ink)),
+                      const SizedBox(height: 16),
+                      PipelineStepper(currentStep: PipelineStepper.stepFor(active.status)),
+                      const SizedBox(height: 20),
+                      KButton(
+                        label: 'Open active delivery',
+                        icon: LucideIcons.arrowRight,
+                        kind: KButtonKind.accent,
+                        large: true,
+                        onPressed: () => _goTab(1),
                       ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Log out', style: KraveoType.titleLg.copyWith(color: k.ink)),
-                            Text('End your shift on this phone', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
-                          ],
-                        ),
-                      ),
-                      Icon(LucideIcons.chevronRight, color: k.inkFaint),
                     ],
                   ),
                 ),
+              ] else if (!r.onDuty) ...[
+                const SectionLabel('Orders', padding: EdgeInsets.fromLTRB(4, 16, 4, 8)),
+                KCard(
+                  child: KEmptyState(
+                    icon: LucideIcons.wifiOff,
+                    title: 'You are off duty',
+                    message: 'Go on duty to start receiving campus orders.',
+                    action: KButton(
+                      label: 'Go on duty',
+                      icon: LucideIcons.power,
+                      large: true,
+                      expand: false,
+                      loading: r.dutyBusy,
+                      onPressed: () => r.setDuty(true),
+                    ),
+                  ),
+                ),
+              ] else ...[
+                SectionLabel(r.offers.isEmpty ? 'Orders' : 'New orders (${r.offers.length})', padding: const EdgeInsets.fromLTRB(4, 16, 4, 8)),
+                if (r.offersStale)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Row(children: [
+                      Icon(LucideIcons.wifiOff, size: 18, color: k.inkMuted),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text('Can\'t reach Kraveo – retrying. Orders below may be out of date.', style: KraveoType.bodySm.copyWith(color: k.inkMuted))),
+                    ]),
+                  ),
+                if (!r.offersLoaded)
+                  const KCard(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24),
+                      child: Center(child: SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 3))),
+                    ),
+                  )
+                else if (r.offers.isEmpty)
+                  const KCard(
+                    padding: EdgeInsets.zero,
+                    clip: true,
+                    child: Stack(
+                      clipBehavior: Clip.hardEdge,
+                      alignment: Alignment.topCenter,
+                      children: [
+                        // Radar rings are centred on the KEmptyState icon circle (32px padding + 42px radius).
+                        Positioned(top: 74 - 130, left: 0, right: 0, child: Center(child: RadarPulse(size: 260))),
+                        KEmptyState(
+                          icon: LucideIcons.radar,
+                          title: 'You\'re online - waiting for orders',
+                          message: 'Stay near the campus gate. New orders appear here.',
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  for (final offer in r.offers)
+                    Padding(
+                      key: ValueKey('offer-${offer.id}'),
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: OfferCard(
+                        order: offer,
+                        now: now,
+                        claiming: r.claimingId == offer.id,
+                        disabled: r.claimingId != null && r.claimingId != offer.id,
+                        onAccepted: () => _claim(offer),
+                        onDeclined: () => r.dismissOffer(offer.id),
+                      ),
+                    ),
+              ],
+
+              // Runner pass entry
+              const SizedBox(height: 16),
+              KCard(
+                onTap: _openRunnerPass,
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(color: k.brandSoft, borderRadius: BorderRadius.circular(KRadius.md)),
+                      child: Icon(LucideIcons.badgeCheck, color: k.brand, size: 24),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Runner ID pass', style: KraveoType.titleLg.copyWith(color: k.ink)),
+                          Text('Show at the hostel gate', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+                        ],
+                      ),
+                    ),
+                    Icon(LucideIcons.chevronRight, color: k.inkFaint),
+                  ],
+                ),
               ),
+              if (partner != null) ...[
+                const SizedBox(height: 12),
+                KCard(
+                  key: const ValueKey('logout-card'),
+                  onTap: _confirmLogout,
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                  child: Semantics(
+                    label: 'Log out',
+                    excludeSemantics: true,
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(color: KraveoPalette.danger.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(KRadius.md)),
+                          child: const Icon(LucideIcons.logOut, color: KraveoPalette.danger, size: 24),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Log out', style: KraveoType.titleLg.copyWith(color: k.ink)),
+                              Text('End your shift on this phone', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+                            ],
+                          ),
+                        ),
+                        Icon(LucideIcons.chevronRight, color: k.inkFaint),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         );
       }),
     );
   }
+}
 
-  Widget _buildNoActiveJobView() {
-    return SafeArea(
-      bottom: false,
-      child: KEmptyState(
-        icon: LucideIcons.bike,
-        title: 'No active delivery',
-        message: 'Accept an order from Home to start step-by-step guidance.',
-        action: KButton(
-          label: 'Go to home',
-          icon: LucideIcons.house,
-          large: true,
-          expand: false,
-          onPressed: () {
-            setState(() {
-              selectedTab = 0;
-            });
-          },
+/// GPS state under the duty switch. Never shows a made-up position: problems are named, with a fix.
+class _LocationLine extends StatelessWidget {
+  const _LocationLine({required this.state, required this.postFailed, required this.onFix});
+  final LocationState state;
+  final bool postFailed;
+  final Future<void> Function() onFix;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final (IconData icon, Color color, String text, String? action) = switch (state) {
+      LocationState.ok => (
+          LucideIcons.locateFixed,
+          k.brand,
+          postFailed ? 'GPS on – could not send it to Kraveo, retrying' : 'Live location is being shared',
+          null,
         ),
-      ),
+      LocationState.waiting || LocationState.off => (LucideIcons.locate, k.inkMuted, 'Finding your location…', null),
+      LocationState.serviceOff => (LucideIcons.mapPinOff, KraveoPalette.danger, 'Location unavailable: GPS is turned off', 'Turn on GPS'),
+      LocationState.permissionDenied => (LucideIcons.mapPinOff, KraveoPalette.danger, 'Location unavailable: Kraveo is not allowed to use it', 'Allow location'),
+      LocationState.permissionDeniedForever => (LucideIcons.mapPinOff, KraveoPalette.danger, 'Location blocked for Kraveo in phone settings', 'Open settings'),
+      LocationState.unavailable => (LucideIcons.mapPinOff, KStatus.placed.color, 'Location unavailable – no GPS signal. Still trying…', null),
+    };
+    return Padding(
+      key: const ValueKey('location-line'),
+      padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+      child: Row(children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 8),
+        Expanded(child: Text(text, style: KraveoType.bodySm.copyWith(color: color == k.inkMuted ? k.inkMuted : k.ink))),
+        if (action != null) ...[
+          const SizedBox(width: 8),
+          KButton(label: action, kind: KButtonKind.tonal, expand: false, onPressed: onFix),
+        ],
+      ]),
     );
   }
 }
