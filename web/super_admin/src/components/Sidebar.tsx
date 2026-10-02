@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bike, ClipboardCheck, MapPinned, PanelLeftClose, PanelLeftOpen, ShoppingBag, Store, TrendingUp, Users, X } from 'lucide-react';
+import { Bike, ClipboardCheck, MapPinned, PanelLeftClose, PanelLeftOpen, ShoppingBag, Store, TrendingUp, TriangleAlert, Users, X } from 'lucide-react';
 import { TabType } from '../types';
 import { LogoBadge, LogoMark } from './ui/Logo';
 
@@ -11,11 +11,14 @@ interface SidebarProps {
   onCloseMobile: () => void;
   /** Optional live counters shown on nav items (only rendered when > 0). */
   badges?: Partial<Record<TabType, number>>;
+  /** Tabs whose badge means "something is wrong" (rendered in the danger colour instead of green). */
+  alertBadges?: Partial<Record<TabType, boolean>>;
 }
 
 const NAV_ITEMS: Array<{ id: TabType; label: string; hint: string; icon: React.ElementType }> = [
   { id: 'map', label: 'Live map', hint: 'Dispatch and runner positions', icon: MapPinned },
   { id: 'orders', label: 'Orders', hint: 'Every order and its status', icon: ShoppingBag },
+  { id: 'attention', label: 'Needs attention', hint: 'Failed refunds, locked OTPs, stuck orders', icon: TriangleAlert },
   { id: 'applications', label: 'Applications', hint: 'Approve new restaurants and riders', icon: ClipboardCheck },
   { id: 'vendors', label: 'Vendors', hint: 'Dhabas and availability', icon: Store },
   { id: 'drivers', label: 'Drivers', hint: 'Runner partners and duty', icon: Bike },
@@ -29,12 +32,12 @@ const readCollapsed = (): boolean => {
   try { return window.localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; }
 };
 
-interface BodyProps extends Pick<SidebarProps, 'activeTab' | 'setActiveTab' | 'isLiveConnected' | 'badges'> {
+interface BodyProps extends Pick<SidebarProps, 'activeTab' | 'setActiveTab' | 'isLiveConnected' | 'badges' | 'alertBadges'> {
   expanded: boolean;
   onNavigate?: () => void;
 }
 
-const SidebarBody: React.FC<BodyProps> = ({ activeTab, setActiveTab, isLiveConnected, badges, expanded, onNavigate }) => (
+const SidebarBody: React.FC<BodyProps> = ({ activeTab, setActiveTab, isLiveConnected, badges, alertBadges, expanded, onNavigate }) => (
   <>
     <nav aria-label="Primary" className="flex-1 space-y-1 px-3 py-2">
       {expanded && <p className="k-label px-3 pb-2 pt-1">Operations</p>}
@@ -42,11 +45,12 @@ const SidebarBody: React.FC<BodyProps> = ({ activeTab, setActiveTab, isLiveConne
         const Icon = item.icon;
         const isActive = activeTab === item.id;
         const count = badges?.[item.id] ?? 0;
+        const alert = Boolean(alertBadges?.[item.id]) && count > 0;
         return (
           <button
             key={item.id}
             onClick={() => { setActiveTab(item.id); onNavigate?.(); }}
-            aria-label={item.label}
+            aria-label={count > 0 ? `${item.label} (${count})` : item.label}
             aria-current={isActive ? 'page' : undefined}
             title={expanded ? undefined : item.label}
             style={{ ['--i' as string]: index }}
@@ -57,8 +61,8 @@ const SidebarBody: React.FC<BodyProps> = ({ activeTab, setActiveTab, isLiveConne
             {expanded && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
             {count > 0 && (
               expanded
-                ? <span className="rounded-full bg-kraveo-g400/20 px-2 py-0.5 text-[11px] font-extrabold tabular-nums text-kraveo-g300">{count}</span>
-                : <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-kraveo-g400" aria-hidden="true" />
+                ? <span className={`rounded-full px-2 py-0.5 text-[11px] font-extrabold tabular-nums ${alert ? 'bg-kraveo-danger/20 text-kraveo-danger' : 'bg-kraveo-g400/20 text-kraveo-g300'}`} aria-hidden="true">{count}</span>
+                : <span className={`absolute right-1.5 top-1.5 h-2 w-2 rounded-full ${alert ? 'bg-kraveo-danger' : 'bg-kraveo-g400'}`} aria-hidden="true" />
             )}
             {!expanded && (
               <span role="tooltip" className="pointer-events-none absolute left-full z-50 ml-3 hidden whitespace-nowrap rounded-k-sm border border-kraveo-line bg-kraveo-surface2 px-3 py-1.5 text-xs font-bold text-kraveo-ink shadow-k-lift group-hover:block group-focus-visible:block">
@@ -87,7 +91,7 @@ const SidebarBody: React.FC<BodyProps> = ({ activeTab, setActiveTab, isLiveConne
   </>
 );
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isLiveConnected, mobileOpen, onCloseMobile, badges }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isLiveConnected, mobileOpen, onCloseMobile, badges, alertBadges }) => {
   const [collapsed, setCollapsed] = useState<boolean>(readCollapsed);
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -131,7 +135,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isLiv
             </div>
           )}
         </div>
-        <SidebarBody activeTab={activeTab} setActiveTab={setActiveTab} isLiveConnected={isLiveConnected} badges={badges} expanded={!collapsed} />
+        <SidebarBody activeTab={activeTab} setActiveTab={setActiveTab} isLiveConnected={isLiveConnected} badges={badges} alertBadges={alertBadges} expanded={!collapsed} />
         <div className="border-t border-kraveo-line p-3">
           <button
             onClick={toggleCollapsed}
@@ -155,7 +159,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isLiv
               <LogoBadge imgClassName="h-9" />
               <button ref={closeRef} aria-label="Close navigation" onClick={onCloseMobile} className="k-icon-btn"><X className="h-4 w-4" aria-hidden="true" /></button>
             </div>
-            <SidebarBody activeTab={activeTab} setActiveTab={setActiveTab} isLiveConnected={isLiveConnected} badges={badges} expanded onNavigate={onCloseMobile} />
+            <SidebarBody activeTab={activeTab} setActiveTab={setActiveTab} isLiveConnected={isLiveConnected} badges={badges} alertBadges={alertBadges} expanded onNavigate={onCloseMobile} />
           </aside>
         </div>
       )}

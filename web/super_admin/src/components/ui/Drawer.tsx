@@ -12,12 +12,14 @@ interface DrawerProps {
   footer?: React.ReactNode;
   /** Wider panel for detail views (tablet and up). */
   wide?: boolean;
+  /** Forms focus their first field on open (default). Detail views set false so focus lands on the panel itself. */
+  focusFirstField?: boolean;
 }
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 /** Right-hand drawer on >=640px, bottom sheet on phones. Esc closes, focus is trapped and restored, body scroll is locked. */
-export const Drawer: React.FC<DrawerProps> = ({ open, onClose, title, subtitle, icon: Icon, children, footer, wide = false }) => {
+export const Drawer: React.FC<DrawerProps> = ({ open, onClose, title, subtitle, icon: Icon, children, footer, wide = false, focusFirstField = true }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   // Keep the latest onClose in a ref so re-renders (e.g. typing in a form) never re-run the focus/scroll-lock effect.
@@ -30,7 +32,7 @@ export const Drawer: React.FC<DrawerProps> = ({ open, onClose, title, subtitle, 
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const panel = panelRef.current;
-    const first = panel?.querySelector<HTMLElement>('input,select,textarea') ?? panel?.querySelector<HTMLElement>(FOCUSABLE);
+    const first = focusFirstField ? panel?.querySelector<HTMLElement>('input,select,textarea') ?? panel?.querySelector<HTMLElement>(FOCUSABLE) : null;
     (first ?? panel)?.focus();
 
     const onKey = (event: KeyboardEvent) => {

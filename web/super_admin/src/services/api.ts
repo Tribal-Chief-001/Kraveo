@@ -2,6 +2,7 @@
 import {
   AdminProfile,
   AnalyticsData,
+  AttentionEntry,
   Application,
   ApplicationCounts,
   ApprovalStatus,
@@ -18,15 +19,39 @@ import {
   normalizeOrder,
   normalizeVendor,
 } from '../types';
+import { normalizeAttention } from '../lib/orderProblems';
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? 'https://api.kraveo.site' : 'http://localhost:5000');
 export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (import.meta.env.PROD ? 'https://api.kraveo.site' : 'http://localhost:5000');
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /** `code` / `field` come from the server's `{ success:false, message, code?, field? }` error body (contract 2). */
+  constructor(public status: number, message: string, public code?: string, public field?: string) {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+/** No request may spin forever (contract 6): give up after this long and show a clear message. */
+const REQUEST_TIMEOUT_MS = 20_000;
+
+async function send(path: string, init: RequestInit): Promise<{ response: Response; body: any }> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { ...init, signal: controller.signal, headers: { ...getHeaders(), ...(init.headers || {}) } });
+  } catch (error) {
+    if (controller.signal.aborted) throw new ApiError(0, 'The server took too long to answer. Check the connection and try again.', 'TIMEOUT');
+    throw new ApiError(0, 'The operations API is unreachable. Check the network connection and try again.', 'NETWORK');
+  } finally {
+    window.clearTimeout(timer);
+  }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new ApiError(response.status, body?.message || `Request failed (${response.status}).`, typeof body?.code === 'string' ? body.code : undefined, typeof body?.field === 'string' ? body.field : undefined);
+  }
+  return { response, body };
 }
 
 export const getAuthToken = (): string => localStorage.getItem('kraveo_admin_token') || '';
@@ -53,35 +78,20 @@ const getHeaders = (extraHeaders: Record<string, string> = {}) => {
 };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      headers: { ...getHeaders(), ...(init.headers || {}) },
-    });
-  } catch {
-    throw new ApiError(0, 'The operations API is unreachable. Check the network connection and try again.');
-  }
-
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new ApiError(response.status, body?.message || `Request failed (${response.status}).`);
-  }
+  const { body } = await send(path, init);
   return body?.data ?? body;
 }
 
 /** Like request(), but keeps the whole body (counts, cursors, totals) instead of only `data`. */
 async function requestFull<T>(path: string, init: RequestInit = {}): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers: { ...getHeaders(), ...(init.headers || {}) } });
-  } catch {
-    throw new ApiError(0, 'The operations API is unreachable. Check the network connection and try again.');
-  }
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new ApiError(response.status, body?.message || `Request failed (${response.status}).`);
+  const { body } = await send(path, init);
   return body as T;
 }
+
+/** An order from an action response, or null when the server answered without one (e.g. `{ success: true }`). */
+const orderOrNull = (raw: any): Order | null => {
+  return raw && typeof raw === 'object' && raw.id ? normalizeOrder(raw) : null;
+};
 
 export const apiService = {
   async adminLogin(passcode: string, username?: string): Promise<{ token: string; admin: AdminProfile }> {
@@ -156,11 +166,51 @@ export const apiService = {
     }));
   },
 
-  async reassignOrderDriver(orderId: string, driverId: string | null): Promise<Order> {
-    return normalizeOrder(await request<any>(`/api/orders/${encodeURIComponent(orderId)}/reassign`, {
+  async reassignOrderDriver(orderId: string, driverId: string | null): Promise<Order | null> {
+    return orderOrNull(await request<any>(`/api/orders/${encodeURIComponent(orderId)}/reassign`, {
       method: 'PATCH',
       body: JSON.stringify({ driverId }),
     }));
+  },
+
+  async fetchOrder(orderId: string): Promise<Order> {
+    const order = orderOrNull(await request<any>(`/api/orders/${encodeURIComponent(orderId)}`));
+    if (!order) throw new ApiError(404, 'Order not found.');
+    return order;
+  },
+
+  // ── Order-flow admin actions (Docs/16_order_flow_contract.md 2.5) ──
+  /** Cancels any non-terminal order; the server refunds it when it was paid. */
+  async cancelOrder(orderId: string, reason: string): Promise<Order | null> {
+    return orderOrNull(await request<any>(`/api/admin/orders/${encodeURIComponent(orderId)}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }));
+  },
+
+  /** Asks the server to try a FAILED refund again right now (409 NO_FAILED_REFUND if there is none). */
+  async retryRefund(orderId: string): Promise<Order | null> {
+    return orderOrNull(await request<any>(`/api/admin/orders/${encodeURIComponent(orderId)}/retry-refund`, { method: 'POST', body: '{}' }));
+  },
+
+  /** Clears the 5-wrong-OTP lock; the server sends the customer a new gate code. */
+  async resetOtpLock(orderId: string): Promise<Order | null> {
+    return orderOrNull(await request<any>(`/api/admin/orders/${encodeURIComponent(orderId)}/reset-otp-lock`, { method: 'POST', body: '{}' }));
+  },
+
+  /**
+   * Orders the server says need a human: `{ data: [{ problem, problems[], detail, since, hint, order }] }`.
+   * `available: false` only when the server predates the order-flow release (404/405/501), so the dashboard
+   * can fall back to what it detects itself and say so.
+   */
+  async fetchNeedsAttention(): Promise<{ available: boolean; entries: AttentionEntry[] }> {
+    try {
+      const body = await requestFull<any>('/api/admin/orders/needs-attention');
+      return { available: true, entries: normalizeAttention(body) };
+    } catch (error) {
+      if (error instanceof ApiError && [404, 405, 501].includes(error.status)) return { available: false, entries: [] };
+      throw error;
+    }
   },
 
   // ── Partner applications and accounts ──

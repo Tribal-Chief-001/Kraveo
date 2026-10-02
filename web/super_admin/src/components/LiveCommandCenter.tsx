@@ -3,6 +3,8 @@ import { Bike, Clock, Crosshair, MapPin, PackageCheck, Radio, Timer, UserX, User
 import { DriverPartner, DriverPin, Order, OrderStatus } from '../types';
 import { PIPELINE_ORDER, STATUS_META, inr, statusMeta, timeAgo } from '../lib/tokens';
 import { AnimatedNumber } from './ui/AnimatedNumber';
+import { PaymentPill, OtpLockedPill } from './ui/OrderBadges';
+import { ReassignHandler, RiderAssignSelect, shortId } from './OrderControls';
 import { Avatar } from './ui/Avatar';
 import { EmptyState } from './ui/EmptyState';
 import { KpiTile } from './ui/KpiTile';
@@ -12,7 +14,9 @@ interface LiveCommandCenterProps {
   drivers: DriverPin[];
   orders: Order[];
   driverPartners: DriverPartner[];
-  onReassignDriver: (orderId: string, driverId: string | null) => void;
+  onReassignDriver: ReassignHandler;
+  /** Opens the order drawer (details, cancel, reset OTP lock). */
+  onOpenOrder?: (orderId: string) => void;
   loading?: boolean;
   query?: string;
 }
@@ -24,7 +28,6 @@ const projectCoordinate = (lat: number, lng: number) => ({
 });
 
 const STALE_AFTER_MS = 15 * 60 * 1000;
-const UNASSIGN_VALUE = '__unassign__';
 
 type RunnerState = 'available' | 'assigned' | 'onTheWay' | 'atGate';
 
@@ -35,7 +38,7 @@ const RUNNER_STATE: Record<RunnerState, { label: string; hex: string; dot: strin
   atGate: { label: 'At gate', hex: '#8B5CF6', dot: 'bg-kraveo-status-atGate', text: 'text-kraveo-status-atGate' },
 };
 
-const shortId = (id: string): string => (id.length > 9 ? `#${id.slice(-6).toUpperCase()}` : `#${id}`);
+
 
 const orderMatches = (order: Order, query: string): boolean => {
   const q = query.trim().toLowerCase();
@@ -44,7 +47,7 @@ const orderMatches = (order: Order, query: string): boolean => {
     .some((value) => Boolean(value) && String(value).toLowerCase().includes(q));
 };
 
-export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, orders, driverPartners, onReassignDriver, loading = false, query = '' }) => {
+export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, orders, driverPartners, onReassignDriver, onOpenOrder, loading = false, query = '' }) => {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -54,7 +57,9 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
   const initialLoad = loading && orders.length === 0 && driverPartners.length === 0;
 
   const activeOrders = useMemo(() => orders.filter((order) => !['DELIVERED', 'CANCELLED'].includes(order.status)), [orders]);
-  const pendingCount = orders.filter((order) => order.status === 'PLACED').length;
+  // Only paid orders reach the restaurant (contract 1.2); unpaid ones are waiting on the customer, not the vendor.
+  const pendingCount = orders.filter((order) => order.status === 'PLACED' && order.paymentStatus === 'PAID').length;
+  const unpaidCount = orders.filter((order) => order.status === 'PLACED' && order.paymentStatus !== 'PAID').length;
   const runnersOnline = driverPartners.filter((driver) => driver.dutyStatus === 'ONLINE' || driver.dutyStatus === 'IN_TRANSIT').length;
 
   // Average created -> last update over delivered orders in the feed (same definition the analytics note uses).
@@ -106,7 +111,7 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
           value={<AnimatedNumber value={driverPartners.length ? runnersOnline : null} />}
           note={driverPartners.length ? `of ${driverPartners.length} registered runners` : 'Runner roster unavailable'} />
         <KpiTile index={2} loading={initialLoad} label="Pending orders" icon={PackageCheck} tone="text-kraveo-status-placed" toneBg="bg-kraveo-status-placed/15"
-          value={<AnimatedNumber value={pendingCount} />} note={pendingCount ? 'Waiting for the vendor to accept' : 'Nothing waiting'} />
+          value={<AnimatedNumber value={pendingCount} />} note={pendingCount ? `Paid, waiting for the restaurant${unpaidCount ? ` · ${unpaidCount} unpaid` : ''}` : unpaidCount ? `${unpaidCount} waiting for payment` : 'Nothing waiting'} />
         <KpiTile index={3} loading={initialLoad} label="Avg delivery time" icon={Timer} tone="text-kraveo-status-atGate" toneBg="bg-kraveo-status-atGate/15"
           value={<AnimatedNumber value={avgDeliveryMinutes ? avgDeliveryMinutes.value : null} decimals={1} suffix={avgDeliveryMinutes ? ' min' : ''} />}
           note={avgDeliveryMinutes ? `Placed to last update, ${avgDeliveryMinutes.count} delivered` : 'No delivered orders yet'} />
@@ -235,10 +240,13 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
                 {lane.orders.map((order) => (
                   <article key={order.id} className="rounded-k-md border border-kraveo-line bg-kraveo-night/60 p-3 transition-colors hover:border-kraveo-g400/40">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-xs font-bold text-kraveo-ink" title={order.id}>{shortId(order.id)}</span>
+                      {onOpenOrder
+                        ? <button type="button" aria-haspopup="dialog" aria-label={`Open order ${shortId(order.id)}`} onClick={() => onOpenOrder(order.id)} className="rounded font-mono text-xs font-bold text-kraveo-g300 hover:underline" title={order.id}>{shortId(order.id)}</button>
+                        : <span className="font-mono text-xs font-bold text-kraveo-ink" title={order.id}>{shortId(order.id)}</span>}
                       <span className="text-[11px] text-kraveo-ink3">{timeAgo(order.createdAt, now)}</span>
                     </div>
                     <p className="mt-1.5 truncate text-sm font-bold text-kraveo-ink">{order.vendorName}</p>
+                    {(order.paymentStatus !== 'PAID' || order.otpLocked) && <div className="mt-1 flex flex-wrap gap-1"><PaymentPill status={order.paymentStatus} /><OtpLockedPill order={order} /></div>}
                     <div className="mt-1 flex items-center justify-between gap-2 text-xs text-kraveo-ink2">
                       <span className="flex min-w-0 items-center gap-1"><MapPin className="h-3 w-3 shrink-0 text-kraveo-ink3" aria-hidden="true" /><span className="truncate">{order.dropoffHostel}</span></span>
                       <span className="k-num shrink-0 text-sm text-kraveo-ink">{inr(order.totalAmount)}</span>
@@ -249,19 +257,7 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
                           ? <><Avatar name={order.driverName} size="sm" className="!h-6 !w-6 !text-[9px]" /><span className="truncate font-bold text-kraveo-ink">{order.driverName}</span></>
                           : <span className="inline-flex items-center gap-1.5 rounded-full bg-kraveo-status-placed/15 px-2.5 py-1 font-bold text-kraveo-status-placed"><UserX className="h-3 w-3" aria-hidden="true" />Unassigned</span>}
                       </div>
-                      <select
-                        aria-label={`Assign runner for order ${shortId(order.id)}`}
-                        value=""
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          onReassignDriver(order.id, value === UNASSIGN_VALUE || !value ? null : value);
-                        }}
-                        className="k-select !min-h-[36px] text-xs font-bold"
-                      >
-                        <option value="">{order.driverName ? 'Change runner' : 'Assign runner'}</option>
-                        {driverPartners.map((driver) => <option key={driver.id} value={driver.id}>{driver.name}{driver.dutyStatus === 'OFFLINE' ? ' (offline)' : ''}</option>)}
-                        {order.driverId && <option value={UNASSIGN_VALUE}>Unassign runner</option>}
-                      </select>
+                      <RiderAssignSelect order={order} riders={driverPartners} onReassign={onReassignDriver} />
                     </div>
                   </article>
                 ))}

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -9,13 +9,21 @@ import { DriverManager } from './components/DriverManager';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { ApplicationsPanel } from './components/ApplicationsPanel';
 import { CustomersPanel } from './components/CustomersPanel';
-import { AdminProfile, DriverPartner, DriverPin, Order, OrderStatus, TabType, Vendor, normalizeOrder } from './types';
+import { AdminProfile, AttentionEntry, DriverPartner, DriverPin, Order, OrderStatus, TabType, Vendor, normalizeOrderPartial } from './types';
 import { ApiError, apiService, clearAuthToken, getAuthToken, isAuthenticated as hasSession, SOCKET_URL } from './services/api';
 import { LoginScreen } from './components/LoginScreen';
 import { LogoMark } from './components/ui/Logo';
 import { useToast } from './components/ui/Toast';
 import { ORDER_STATUS_LABEL } from './lib/tokens';
 import { RefreshCw, X } from 'lucide-react';
+import { NeedsAttentionPanel } from './components/NeedsAttentionPanel';
+import { DrawerMode, OrderDrawer } from './components/OrderDrawer';
+import { mergeInto, mergeOrderLists, patchOrder, restoreIfUntouched, upsertOrder } from './lib/orders';
+import { localAttention, pruneWithLiveOrders } from './lib/orderProblems';
+
+/** Contract 3: sockets are only a speed-up; the REST list is polled while the page is visible. */
+const POLL_MS = 15_000;
+const ATTENTION_DEBOUNCE_MS = 1_500;
 
 export const App: React.FC = () => {
   const [isAuth, setIsAuth] = useState(false);
@@ -34,6 +42,18 @@ export const App: React.FC = () => {
   const [drivers, setDrivers] = useState<DriverPin[]>([]);
   const [pendingApplications, setPendingApplications] = useState(0);
   const [applicationsKey, setApplicationsKey] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  // Needs-attention list (server). `available: false` = old server without the endpoint -> local fallback.
+  const [attention, setAttention] = useState<{ available: boolean | null; entries: AttentionEntry[]; loading: boolean; error: string; checkedAt: number | null }>(
+    { available: null, entries: [], loading: false, error: '', checkedAt: null },
+  );
+  // Order drawer: the id to show; `drawerFallback` holds a copy for orders outside the loaded page.
+  const [drawer, setDrawer] = useState<{ id: string; mode: DrawerMode } | null>(null);
+  const [drawerFallback, setDrawerFallback] = useState<Order | null>(null);
+  const [drawerLoad, setDrawerLoad] = useState<{ loading: boolean; error: string }>({ loading: false, error: '' });
+  const ordersRef = useRef<Order[]>([]);
+  ordersRef.current = orders;
+  const attentionTimer = useRef<number | undefined>(undefined);
 
   const handleAuthFailure = useCallback((error: unknown) => {
     if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
@@ -61,6 +81,36 @@ export const App: React.FC = () => {
     } catch { /* the badge is a nicety; the Applications tab shows real errors */ }
   }, []);
 
+  const loadAttention = useCallback(async () => {
+    if (!getAuthToken()) return;
+    setAttention((current) => ({ ...current, loading: true }));
+    try {
+      const result = await apiService.fetchNeedsAttention();
+      setAttention({ available: result.available, entries: result.entries, loading: false, error: '', checkedAt: Date.now() });
+    } catch (error) {
+      handleSessionError(error);
+      setAttention((current) => ({ ...current, loading: false, error: error instanceof Error ? error.message : 'The needs-attention list could not be loaded.' }));
+    }
+  }, [handleSessionError]);
+
+  /** Many socket events in a burst trigger one reload. */
+  const scheduleAttention = useCallback(() => {
+    window.clearTimeout(attentionTimer.current);
+    attentionTimer.current = window.setTimeout(loadAttention, ATTENTION_DEBOUNCE_MS);
+  }, [loadAttention]);
+
+  /** Background poll: no spinner, no error banner (the live socket or the next poll catches up). */
+  const silentRefresh = useCallback(async () => {
+    if (!getAuthToken()) return;
+    try {
+      const fetched = await apiService.fetchOrders();
+      setOrders((current) => mergeOrderLists(current, fetched));
+    } catch (error) {
+      handleSessionError(error);
+    }
+    loadAttention();
+  }, [handleSessionError, loadAttention]);
+
   const fetchBackendData = useCallback(async () => {
     if (!getAuthToken()) return;
     setIsLoading(true);
@@ -72,7 +122,7 @@ export const App: React.FC = () => {
       apiService.fetchDriverLocations(),
     ]);
     const [ordersResult, vendorsResult, driversResult, locationsResult] = results;
-    if (ordersResult.status === 'fulfilled') setOrders(ordersResult.value);
+    if (ordersResult.status === 'fulfilled') setOrders((current) => mergeOrderLists(current, ordersResult.value));
     if (vendorsResult.status === 'fulfilled') setVendors(vendorsResult.value);
     if (driversResult.status === 'fulfilled') setDriverPartners(driversResult.value);
     if (locationsResult.status === 'fulfilled') setDrivers(locationsResult.value);
@@ -80,7 +130,8 @@ export const App: React.FC = () => {
     if (firstError) handleAuthFailure(firstError.reason);
     setIsLoading(false);
     refreshPendingCount();
-  }, [handleAuthFailure, refreshPendingCount]);
+    loadAttention();
+  }, [handleAuthFailure, refreshPendingCount, loadAttention]);
 
   useEffect(() => {
     if (!hasSession()) {
@@ -109,23 +160,32 @@ export const App: React.FC = () => {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 8,
     });
+    let connectedBefore = false;
     socket.on('connect', () => {
       setIsLiveConnected(true);
-      socket.emit('join_room', 'admins');
+      // The server answers join_room with { ok }; without the admins room no admin events arrive.
+      socket.emit('join_room', 'admins', (reply: { ok?: boolean } | undefined) => {
+        if (reply && reply.ok === false) {
+          setIsLiveConnected(false);
+          toast.error('Live updates refused', 'The server did not let this session join the admin room. Log in again.');
+        }
+      });
+      // After a reconnect, events sent while we were offline are lost: catch up from REST.
+      if (connectedBefore) silentRefresh();
+      connectedBefore = true;
     });
     socket.on('disconnect', () => setIsLiveConnected(false));
     socket.on('connect_error', () => setIsLiveConnected(false));
-    socket.on('order_updated', (rawOrder: unknown) => {
-      const updatedOrder = normalizeOrder(rawOrder);
-      setOrders((previous) => {
-        const exists = previous.some((order) => order.id === updatedOrder.id);
-        return exists ? previous.map((order) => order.id === updatedOrder.id ? { ...order, ...updatedOrder } : order) : [updatedOrder, ...previous];
-      });
-    });
-    socket.on('new_order_alert', (rawOrder: unknown) => {
-      const newOrder = normalizeOrder(rawOrder);
-      setOrders((previous) => [newOrder, ...previous.filter((order) => order.id !== newOrder.id)]);
-    });
+    // Same OrderView as REST (contract 2.1/3). Merge by updatedAt so an older event never rolls an order back.
+    const applyLiveOrder = (rawOrder: unknown) => {
+      const incoming = normalizeOrderPartial(rawOrder);
+      if (!incoming.id) return;
+      setOrders((previous) => upsertOrder(previous, incoming));
+      setDrawerFallback((current) => mergeInto(current, incoming));
+      scheduleAttention();
+    };
+    socket.on('order_updated', applyLiveOrder);
+    socket.on('new_order_alert', applyLiveOrder);
     socket.on('partner_application', (info: { kind?: string; name?: string; resubmitted?: boolean }) => {
       const who = info?.kind === 'VENDOR' ? 'A restaurant' : 'A rider';
       toast.info(info?.resubmitted ? 'Application updated' : 'New application', `${who}${info?.name ? ` (${info.name})` : ''} is waiting for your approval.`);
@@ -148,22 +208,140 @@ export const App: React.FC = () => {
     });
     return () => {
       socket.disconnect();
+      window.clearTimeout(attentionTimer.current);
     };
-  }, [fetchBackendData, isAuth, refreshPendingCount, toast]);
+  }, [fetchBackendData, isAuth, refreshPendingCount, toast, scheduleAttention, silentRefresh]);
 
-  const handleStatusChange = async (orderId: string, status: OrderStatus, otpCode?: string) => {
-    const previous = orders;
-    setOrders((current) => current.map((order) => order.id === orderId ? { ...order, status } : order));
+  // Polling fallback while the page is visible, plus an immediate catch-up when the admin comes back to the tab.
+  useEffect(() => {
+    if (!isAuth) return undefined;
+    const tick = () => { if (document.visibilityState === 'visible') silentRefresh(); };
+    const poll = window.setInterval(tick, POLL_MS);
+    const clock = window.setInterval(() => setNow(Date.now()), 30_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') { setNow(Date.now()); silentRefresh(); } };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { window.clearInterval(poll); window.clearInterval(clock); document.removeEventListener('visibilitychange', onVisible); };
+  }, [isAuth, silentRefresh]);
+
+  /**
+   * One optimistic order action: patch the order at once, call the server, then take the server's copy.
+   * On failure only this order is rolled back (and only if no newer live update arrived meanwhile), and the
+   * server's own message is shown.
+   */
+  const runOrderAction = async (
+    orderId: string,
+    optimistic: Partial<Order> | null,
+    call: () => Promise<Order | null>,
+    messages: { ok: (order: Order | null) => [string, string?, 'error'?]; fail: string },
+    onError?: (message: string) => void,
+  ): Promise<boolean> => {
+    const snapshot = ordersRef.current.find((order) => order.id === orderId) ?? (drawerFallback?.id === orderId ? drawerFallback : null);
+    if (optimistic) {
+      setOrders((current) => patchOrder(current, orderId, optimistic));
+      setDrawerFallback((current) => (current?.id === orderId ? { ...current, ...optimistic } : current));
+    }
     try {
-      const updated = await apiService.updateOrderStatus(orderId, status, otpCode);
-      setOrders((current) => current.map((order) => order.id === orderId ? updated : order));
+      let updated = await call();
+      if (!updated) updated = await apiService.fetchOrder(orderId).catch(() => null);
+      if (updated) {
+        const fresh = updated;
+        // Orders outside the loaded page live only in the drawer copy; do not push old orders into the live list.
+        setOrders((current) => (current.some((order) => order.id === orderId) ? upsertOrder(current, fresh) : current));
+        setDrawerFallback((current) => mergeInto(current, fresh));
+      }
       setErrorMessage('');
-      toast.success('Order updated', `Now ${ORDER_STATUS_LABEL[updated.status] ?? updated.status}.`);
+      const [title, description, kind] = messages.ok(updated);
+      if (kind === 'error') toast.error(title, description); else toast.success(title, description);
+      return true;
     } catch (error) {
-      setOrders(previous);
-      handleAuthFailure(error);
+      if (snapshot) {
+        setOrders((current) => restoreIfUntouched(current, snapshot));
+        setDrawerFallback((current) => (current?.id === orderId ? restoreIfUntouched([current], snapshot)[0] : current));
+      }
+      handleSessionError(error);
+      const message = error instanceof Error ? error.message : 'Please try again.';
+      toast.error(messages.fail, message);
+      onError?.(message);
+      return false;
+    } finally {
+      scheduleAttention();
     }
   };
+
+  const handleStatusChange = (orderId: string, status: OrderStatus, otpCode?: string) => runOrderAction(
+    orderId,
+    { status },
+    () => apiService.updateOrderStatus(orderId, status, otpCode),
+    { ok: (updated) => ['Order updated', `Now ${ORDER_STATUS_LABEL[updated?.status ?? status] ?? status}.`], fail: 'Status not changed' },
+  );
+
+  const handleReassignDriver = (orderId: string, driverId: string | null) => {
+    const rider = driverId ? driverPartners.find((driver) => driver.id === driverId) : undefined;
+    return runOrderAction(
+      orderId,
+      { driverId: driverId ? rider?.userId ?? driverId : undefined, driverName: driverId ? rider?.name ?? 'Updating assignment…' : undefined, driverPhone: driverId ? rider?.phone : undefined },
+      () => apiService.reassignOrderDriver(orderId, driverId),
+      { ok: (updated) => [driverId ? 'Rider assigned' : 'Rider unassigned', updated?.driverName ? `${updated.driverName} is on this order.` : undefined], fail: 'Rider not changed' },
+    );
+  };
+
+  const handleCancelOrder = async (orderId: string, reason: string): Promise<string | null> => {
+    const paid = (ordersRef.current.find((order) => order.id === orderId) ?? drawerFallback)?.paymentStatus === 'PAID';
+    let failure: string | null = null;
+    await runOrderAction(
+      orderId,
+      { status: 'CANCELLED', cancelledBy: 'ADMIN', cancelReason: reason, cancelledAt: new Date().toISOString() },
+      () => apiService.cancelOrder(orderId, reason),
+      {
+        ok: (updated) => ['Order cancelled', updated?.refundStatus === 'FAILED'
+          ? 'The refund failed. It is listed under Needs attention and retried automatically.'
+          : paid ? 'The customer is being refunded automatically.' : 'No payment was captured, nothing to refund.'],
+        fail: 'Order not cancelled',
+      },
+      (message) => { failure = message; },
+    );
+    return failure;
+  };
+
+  const handleResetOtpLock = (orderId: string) => runOrderAction(
+    orderId,
+    { otpLocked: false, otpAttempts: 0 },
+    () => apiService.resetOtpLock(orderId),
+    { ok: () => ['OTP lock reset', 'The customer got a new gate code; the rider can try again.'], fail: 'OTP lock not reset' },
+  );
+
+  // No optimistic patch: whether the refund now succeeds is only known from the server's answer.
+  const handleRetryRefund = (orderId: string) => runOrderAction(
+    orderId,
+    null,
+    () => apiService.retryRefund(orderId),
+    {
+      ok: (updated) => (updated?.refundStatus === 'DONE' || updated?.paymentStatus === 'REFUNDED'
+        ? ['Refund done', 'The customer has been refunded.']
+        : updated?.refundStatus === 'FAILED'
+          ? ['Refund failed again', updated.refundError ?? 'Razorpay refused it again. Check the payment in Razorpay.', 'error']
+          : ['Refund retried', 'The refund is in progress.']),
+      fail: 'Refund not retried',
+    },
+  );
+
+  const openOrder = useCallback((orderId: string, mode: DrawerMode = 'view', fallback?: Order | null) => {
+    setDrawer({ id: orderId, mode });
+    if (ordersRef.current.some((order) => order.id === orderId)) {
+      setDrawerFallback(null);
+      setDrawerLoad({ loading: false, error: '' });
+      return;
+    }
+    // Not in the loaded page (e.g. an old order from the needs-attention list): show what we have, then load it.
+    setDrawerFallback(fallback ?? null);
+    setDrawerLoad({ loading: true, error: '' });
+    apiService.fetchOrder(orderId)
+      .then((order) => { setDrawerFallback((current) => (current && current.id === orderId ? mergeInto(current, order) : order)); setDrawerLoad({ loading: false, error: '' }); })
+      .catch((error) => { handleSessionError(error); setDrawerLoad({ loading: false, error: error instanceof Error ? error.message : 'This order could not be loaded.' }); });
+  }, [handleSessionError]);
+
+  const closeDrawer = useCallback(() => { setDrawer(null); setDrawerFallback(null); setDrawerLoad({ loading: false, error: '' }); }, []);
+  const setDrawerMode = useCallback((mode: DrawerMode) => setDrawer((current) => (current ? { ...current, mode } : current)), []);
 
   const handleToggleVendor = async (vendorId: string) => {
     const target = vendors.find((vendor) => vendor.id === vendorId);
@@ -181,19 +359,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleReassignDriver = async (orderId: string, driverId: string | null) => {
-    const previous = orders;
-    setOrders((current) => current.map((order) => order.id === orderId ? { ...order, driverId: driverId || undefined, driverName: driverId ? 'Updating assignment…' : undefined } : order));
-    try {
-      const updated = await apiService.reassignOrderDriver(orderId, driverId);
-      setOrders((current) => current.map((order) => order.id === orderId ? updated : order));
-      toast.success(driverId ? 'Runner assigned' : 'Runner unassigned', updated.driverName ? `${updated.driverName} is on this order.` : undefined);
-    } catch (error) {
-      setOrders(previous);
-      handleAuthFailure(error);
-    }
-  };
-
   const handleLogout = () => {
     clearAuthToken();
     setIsAuth(false);
@@ -203,6 +368,8 @@ export const App: React.FC = () => {
     setDriverPartners([]);
     setDrivers([]);
     setPendingApplications(0);
+    setAttention({ available: null, entries: [], loading: false, error: '', checkedAt: null });
+    closeDrawer();
     setSearchQuery('');
     setMobileNavOpen(false);
   };
@@ -212,6 +379,17 @@ export const App: React.FC = () => {
     setSearchQuery('');
   }, []);
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
+
+  // Server list when available; otherwise what the dashboard can detect itself (clearly labelled in the panel).
+  // Embedded order copies are replaced by the live ones so the list never shows a stale status.
+  const attentionEntries = useMemo<AttentionEntry[]>(() => {
+    const byId = new Map(orders.map((order) => [order.id, order]));
+    const base = attention.available === false ? localAttention(orders, now) : attention.entries;
+    return pruneWithLiveOrders(base.map((entry) => (entry.orderId && byId.has(entry.orderId) ? { ...entry, order: byId.get(entry.orderId)! } : entry)));
+  }, [attention.available, attention.entries, orders, now]);
+  const attentionIds = useMemo(() => new Set(attentionEntries.map((entry) => entry.orderId).filter((id): id is string => Boolean(id))), [attentionEntries]);
+  const drawerOrder = drawer ? orders.find((order) => order.id === drawer.id) ?? (drawerFallback?.id === drawer.id ? drawerFallback : null) : null;
+  const drawerEntry = drawer ? attentionEntries.find((entry) => entry.orderId === drawer.id) : undefined;
 
   if (authChecking) {
     return (
@@ -238,7 +416,8 @@ export const App: React.FC = () => {
         isLiveConnected={isLiveConnected}
         mobileOpen={mobileNavOpen}
         onCloseMobile={closeMobileNav}
-        badges={{ orders: activeOrderCount, applications: pendingApplications }}
+        badges={{ orders: activeOrderCount, attention: attentionEntries.length, applications: pendingApplications }}
+        alertBadges={{ attention: true }}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <Header
@@ -263,8 +442,23 @@ export const App: React.FC = () => {
         )}
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 p-4 pb-10 outline-none sm:p-6 sm:pb-12">
           <div key={activeTab} className="animate-fade-up">
-            {activeTab === 'map' && <LiveCommandCenter drivers={drivers} orders={orders} driverPartners={driverPartners} onReassignDriver={handleReassignDriver} loading={isLoading} query={searchQuery} />}
-            {activeTab === 'orders' && <OrdersTable orders={orders} onStatusChange={handleStatusChange} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'map' && <LiveCommandCenter drivers={drivers} orders={orders} driverPartners={driverPartners} onReassignDriver={handleReassignDriver} onOpenOrder={openOrder} loading={isLoading} query={searchQuery} />}
+            {activeTab === 'orders' && <OrdersTable orders={orders} attentionIds={attentionIds} onAdvance={handleStatusChange} onOpenOrder={openOrder} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} now={now} />}
+            {activeTab === 'attention' && (
+              <NeedsAttentionPanel
+                entries={attentionEntries}
+                serverAvailable={attention.available}
+                loading={attention.loading}
+                error={attention.error}
+                checkedAt={attention.checkedAt}
+                onRefresh={loadAttention}
+                onOpenOrder={openOrder}
+                onResetOtpLock={handleResetOtpLock}
+                onRetryRefund={handleRetryRefund}
+                query={searchQuery}
+                onClearQuery={clearQuery}
+              />
+            )}
             {activeTab === 'applications' && <ApplicationsPanel refreshKey={applicationsKey} query={searchQuery} onChanged={fetchBackendData} onAuthError={handleSessionError} />}
             {activeTab === 'vendors' && <VendorManager vendors={vendors} onToggleVendor={handleToggleVendor} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'drivers' && <DriverManager drivers={driverPartners} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
@@ -273,6 +467,22 @@ export const App: React.FC = () => {
           </div>
         </main>
       </div>
+      <OrderDrawer
+        order={drawerOrder}
+        loading={Boolean(drawer) && !drawerOrder && drawerLoad.loading}
+        loadError={drawer && !drawerOrder ? drawerLoad.error : ''}
+        mode={drawer?.mode ?? 'view'}
+        onModeChange={setDrawerMode}
+        onClose={closeDrawer}
+        riders={driverPartners}
+        problems={drawerEntry?.problems ?? []}
+        hint={drawerEntry?.hint}
+        onAdvance={handleStatusChange}
+        onReassign={handleReassignDriver}
+        onCancel={handleCancelOrder}
+        onResetOtpLock={handleResetOtpLock}
+        onRetryRefund={handleRetryRefund}
+      />
     </div>
   );
 };

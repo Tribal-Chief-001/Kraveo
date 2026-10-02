@@ -18,7 +18,8 @@ interface HeaderProps {
 
 const TITLES: Record<TabType, { title: string; subtitle: string; searchHint: string }> = {
   map: { title: 'Live command center', subtitle: 'Dispatch, runners and the delivery pipeline', searchHint: 'Search orders, vendors, hostels, runners' },
-  orders: { title: 'Orders', subtitle: 'Every order and its live status', searchHint: 'Search by order, student, vendor, hostel or runner' },
+  orders: { title: 'Orders', subtitle: 'Every order, its payment and its live status', searchHint: 'Search order, student, phone, restaurant, rider or payment id' },
+  attention: { title: 'Needs attention', subtitle: 'Orders and payments a human has to fix', searchHint: 'Search by order, restaurant, student or problem' },
   applications: { title: 'Applications', subtitle: 'Restaurants and riders waiting for your approval', searchHint: 'Search by name, phone, location or plate' },
   vendors: { title: 'Vendors', subtitle: 'Dhaba network and availability', searchHint: 'Search vendors by name, category or address' },
   drivers: { title: 'Drivers', subtitle: 'Runner partners on campus', searchHint: 'Search runners by name, reg no or code' },

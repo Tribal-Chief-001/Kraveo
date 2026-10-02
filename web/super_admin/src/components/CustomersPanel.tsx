@@ -3,6 +3,7 @@ import { ChevronRight, Coins, GraduationCap, Loader2, Mail, MapPin, Phone, Recei
 import { CustomerDetail, CustomerOrder, CustomerRow } from '../types';
 import { apiService } from '../services/api';
 import { inr, timeAgo } from '../lib/tokens';
+import { orderCode } from '../lib/orders';
 import { AnimatedNumber } from './ui/AnimatedNumber';
 import { Avatar } from './ui/Avatar';
 import { Drawer } from './ui/Drawer';
@@ -179,7 +180,7 @@ const OrderBlock: React.FC<{ o: CustomerOrder }> = ({ o }) => {
       <button type="button" className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         <div className="min-w-0">
           <p className="truncate text-sm font-bold text-kraveo-ink">{o.vendor?.name ?? 'Unknown restaurant'}</p>
-          <p className="font-mono text-[11px] text-kraveo-ink3">#{o.id.slice(0, 8)} · {dateTime(o.createdAt)}</p>
+          <p className="font-mono text-[11px] text-kraveo-ink3">{orderCode(o.id)} · {dateTime(o.createdAt)}</p>
           <div className="mt-2 flex flex-wrap gap-1.5"><StatusPill status={o.status} compact /><PayPill status={o.paymentStatus} /></div>
         </div>
         <div className="shrink-0 text-right"><p className="k-num text-lg text-kraveo-ink">{inr(o.totalAmount)}</p><p className="text-[11px] text-kraveo-g300">{open ? 'Hide' : 'Details'}</p></div>
