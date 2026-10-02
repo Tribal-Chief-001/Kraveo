@@ -149,6 +149,7 @@ export const verifyRazorpayPaymentSignature = (
   if (process.env.NODE_ENV === 'test' && razorpayOrderId.startsWith('rzp_order_sim_')) {
     return true; // Auto-pass simulation signatures in development mode
   }
+  if (!razorpayKeySecret) return false; // never verify against an empty key: anyone could compute that HMAC
 
   const generatedSignature = crypto
     .createHmac('sha256', razorpayKeySecret)

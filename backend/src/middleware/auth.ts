@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { UserRole } from '../types';
+import { prisma } from '../db';
 
 dotenv.config();
 
@@ -20,13 +21,64 @@ const getJwtSecret = (): string => {
   return JWT_SECRET;
 };
 
-// Generates real signed JWT tokens with 30-day expiration
-export const generateToken = (payload: { id: string; phone?: string | null; role: UserRole }): string => {
-  return jwt.sign(payload, getJwtSecret(), { expiresIn: '30d' });
+type TokenClaims = { id: string; phone?: string | null; role: UserRole; tv?: number };
+
+// Generates real signed JWT tokens with 30-day expiration. `tv` is the user's tokenVersion: bumping it in the
+// database (password reset, suspension, account deletion) revokes every token issued before.
+export const generateToken = (payload: { id: string; phone?: string | null; role: UserRole; tokenVersion?: number | null }): string => {
+  const { tokenVersion, ...claims } = payload;
+  return jwt.sign({ ...claims, tv: tokenVersion ?? 0 }, getJwtSecret(), { expiresIn: '30d' });
+};
+
+// ---------------------------------------------------------------------------------------------
+// Account check: a token is only good while its user exists and tokenVersion still matches.
+// A small in-memory cache (default 15 s, cleared on every bump) keeps this off the hot path.
+// Only "account is fine" is cached, so a ghost/revoked token is re-checked every time.
+// ---------------------------------------------------------------------------------------------
+const authCache = new Map<string, { tv: number; until: number }>();
+const cacheTtlMs = () => {
+  const raw = process.env.AUTH_CACHE_TTL_MS;
+  if (raw !== undefined && raw.trim() !== '' && Number.isFinite(Number(raw))) return Math.max(0, Number(raw));
+  return process.env.NODE_ENV === 'test' ? 0 : 15_000; // tests change rows directly: no stale cache by default
+};
+
+/** Forget what we know about a user (call right after changing their tokenVersion or deleting them). */
+export const invalidateAuthCache = (userId?: string) => (userId ? authCache.delete(userId) : authCache.clear());
+
+/** True when the user exists and `tv` (missing claim = 0) equals the stored tokenVersion. */
+export const accountMatchesToken = async (userId: string, tv: unknown): Promise<boolean> => {
+  const claimed = typeof tv === 'number' && Number.isInteger(tv) ? tv : 0;
+  const now = Date.now();
+  const hit = authCache.get(userId);
+  if (hit && hit.until > now) return hit.tv === claimed;
+  const row = await prisma.user.findUnique({ where: { id: userId }, select: { tokenVersion: true, deletedAt: true } });
+  if (!row || row.deletedAt) {
+    authCache.delete(userId);
+    return false;
+  }
+  const ttl = cacheTtlMs();
+  if (ttl > 0) authCache.set(userId, { tv: row.tokenVersion, until: now + ttl });
+  return row.tokenVersion === claimed;
+};
+
+/** Revoke every token of a user right now (and drop the cache entry on this instance). */
+export const bumpTokenVersion = async (userId: string) => {
+  await prisma.user.update({ where: { id: userId }, data: { tokenVersion: { increment: 1 } } });
+  invalidateAuthCache(userId);
+};
+
+/** Verifies signature + expiry only (no database). Throws on an invalid token. */
+export const verifyToken = (token: string) => jwt.verify(token, getJwtSecret()) as TokenClaims;
+
+/** Signature + expiry + account check (exists, not deleted, tokenVersion). Throws on anything wrong. Used by sockets. */
+export const verifyTokenForAccount = async (token: string): Promise<TokenClaims> => {
+  const decoded = verifyToken(token);
+  if (!decoded?.id || typeof decoded.id !== 'string' || !(await accountMatchesToken(decoded.id, decoded.tv))) throw new Error('Token revoked or account missing.');
+  return decoded;
 };
 
 // Middleware to verify JWT authentication header
-export const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+export const requireAuth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -38,20 +90,30 @@ export const requireAuth = (req: AuthenticatedRequest, res: Response, next: Next
 
   const token = authHeader.split(' ')[1];
 
+  let decoded: TokenClaims;
   try {
-    const decoded = jwt.verify(token, getJwtSecret()) as { id: string; phone?: string | null; role: UserRole };
-    req.user = decoded;
-    return next();
+    decoded = verifyToken(token);
+    if (!decoded?.id || typeof decoded.id !== 'string') throw new Error('no subject');
   } catch (error) {
     return res.status(401).json({
       success: false,
       message: 'Invalid or expired authentication token.'
     });
   }
+
+  try {
+    if (!(await accountMatchesToken(decoded.id, decoded.tv))) {
+      return res.status(401).json({ success: false, code: 'TOKEN_REVOKED', message: 'This session is no longer valid. Please sign in again.' });
+    }
+  } catch (error) {
+    console.error('auth account check failed:', (error as Error).message);
+    return res.status(503).json({ success: false, message: 'Service temporarily unavailable. Please try again.' });
+  }
+  req.user = { id: decoded.id, phone: decoded.phone, role: decoded.role };
+  return next();
 };
 
 export const authenticateJwt = requireAuth;
-export const verifyToken = (token: string) => jwt.verify(token, getJwtSecret()) as { id: string; phone?: string | null; role: UserRole };
 
 // Role-Based Access Control (RBAC) middleware
 export const requireRole = (...allowedRoles: UserRole[]) => {

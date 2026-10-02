@@ -1,24 +1,32 @@
 import { Router, Request, Response } from 'express';
 import { Role } from '@prisma/client';
-import { generateToken, requireAuth, requireRole, AuthenticatedRequest } from '../middleware/auth';
+import { generateToken, requireAuth, requireRole, AuthenticatedRequest, verifyTokenForAccount, invalidateAuthCache } from '../middleware/auth';
 import { prisma } from '../db';
 import { canonicalPhone, last10 } from '../utils/phone';
 import { hashPassword, verifyPassword, getDummyHash, passwordProblem } from '../services/password';
-import { isLocked, recordFailure, recordSuccess } from '../services/loginLimiter';
+import { isLocked, recordFailure, recordSuccess, ipLockedFor, recordIpFailure } from '../services/loginLimiter';
+import { rateLimitMiddleware, FailureLimiter, clientIp } from '../middleware/rateLimit';
+import { fail, validParams, ID_RE } from '../utils/http';
+import { errSummary } from '../utils/log';
+import { dropFromPartnerRooms } from '../realtime';
+import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem } from '../utils/catalog';
 import { verifyGoogleIdToken, GoogleAuthError } from '../services/googleAuth';
 import { timingSafeEqual } from 'crypto';
 import { orderRouter } from './orders';
 import { partnerRouter, requireApprovedPartner, validateVendorFields, validateDriverFields, newRunnerCode, writeAudit, DEFAULT_BANNER } from './partners';
-import { verifyToken } from '../middleware/auth';
 
 export const apiRouter = Router();
 
+// Rate limits are mounted by path, before any handler (see middleware/rateLimit.ts for the numbers).
+apiRouter.use(rateLimitMiddleware);
 // Partner sign-up, applications, approval and admin customer views live in ./partners.
 apiRouter.use(partnerRouter);
 // Orders, payments, rider pool, gate OTP and the admin order tools live in ./orders.
 apiRouter.use(orderRouter);
 
-const adminLoginAttempts = new Map<string, { count: number; resetAt: number }>();
+// Admin passcode: only WRONG passcodes count, per client IP (nginx sets X-Forwarded-For, `trust proxy` = 1).
+const adminLoginFailures = new FailureLimiter({ maxFails: 5, windowMs: 15 * 60 * 1000 });
+export const __resetAdminLoginLimiter = () => adminLoginFailures.reset();
 const canManageVendor = async (vendorId: string, user: AuthenticatedRequest['user']) => {
   if (user?.role === Role.ADMIN) return true;
   if (user?.role !== Role.VENDOR) return false;
@@ -27,11 +35,11 @@ const canManageVendor = async (vendorId: string, user: AuthenticatedRequest['use
 };
 
 /** Public catalogue routes do not require a login, but admins and the owning vendor may still see unapproved restaurants. */
-const optionalViewer = (req: Request): { id: string; role: Role } | null => {
+const optionalViewer = async (req: Request): Promise<{ id: string; role: Role } | null> => {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) return null;
   try {
-    const decoded = verifyToken(header.split(' ')[1]);
+    const decoded = await verifyTokenForAccount(header.split(' ')[1]);
     return { id: decoded.id, role: decoded.role as Role };
   } catch {
     return null;
@@ -50,7 +58,7 @@ apiRouter.get('/drivers', requireAuth, requireRole('ADMIN'), async (req: Authent
     });
     return res.json({ success: true, count: drivers.length, data: drivers });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error fetching drivers' });
+    return fail(res, err, 'Error fetching drivers');
   }
 });
 
@@ -61,21 +69,36 @@ apiRouter.get('/drivers/locations', requireAuth, async (req: AuthenticatedReques
     });
     return res.json({ success: true, data: dbLocs });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error fetching driver locations' });
+    return fail(res, err, 'Error fetching driver locations');
   }
 });
 
-apiRouter.get('/drivers/:id', requireAuth, requireRole('DRIVER', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+// ADMIN: the full row (phone, UPI, emergency contact, plate). A DRIVER: only their own, approved profile, and only
+// non-personal fields. Anyone else (another rider, a pending applicant) gets 404, so ids cannot be probed.
+apiRouter.get('/drivers/:id', requireAuth, requireRole('DRIVER', 'ADMIN'), validParams('id'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const driverId = req.params.id;
-    const driver = await prisma.driverPartner.findFirst({
-      where: { OR: [{ id: driverId }, { userId: driverId }] },
-      include: { user: { select: { id: true, name: true, phone: true, role: true, avatarId: true, createdAt: true } } }
+    const where = { OR: [{ id: driverId }, { userId: driverId }] };
+    if (req.user!.role === Role.ADMIN) {
+      const driver = await prisma.driverPartner.findFirst({
+        where,
+        include: { user: { select: { id: true, name: true, phone: true, role: true, avatarId: true, createdAt: true } } },
+      });
+      if (!driver) return res.status(404).json({ success: false, message: 'Driver partner not found.' });
+      return res.json({ success: true, data: driver });
+    }
+    const own = await prisma.driverPartner.findFirst({
+      where: { AND: [where, { userId: req.user!.id, approvalStatus: 'APPROVED' }] },
+      select: {
+        id: true, userId: true, name: true, runnerCode: true, vehicleType: true, dutyStatus: true, ordersToday: true, totalEarningsToday: true,
+        avgCompletionTimeMinutes: true, onTimeRatePercent: true, rating: true, approvalStatus: true, createdAt: true,
+        user: { select: { id: true, name: true, role: true, avatarId: true, createdAt: true } },
+      },
     });
-    if (!driver) return res.status(404).json({ success: false, message: 'Driver partner not found.' });
-    return res.json({ success: true, data: driver });
+    if (!own) return res.status(404).json({ success: false, message: 'Driver partner not found.' });
+    return res.json({ success: true, data: own });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error fetching driver' });
+    return fail(res, err, 'Error fetching driver');
   }
 });
 
@@ -123,15 +146,30 @@ apiRouter.post('/auth/google', async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: 'Your Google email is not verified.' });
     }
 
-    let user = await prisma.user.findFirst({ where: { OR: [{ googleSub: identity.sub }, { email: identity.email }] } });
+    // The Google account id (sub) is the identity. An account found only by email is linked to this Google
+    // account when it has none yet; it is never re-pointed from one Google account to another.
+    let user = await prisma.user.findFirst({ where: { googleSub: identity.sub, deletedAt: null } });
     let isNewUser = false;
+
+    if (!user) {
+      const byEmail = await prisma.user.findFirst({ where: { email: identity.email, deletedAt: null } });
+      if (byEmail && byEmail.googleSub && byEmail.googleSub !== identity.sub) {
+        return res.status(409).json({ success: false, code: 'ACCOUNT_CONFLICT', message: 'This email is already linked to a different Google account. Contact Kraveo support.' });
+      }
+      user = byEmail;
+    }
 
     if (user) {
       if (user.role !== Role.STUDENT) {
         return res.status(403).json({ success: false, message: 'This Google account belongs to a Kraveo partner. Use the partner app.' });
       }
       if (user.googleSub !== identity.sub || user.email !== identity.email) {
-        user = await prisma.user.update({ where: { id: user.id }, data: { googleSub: identity.sub, email: identity.email } });
+        try {
+          user = await prisma.user.update({ where: { id: user.id }, data: { googleSub: identity.sub, email: identity.email } });
+        } catch (err: any) {
+          if (err?.code === 'P2002') return res.status(409).json({ success: false, code: 'ACCOUNT_CONFLICT', message: 'This Google account is already linked to another Kraveo account. Contact Kraveo support.' });
+          throw err;
+        }
       }
     } else {
       user = await prisma.user.create({
@@ -140,10 +178,10 @@ apiRouter.post('/auth/google', async (req: Request, res: Response) => {
       isNewUser = true;
     }
 
-    const token = generateToken({ id: user.id, phone: user.phone, role: user.role });
+    const token = generateToken({ id: user.id, phone: user.phone, role: user.role, tokenVersion: user.tokenVersion });
     return res.json({ success: true, message: isNewUser ? 'Welcome to Kraveo!' : 'Welcome back!', token, user: publicUser(user), isNewUser, needsProfile: needsProfile(user) });
   } catch (err: any) {
-    console.error('google sign-in failed:', err);
+    console.error('google sign-in failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
 });
@@ -159,15 +197,21 @@ apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
     }
 
     const key = last10(phone);
+    const ip = clientIp(req);
+    const ipLocked = ipLockedFor(ip);
+    if (ipLocked) {
+      return res.status(429).json({ success: false, code: 'RATE_LIMITED', message: 'Too many wrong attempts from this network. Try again later.', retryAfterSeconds: ipLocked });
+    }
     const locked = isLocked(key);
     if (locked) {
       return res.status(429).json({ success: false, message: 'Too many wrong attempts. Try again later.', retryAfterSeconds: locked });
     }
 
-    const user = await prisma.user.findFirst({ where: { phone: { endsWith: key }, role: { in: [Role.VENDOR, Role.DRIVER, Role.ADMIN, Role.STUDENT] } } });
+    const user = await prisma.user.findFirst({ where: { phone: { endsWith: key }, role: { in: [Role.VENDOR, Role.DRIVER, Role.ADMIN, Role.STUDENT] }, deletedAt: null } });
     // Always run one scrypt so unknown numbers and wrong passwords take the same time.
     const ok = await verifyPassword(password, user?.passwordHash ?? (await getDummyHash()));
     if (!user || !user.passwordHash || !ok) {
+      recordIpFailure(ip);
       const retry = recordFailure(key);
       if (retry) return res.status(429).json({ success: false, message: 'Too many wrong attempts. Try again in 15 minutes.', retryAfterSeconds: retry });
       return res.status(401).json({ success: false, message: 'Wrong phone or password.' });
@@ -183,7 +227,7 @@ apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
     const approvalStatus = (vendor ?? driver)?.approvalStatus ?? 'APPROVED';
     const rejectionReason = (vendor ?? driver)?.rejectionReason ?? null;
 
-    const token = generateToken({ id: user.id, phone: user.phone, role: user.role });
+    const token = generateToken({ id: user.id, phone: user.phone, role: user.role, tokenVersion: user.tokenVersion });
     return res.json({
       success: true,
       token,
@@ -194,7 +238,7 @@ apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
       ...(driver ? { driver } : {}),
     });
   } catch (err: any) {
-    console.error('partner-login failed:', err);
+    console.error('partner-login failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
 });
@@ -202,7 +246,7 @@ apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
 // Admin Authentication (Passcode Login for Super Admin Dashboard)
 apiRouter.post('/auth/admin-login', async (req: Request, res: Response) => {
   try {
-    const { username, passcode } = req.body;
+    const { username, passcode } = req.body ?? {};
 
     if (!passcode) {
       return res.status(400).json({ success: false, message: 'Admin passcode is required.' });
@@ -213,16 +257,11 @@ apiRouter.post('/auth/admin-login', async (req: Request, res: Response) => {
       return res.status(503).json({ success: false, message: 'Admin authentication is not configured on this server.' });
     }
 
-    const requestKey = req.ip || 'unknown';
-    const now = Date.now();
-    const attempt = adminLoginAttempts.get(requestKey);
-    if (attempt && now < attempt.resetAt && attempt.count >= 5) {
-      return res.status(429).json({ success: false, message: 'Too many admin login attempts. Try again later.' });
-    }
-    if (!attempt || now >= attempt.resetAt) {
-      adminLoginAttempts.set(requestKey, { count: 1, resetAt: now + 15 * 60 * 1000 });
-    } else {
-      attempt.count += 1;
+    // Per client IP, and only WRONG passcodes count: a few typos (or an attacker) at one address never lock the admin out elsewhere.
+    const requestKey = clientIp(req);
+    const blocked = adminLoginFailures.blockedFor(requestKey);
+    if (blocked) {
+      return res.status(429).json({ success: false, code: 'RATE_LIMITED', message: 'Too many admin login attempts. Try again later.', retryAfterSeconds: blocked });
     }
 
     const supplied = Buffer.from(String(passcode).trim());
@@ -230,10 +269,11 @@ apiRouter.post('/auth/admin-login', async (req: Request, res: Response) => {
     const isPasscodeValid = supplied.length === expected.length && timingSafeEqual(supplied, expected);
 
     if (!isPasscodeValid) {
+      adminLoginFailures.fail(requestKey);
       return res.status(401).json({ success: false, message: 'Invalid admin passcode. Access denied.' });
     }
 
-    adminLoginAttempts.delete(requestKey);
+    adminLoginFailures.clear(requestKey);
 
     // Find or create admin profile in PostgreSQL
     let adminUser = await prisma.user.findFirst({
@@ -254,7 +294,8 @@ apiRouter.post('/auth/admin-login', async (req: Request, res: Response) => {
     const token = generateToken({
       id: adminUser.id,
       phone: adminUser.phone,
-      role: Role.ADMIN
+      role: Role.ADMIN,
+      tokenVersion: adminUser.tokenVersion,
     });
 
     return res.json({
@@ -269,7 +310,7 @@ apiRouter.post('/auth/admin-login', async (req: Request, res: Response) => {
       }
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error during admin login.' });
+    return fail(res, err, 'Error during admin login');
   }
 });
 
@@ -283,7 +324,7 @@ apiRouter.get('/auth/profile', requireAuth, async (req: AuthenticatedRequest, re
     if (!user) return res.status(404).json({ success: false, message: 'User profile not found.' });
     return res.json({ success: true, user: publicUser(user), needsProfile: needsProfile(user) });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error fetching profile' });
+    return fail(res, err, 'Error fetching profile');
   }
 });
 
@@ -342,7 +383,7 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthenticatedRequest, re
       throw err;
     }
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error updating profile' });
+    return fail(res, err, 'Error updating profile');
   }
 });
 
@@ -352,7 +393,10 @@ apiRouter.post('/auth/logout', requireAuth, async (req: AuthenticatedRequest, re
     if (req.user?.id) {
       await prisma.user.update({ where: { id: req.user.id }, data: { fcmToken: null } });
       // A rider who logs out is off duty; otherwise the dashboard keeps counting them as online.
-      if (req.user.role === Role.DRIVER) await prisma.driverPartner.updateMany({ where: { userId: req.user.id }, data: { dutyStatus: 'OFFLINE' } });
+      if (req.user.role === Role.DRIVER) {
+        await prisma.driverPartner.updateMany({ where: { userId: req.user.id }, data: { dutyStatus: 'OFFLINE' } });
+        await dropFromPartnerRooms(req.user.id, ['drivers']);
+      }
     }
     return res.json({ success: true });
   } catch {
@@ -364,17 +408,28 @@ apiRouter.post('/auth/logout', requireAuth, async (req: AuthenticatedRequest, re
 apiRouter.delete('/auth/account', requireAuth, requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
-    const active = await prisma.order.count({ where: { customerId: userId, status: { notIn: ['DELIVERED', 'CANCELLED'] } } });
-    if (active > 0) {
+    // Lock the account row (placing an order takes the same lock), so no order can slip in between the check and the delete.
+    const blocked = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+      const active = await tx.order.count({ where: { customerId: userId, status: { notIn: ['DELIVERED', 'CANCELLED'] } } });
+      if (active > 0) return true;
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          name: 'Deleted user', phone: null, email: null, googleSub: null, passwordHash: null, avatarId: null, isStudent: null, hostelBlock: null, fcmToken: null, upiId: null, kraveoCoins: 0,
+          deletedAt: new Date(),
+          tokenVersion: { increment: 1 }, // every token issued before is dead from now on
+        },
+      });
+      return false;
+    });
+    if (blocked) {
       return res.status(409).json({ success: false, message: 'You have an order in progress. You can delete your account once it is delivered.' });
     }
-    await prisma.user.update({
-      where: { id: userId },
-      data: { name: 'Deleted user', phone: null, email: null, googleSub: null, passwordHash: null, avatarId: null, isStudent: null, hostelBlock: null, fcmToken: null, upiId: null, kraveoCoins: 0 },
-    });
+    invalidateAuthCache(userId);
     return res.json({ success: true, message: 'Your account has been deleted.' });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Could not delete the account.' });
+    return fail(res, err, 'Could not delete the account');
   }
 });
 
@@ -441,7 +496,7 @@ apiRouter.post('/admin/partners', requireAuth, requireRole('ADMIN'), async (req:
     await writeAudit('PARTNER_CREATED', role, result.profileId ?? result.created.id, `Admin created ${String(role).toLowerCase()} ${cleanedName} (${phone})`);
     return res.status(201).json({ success: true, user: { id: result.created.id, name: result.created.name, phone: result.created.phone, role: result.created.role }, profileId: result.profileId });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Could not create the partner.' });
+    return fail(res, err, 'Could not create the partner');
   }
 });
 
@@ -454,7 +509,7 @@ apiRouter.get('/admin/partners', requireAuth, requireRole('ADMIN'), async (_req:
     });
     return res.json({ success: true, data: users });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Could not list partners.' });
+    return fail(res, err, 'Could not list partners');
   }
 });
 
@@ -462,8 +517,8 @@ apiRouter.get('/admin/partners', requireAuth, requireRole('ADMIN'), async (_req:
 apiRouter.post('/notifications/register-token', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { fcmToken } = req.body;
-    if (!fcmToken || typeof fcmToken !== 'string' || fcmToken.trim() === '') {
-      return res.status(400).json({ success: false, message: 'fcmToken is required and cannot be empty.' });
+    if (!fcmToken || typeof fcmToken !== 'string' || fcmToken.trim() === '' || fcmToken.length > 4096) {
+      return res.status(400).json({ success: false, message: 'fcmToken is required (up to 4096 characters).' });
     }
 
     if (req.user?.id) {
@@ -475,42 +530,54 @@ apiRouter.post('/notifications/register-token', requireAuth, async (req: Authent
 
     return res.json({ success: true, message: 'FCM push notification token registered successfully.' });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error registering token' });
+    return fail(res, err, 'Error registering token');
   }
 });
 
 // ----------------------------------------------------
 // VENDOR / DHABA ENDPOINTS
 // ----------------------------------------------------
+// Customers get the public shape (no owner id, FSSAI number, review state, timestamps). Admins and the owning
+// restaurant keep the full row.
+const fullVendorView = (v: any, viewer: { id: string; role: Role } | null) =>
+  viewer?.role === Role.ADMIN || (viewer?.role === Role.VENDOR && !!v.userId && v.userId === viewer.id) ? v : null;
+
 apiRouter.get('/vendors', async (req: Request, res: Response) => {
   try {
-    const viewer = optionalViewer(req);
+    const viewer = await optionalViewer(req);
     const dbVendors = await prisma.vendor.findMany({ include: { menuItems: true } });
-    const visible = dbVendors.filter((v) => canSeeVendor(v, viewer));
+    const visible = dbVendors.filter((v) => canSeeVendor(v, viewer)).map((v) => fullVendorView(v, viewer) ?? publicVendorView(v));
     return res.json({ success: true, count: visible.length, data: visible });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error fetching vendors' });
+    return fail(res, err, 'Error fetching vendors');
   }
 });
 
-apiRouter.get('/vendors/:id', async (req: Request, res: Response) => {
+apiRouter.get('/vendors/:id', validParams('id'), async (req: Request, res: Response) => {
   try {
     const dbVendor = await prisma.vendor.findUnique({
       where: { id: req.params.id },
       include: { menuItems: true }
     });
-    if (!dbVendor || !canSeeVendor(dbVendor, optionalViewer(req))) return res.status(404).json({ success: false, message: 'Vendor not found' });
-    return res.json({ success: true, data: { ...dbVendor, menu: dbVendor.menuItems } });
+    const viewer = await optionalViewer(req);
+    if (!dbVendor || !canSeeVendor(dbVendor, viewer)) return res.status(404).json({ success: false, message: 'Vendor not found' });
+    const shaped = fullVendorView(dbVendor, viewer) ?? publicVendorView(dbVendor);
+    return res.json({ success: true, data: { ...shaped, menu: shaped.menuItems } });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error fetching vendor' });
+    return fail(res, err, 'Error fetching vendor');
   }
 });
 
 apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { name, category, address, lat, lng, bannerImage } = req.body;
-    if (!name || !name.trim()) {
-      return res.status(400).json({ success: false, message: 'Vendor name is required.' });
+    const { name, category, address, lat, lng, bannerImage } = req.body ?? {};
+    if (typeof name !== 'string' || !name.trim() || name.trim().length > 60) {
+      return res.status(400).json({ success: false, message: 'Vendor name is required (up to 60 characters).' });
+    }
+    for (const [field, value, max] of [['category', category, 60], ['address', address, 140], ['bannerImage', bannerImage, 500]] as const) {
+      if (value !== undefined && value !== null && (typeof value !== 'string' || value.length > max)) {
+        return res.status(400).json({ success: false, field, message: `${field} must be text of at most ${max} characters.` });
+      }
     }
 
     const createdVendor = await prisma.vendor.create({
@@ -528,11 +595,11 @@ apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: Authen
 
     return res.status(201).json({ success: true, message: 'Vendor onboarded successfully', data: createdVendor });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error onboarding vendor' });
+    return fail(res, err, 'Error onboarding vendor');
   }
 });
 
-apiRouter.patch('/vendors/:id/status', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.patch('/vendors/:id/status', requireAuth, validParams('id'), requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { isAcceptingOrders } = req.body;
     const vendor = await prisma.vendor.findUnique({ where: { id: req.params.id } });
@@ -548,11 +615,11 @@ apiRouter.patch('/vendors/:id/status', requireAuth, requireRole('VENDOR', 'ADMIN
     });
     return res.json({ success: true, isAcceptingOrders: updated.isAcceptingOrders, data: updated });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error updating vendor status' });
+    return fail(res, err, 'Error updating vendor status');
   }
 });
 
-apiRouter.patch('/vendors/:id/toggle', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.patch('/vendors/:id/toggle', requireAuth, validParams('id'), requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const vendor = await prisma.vendor.findUnique({ where: { id: req.params.id } });
     if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
@@ -564,52 +631,54 @@ apiRouter.patch('/vendors/:id/toggle', requireAuth, requireRole('VENDOR', 'ADMIN
     });
     return res.json({ success: true, isAcceptingOrders: updated.isAcceptingOrders });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error toggling vendor' });
+    return fail(res, err, 'Error toggling vendor');
   }
 });
 
-apiRouter.post('/vendors/:id/items', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.post('/vendors/:id/items', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, validParams('id'), async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { name, price, category, description, isVeg, imageUrl } = req.body;
-    if (!name || price === undefined) {
-      return res.status(400).json({ success: false, message: 'Item name and price are required.' });
-    }
+    const v = validateMenuItemFields(req.body);
+    if (!v.ok) return res.status(400).json({ success: false, code: 'BAD_REQUEST', field: v.error.field, message: v.error.message });
     if (!(await canManageVendor(req.params.id, req.user))) return res.status(403).json({ success: false, message: 'Forbidden. You do not own this vendor.' });
+    if (!(await prisma.vendor.findUnique({ where: { id: req.params.id }, select: { id: true } }))) return res.status(404).json({ success: false, message: 'Vendor not found' });
 
     const newItem = await prisma.menuItem.create({
       data: {
         vendorId: req.params.id,
-        name: name.trim(),
-        price: parseFloat(price.toString()),
-        category: category || 'Main Course',
-        description: description || '',
-        isVeg: isVeg !== false,
-        imageUrl: imageUrl || 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400',
+        name: v.data.name,
+        price: v.data.price,
+        category: v.data.category,
+        description: v.data.description,
+        isVeg: v.data.isVeg,
+        imageUrl: v.data.imageUrl || 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400',
         isAvailable: true,
       }
     });
 
     return res.status(201).json({ success: true, message: 'Menu item created successfully', data: newItem });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error creating menu item' });
+    return fail(res, err, 'Error creating menu item');
   }
 });
 
 // ----------------------------------------------------
 // MENU ENDPOINTS
 // ----------------------------------------------------
-apiRouter.get('/menus/:vendorId', async (req: Request, res: Response) => {
+apiRouter.get('/menus/:vendorId', validParams('vendorId'), async (req: Request, res: Response) => {
   try {
     const owner = await prisma.vendor.findUnique({ where: { id: req.params.vendorId }, select: { approvalStatus: true, userId: true } });
-    if (!owner || !canSeeVendor(owner, optionalViewer(req))) return res.json({ success: true, count: 0, data: [] });
+    const viewer = await optionalViewer(req);
+    if (!owner || !canSeeVendor(owner, viewer)) return res.json({ success: true, count: 0, data: [] });
     const dbItems = await prisma.menuItem.findMany({ where: { vendorId: req.params.vendorId } });
-    return res.json({ success: true, count: dbItems.length, data: dbItems });
+    const full = viewer?.role === Role.ADMIN || (viewer?.role === Role.VENDOR && owner.userId === viewer.id);
+    const data = full ? dbItems : dbItems.map(publicMenuItem);
+    return res.json({ success: true, count: data.length, data });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error fetching menu items' });
+    return fail(res, err, 'Error fetching menu items');
   }
 });
 
-apiRouter.patch('/menus/:itemId/toggle', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.patch('/menus/:itemId/toggle', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, validParams('itemId'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const dbItem = await prisma.menuItem.findUnique({ where: { id: req.params.itemId } });
     if (!dbItem) return res.status(404).json({ success: false, message: 'Menu item not found' });
@@ -621,7 +690,7 @@ apiRouter.patch('/menus/:itemId/toggle', requireAuth, requireRole('VENDOR', 'ADM
     });
     return res.json({ success: true, item: updated });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error toggling menu item' });
+    return fail(res, err, 'Error toggling menu item');
   }
 });
 
@@ -671,17 +740,23 @@ apiRouter.get('/analytics', requireAuth, requireRole('ADMIN'), async (req: Authe
       }
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error calculating analytics' });
+    return fail(res, err, 'Error calculating analytics');
   }
 });
 
 // Update Menu Item Stock Availability & Price (Prisma DB Persistence)
-apiRouter.patch('/vendors/items/:itemId', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
-  const { isAvailable, price } = req.body;
+apiRouter.patch('/vendors/items/:itemId', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, validParams('itemId'), async (req: AuthenticatedRequest, res: Response) => {
+  const { isAvailable, price } = req.body ?? {};
 
   const updateData: any = {};
+  if (isAvailable !== undefined && typeof isAvailable !== 'boolean') return res.status(400).json({ success: false, code: 'BAD_REQUEST', field: 'isAvailable', message: 'isAvailable must be true or false.' });
   if (typeof isAvailable === 'boolean') updateData.isAvailable = isAvailable;
-  if (typeof price === 'number' && price > 0) updateData.price = price;
+  if (price !== undefined) {
+    const problem = priceProblem(price);
+    if (problem) return res.status(400).json({ success: false, code: 'BAD_REQUEST', field: 'price', message: problem });
+    updateData.price = price;
+  }
+  if (Object.keys(updateData).length === 0) return res.status(400).json({ success: false, code: 'BAD_REQUEST', message: 'Send isAvailable and/or price.' });
 
   try {
     // A restaurant may only change its own menu (was: any item of any restaurant).
@@ -694,7 +769,7 @@ apiRouter.patch('/vendors/items/:itemId', requireAuth, requireRole('VENDOR', 'AD
     });
     return res.json({ success: true, message: 'Menu item updated successfully.', item: updated });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error updating menu item' });
+    return fail(res, err, 'Error updating menu item');
   }
 });
 
@@ -703,16 +778,55 @@ apiRouter.patch('/vendors/items/:itemId', requireAuth, requireRole('VENDOR', 'AD
 // ----------------------------------------------------
 
 // Submit Order & Dish Review (Earns +10 Kraveo Coins & Updates Dhaba Rating)
-apiRouter.post('/reviews', requireAuth, requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response) => {
-  const { orderId, driverRating, driverTags, driverNotes, dishReviews, dhabaNotes } = req.body;
+const COUPON_COIN_COST = 50;
+const MAX_REVIEW_TEXT = 300;
+const MAX_DISH_REVIEWS = 30;
+const MAX_DRIVER_TAGS = 10;
+const isRating = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 5;
+const reviewText = (raw: unknown): string | null | false => {
+  if (raw === undefined || raw === null) return '';
+  if (typeof raw !== 'string') return false;
+  const t = raw.trim();
+  return t.length <= MAX_REVIEW_TEXT ? t : false;
+};
+const reviewBad = (res: Response, field: string, message: string) => res.status(400).json({ success: false, code: 'BAD_REQUEST', field, message });
 
-  if (!orderId) {
-    return res.status(400).json({ success: false, message: 'orderId is required.' });
+apiRouter.post('/reviews', requireAuth, requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response) => {
+  const b = req.body && typeof req.body === 'object' ? req.body : {};
+  const { orderId, driverRating, driverTags, dishReviews } = b;
+
+  if (typeof orderId !== 'string' || !ID_RE.test(orderId)) return reviewBad(res, 'orderId', 'orderId is required.');
+  if (driverRating !== undefined && driverRating !== null && !isRating(driverRating)) return reviewBad(res, 'driverRating', 'driverRating must be a whole number from 1 to 5.');
+  const driverNotes = reviewText(b.driverNotes);
+  if (driverNotes === false) return reviewBad(res, 'driverNotes', `Notes can be at most ${MAX_REVIEW_TEXT} characters.`);
+  const dhabaNotes = reviewText(b.dhabaNotes);
+  if (dhabaNotes === false) return reviewBad(res, 'dhabaNotes', `Notes can be at most ${MAX_REVIEW_TEXT} characters.`);
+  let tags: string[] = [];
+  if (driverTags !== undefined && driverTags !== null) {
+    if (!Array.isArray(driverTags) || driverTags.length > MAX_DRIVER_TAGS || driverTags.some((t) => typeof t !== 'string' || t.length === 0 || t.length > 40)) {
+      return reviewBad(res, 'driverTags', `driverTags must be a list of up to ${MAX_DRIVER_TAGS} short texts.`);
+    }
+    tags = driverTags;
+  }
+  const dishes: { dishId: string; rating: number }[] = [];
+  if (dishReviews !== undefined && dishReviews !== null) {
+    if (!Array.isArray(dishReviews) || dishReviews.length > MAX_DISH_REVIEWS) return reviewBad(res, 'dishReviews', `dishReviews must be a list of at most ${MAX_DISH_REVIEWS} ratings.`);
+    const seen = new Set<string>();
+    for (const dr of dishReviews) {
+      if (!dr || typeof dr !== 'object' || typeof dr.dishId !== 'string' || !ID_RE.test(dr.dishId) || !isRating(dr.rating)) {
+        return reviewBad(res, 'dishReviews', 'Every dish rating needs a dishId and a whole number rating from 1 to 5.');
+      }
+      if (seen.has(dr.dishId)) return reviewBad(res, 'dishReviews', 'Each dish can be rated once.');
+      seen.add(dr.dishId);
+      dishes.push({ dishId: dr.dishId, rating: dr.rating });
+    }
   }
 
   try {
     const result = await prisma.$transaction(async (tx) => {
-      const order = await tx.order.findUnique({ where: { id: orderId } });
+      // Row lock: two taps on "Submit" run one after the other, the second sees isReviewed.
+      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId} FOR UPDATE`;
+      const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: { select: { menuItemId: true } } } });
       if (!order) {
         throw new Error('ORDER_NOT_FOUND');
       }
@@ -725,7 +839,12 @@ apiRouter.post('/reviews', requireAuth, requireRole('STUDENT'), async (req: Auth
         throw new Error('ALREADY_REVIEWED');
       }
 
-      const customerId = req.user?.id || order.customerId;
+      const inOrder = new Set(order.items.map((i) => i.menuItemId).filter((x): x is string => !!x));
+      if (dishes.some((d) => !inOrder.has(d.dishId))) {
+        throw new Error('DISH_NOT_IN_ORDER');
+      }
+
+      const customerId = order.customerId;
 
       // 1. Update User's Kraveo Coins (+10 per review)
       const updatedUser = await tx.user.update({
@@ -740,21 +859,17 @@ apiRouter.post('/reviews', requireAuth, requireRole('STUDENT'), async (req: Auth
       });
 
       // 3. Process Dish Ratings & Update Menu Item Rating Metrics
-      if (Array.isArray(dishReviews)) {
-        for (const dr of dishReviews) {
-          if (dr && dr.dishId && typeof dr.rating === 'number') {
-            const item = await tx.menuItem.findUnique({ where: { id: dr.dishId } });
-            if (item) {
-              const currRating = item.rating || 4.5;
-              const currCount = item.ratingCount || 10;
-              const newCount = currCount + 1;
-              const newRating = parseFloat(((currRating * currCount + dr.rating) / newCount).toFixed(2));
-              await tx.menuItem.update({
-                where: { id: item.id },
-                data: { rating: newRating, ratingCount: newCount }
-              });
-            }
-          }
+      for (const dr of dishes) {
+        const item = await tx.menuItem.findUnique({ where: { id: dr.dishId } });
+        if (item) {
+          const currRating = item.rating || 4.5;
+          const currCount = item.ratingCount || 10;
+          const newCount = currCount + 1;
+          const newRating = parseFloat(((currRating * currCount + dr.rating) / newCount).toFixed(2));
+          await tx.menuItem.update({
+            where: { id: item.id },
+            data: { rating: newRating, ratingCount: newCount }
+          });
         }
       }
 
@@ -799,9 +914,9 @@ apiRouter.post('/reviews', requireAuth, requireRole('STUDENT'), async (req: Auth
           vendorId: order.vendorId,
           driverId: order.driverId,
           driverRating: typeof driverRating === 'number' ? driverRating : 5,
-          driverTags: driverTags || [],
+          driverTags: tags,
           driverNotes: driverNotes || '',
-          dishReviews: dishReviews || [],
+          dishReviews: dishes,
           dhabaNotes: dhabaNotes || '',
           coinsEarned: 10
         }
@@ -818,31 +933,36 @@ apiRouter.post('/reviews', requireAuth, requireRole('STUDENT'), async (req: Auth
       coinsEarned: 10,
       totalCoins: result.updatedUser.kraveoCoins,
       newVendorRating: result.updatedVendor?.rating,
-      review: result.newReview
+      review: { id: result.newReview.id, orderId, driverRating: result.newReview.driverRating, driverTags: result.newReview.driverTags, driverNotes: result.newReview.driverNotes, dishReviews: result.newReview.dishReviews, dhabaNotes: result.newReview.dhabaNotes, coinsEarned: result.newReview.coinsEarned, createdAt: result.newReview.createdAt }
     });
   } catch (err: any) {
     if (err.message === 'ORDER_NOT_FOUND') {
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
-    if (err.message === 'ALREADY_REVIEWED') {
+    if (err.message === 'ALREADY_REVIEWED' || err?.code === 'P2002') {
       return res.status(400).json({ success: false, message: 'This order has already been reviewed.' });
     }
     if (err.message === 'FORBIDDEN') {
       return res.status(403).json({ success: false, message: 'Only the student who placed a delivered order can review it.' });
     }
-    return res.status(500).json({ success: false, message: err.message || 'Error submitting review.' });
+    if (err.message === 'DISH_NOT_IN_ORDER') {
+      return reviewBad(res, 'dishReviews', 'You can only rate dishes that were in this order.');
+    }
+    return fail(res, err, 'Error submitting review');
   }
 });
 
-// Redeem 50 Kraveo Coins for Flat ₹20 OFF Coupon
-apiRouter.post('/coupons/redeem-coins', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+// Redeem 50 Kraveo Coins for the KRAVEO20 coupon (Flat ₹20 OFF, minimum order ₹80). The coins are taken here,
+// atomically, and the redemption is recorded on the account: KRAVEO20 only works at checkout while the customer
+// holds an unused redemption (see utils/validation.ts + services/orderFlow.ts), so the public code is worth nothing alone.
+apiRouter.post('/coupons/redeem-coins', requireAuth, requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user?.id) return res.status(401).json({ success: false, message: 'Unauthorized' });
 
     // Atomic update eliminating concurrency race conditions
     const updateResult = await prisma.user.updateMany({
-      where: { id: req.user.id, kraveoCoins: { gte: 50 } },
-      data: { kraveoCoins: { decrement: 50 } }
+      where: { id: req.user.id, kraveoCoins: { gte: COUPON_COIN_COST }, deletedAt: null },
+      data: { kraveoCoins: { decrement: COUPON_COIN_COST }, kraveo20Redeemed: { increment: 1 } }
     });
 
     if (updateResult.count === 0) {
@@ -850,7 +970,8 @@ apiRouter.post('/coupons/redeem-coins', requireAuth, async (req: AuthenticatedRe
       const currentCoins = user?.kraveoCoins || 0;
       return res.status(400).json({
         success: false,
-        message: `Insufficient Kraveo Coins. You have ${currentCoins} coins, but need 50 coins to redeem ₹20 OFF.`
+        code: 'INSUFFICIENT_COINS',
+        message: `Insufficient Kraveo Coins. You have ${currentCoins} coins, but need ${COUPON_COIN_COST} coins to redeem ₹20 OFF.`
       });
     }
 
@@ -864,25 +985,41 @@ apiRouter.post('/coupons/redeem-coins', requireAuth, async (req: AuthenticatedRe
       remainingCoins: updatedUser?.kraveoCoins || 0
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error redeeming coins' });
+    return fail(res, err, 'Error redeeming coins');
   }
 });
 
+// Reviews are shown to signed-in users only, newest first, 20 per page (max 50, `cursor` = last id of the page before).
+// Only what the screen needs: ratings, texts and the reviewer's first name. No customer / driver / order ids.
+const reviewPage = async (req: Request, res: Response, where: Record<string, unknown>) => {
+  const requested = Number.parseInt(String(req.query.limit ?? ''), 10);
+  const limit = Math.min(Number.isFinite(requested) && requested > 0 ? requested : 20, 50);
+  const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : undefined;
+  if (cursor && !ID_RE.test(cursor)) return res.status(400).json({ success: false, code: 'BAD_REQUEST', field: 'cursor', message: 'Invalid cursor.' });
+  const page = await prisma.reviewRecord.findMany({
+    where,
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    select: { id: true, driverRating: true, driverTags: true, driverNotes: true, dishReviews: true, dhabaNotes: true, createdAt: true, customer: { select: { name: true } } },
+  });
+  const hasMore = page.length > limit;
+  const rows = hasMore ? page.slice(0, limit) : page;
+  const data = rows.map(({ customer, ...r }) => ({ ...r, reviewer: (customer?.name || 'Student').trim().split(/\s+/)[0] }));
+  return res.json({ success: true, count: data.length, nextCursor: hasMore ? rows[rows.length - 1].id : null, data });
+};
+
 // Fetch Dhaba Reviews
-apiRouter.get('/reviews/vendor/:vendorId', async (req: Request, res: Response) => {
+apiRouter.get('/reviews/vendor/:vendorId', requireAuth, validParams('vendorId'), async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const vendorReviews = await prisma.reviewRecord.findMany({
-      where: { vendorId: req.params.vendorId },
-      orderBy: { createdAt: 'desc' }
-    });
-    return res.json({ success: true, count: vendorReviews.length, data: vendorReviews });
+    return await reviewPage(req, res, { vendorId: req.params.vendorId });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error fetching vendor reviews' });
+    return fail(res, err, 'Error fetching vendor reviews');
   }
 });
 
 // Fetch Driver Reviews
-apiRouter.get('/reviews/driver/:driverId', async (req: Request, res: Response) => {
+apiRouter.get('/reviews/driver/:driverId', requireAuth, validParams('driverId'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const driverIdParam = req.params.driverId;
     const driver = await prisma.driverPartner.findFirst({
@@ -893,12 +1030,8 @@ apiRouter.get('/reviews/driver/:driverId', async (req: Request, res: Response) =
     if (driver?.id && !targetIds.includes(driver.id)) targetIds.push(driver.id);
     if (driver?.userId && !targetIds.includes(driver.userId)) targetIds.push(driver.userId);
 
-    const driverReviews = await prisma.reviewRecord.findMany({
-      where: { driverId: { in: targetIds } },
-      orderBy: { createdAt: 'desc' }
-    });
-    return res.json({ success: true, count: driverReviews.length, data: driverReviews });
+    return await reviewPage(req, res, { driverId: { in: targetIds } });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message || 'Error fetching driver reviews' });
+    return fail(res, err, 'Error fetching driver reviews');
   }
 });

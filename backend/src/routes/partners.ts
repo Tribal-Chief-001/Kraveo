@@ -1,12 +1,14 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { ApprovalStatus, Role } from '@prisma/client';
 import { prisma } from '../db';
-import { generateToken, requireAuth, requireRole, AuthenticatedRequest } from '../middleware/auth';
+import { generateToken, requireAuth, requireRole, AuthenticatedRequest, bumpTokenVersion, invalidateAuthCache } from '../middleware/auth';
 import { canonicalPhone, last10 } from '../utils/phone';
 import { hashPassword, passwordProblem } from '../services/password';
 import { recordSuccess } from '../services/loginLimiter';
 import { writeAudit as writeAuditLog } from '../services/audit';
-import { dropFromPartnerRooms } from '../realtime';
+import { dropFromPartnerRooms, addToPartnerRooms } from '../realtime';
+import { errSummary } from '../utils/log';
+import { validParams } from '../utils/http';
 
 /**
  * Partner (restaurant / rider) applications and the admin tools around them.
@@ -38,6 +40,15 @@ const audit = writeAuditLog;
 const notifyAdmins = (req: Request, event: string, payload: unknown) => {
   const io = req.app.get('io');
   if (io) io.to('admins').emit(event, payload);
+};
+
+/** Closes the live sockets of a user whose sessions were just revoked (they would otherwise keep receiving events). */
+const io_disconnect = (req: Request, userId: string) => {
+  try {
+    req.app.get('io')?.in(`user_${userId}`).disconnectSockets(true);
+  } catch (err) {
+    console.error('disconnect sockets failed:', errSummary(err));
+  }
 };
 
 const notApprovedMessage = (status: ApprovalStatus): string => {
@@ -124,7 +135,7 @@ export const requireApprovedPartner = async (req: AuthenticatedRequest, res: Res
     const blocking = statuses.includes('PENDING') ? 'PENDING' : statuses[0];
     return res.status(403).json({ success: false, code: 'PARTNER_NOT_APPROVED', approvalStatus: blocking, message: notApprovedMessage(blocking) });
   } catch (err) {
-    console.error('requireApprovedPartner failed:', err);
+    console.error('requireApprovedPartner failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
 };
@@ -190,7 +201,7 @@ partnerRouter.post('/auth/partner-signup', async (req: Request, res: Response) =
       kind: role, id: (created.vendor ?? created.driver)!.id, name: created.user.name, phone: created.user.phone, appliedAt: now.toISOString(),
     });
 
-    const token = generateToken({ id: created.user.id, phone: created.user.phone, role: created.user.role });
+    const token = generateToken({ id: created.user.id, phone: created.user.phone, role: created.user.role, tokenVersion: created.user.tokenVersion });
     return res.status(201).json({
       success: true,
       token,
@@ -200,7 +211,7 @@ partnerRouter.post('/auth/partner-signup', async (req: Request, res: Response) =
       ...(created.driver ? { driver: driverView(created.driver) } : {}),
     });
   } catch (err) {
-    console.error('partner-signup failed:', err);
+    console.error('partner-signup failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
 });
@@ -231,7 +242,7 @@ partnerRouter.get('/partner/me', requireAuth, requireRole('VENDOR', 'DRIVER'), a
       ...(p.driver ? { driver: driverView(p.driver) } : {}),
     });
   } catch (err) {
-    console.error('partner/me failed:', err);
+    console.error('partner/me failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
 });
@@ -246,10 +257,13 @@ partnerRouter.post('/drivers/duty-status', requireAuth, requireRole('DRIVER'), r
     const active = await prisma.order.count({ where: { driverId: req.user!.id, status: { in: ['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'ARRIVED_AT_GATE'] } } });
     const dutyStatus = !req.body.isOnline ? 'OFFLINE' : active > 0 ? 'IN_TRANSIT' : 'ONLINE';
     const updated = await prisma.driverPartner.update({ where: { id: driver.id }, data: { dutyStatus } });
+    // Offers (`order_available`) only reach riders on duty: leave the room when going off duty, join when going on.
+    if (dutyStatus === 'OFFLINE') await dropFromPartnerRooms(req.user!.id, ['drivers']);
+    else addToPartnerRooms(req.user!.id, ['drivers']);
     notifyAdmins(req, 'driver_duty_update', { id: updated.id, userId: updated.userId, dutyStatus });
     return res.json({ success: true, dutyStatus });
   } catch (err) {
-    console.error('duty-status failed:', err);
+    console.error('duty-status failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Could not update duty status.' });
   }
 });
@@ -292,7 +306,7 @@ partnerRouter.put('/partner/application', requireAuth, requireRole('VENDOR', 'DR
       ...(fresh.driver ? { driver: driverView(fresh.driver) } : {}),
     });
   } catch (err) {
-    console.error('partner/application failed:', err);
+    console.error('partner/application failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
 });
@@ -334,13 +348,13 @@ partnerRouter.get('/admin/applications', requireAuth, requireRole('ADMIN'), asyn
       .sort((a, b) => new Date(b.appliedAt).getTime() - new Date(a.appliedAt).getTime());
     return res.json({ success: true, counts, count: data.length, data });
   } catch (err: any) {
-    console.error('admin/applications failed:', err);
+    console.error('admin/applications failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Could not load applications.' });
   }
 });
 
 // APPROVED / REJECTED / SUSPENDED for a vendor or rider profile.
-partnerRouter.post('/admin/partners/:kind/:id/status', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+partnerRouter.post('/admin/partners/:kind/:id/status', requireAuth, requireRole('ADMIN'), validParams('id'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const kind = String(req.params.kind).toUpperCase() as Kind;
     const next = String(req.body?.status ?? '').toUpperCase() as ApprovalStatus;
@@ -372,27 +386,36 @@ partnerRouter.post('/admin/partners/:kind/:id/status', requireAuth, requireRole(
     await audit(`PARTNER_${next}`, kind, row.id, `${next} ${label} from ${from}${reason ? `: ${reason}` : ''}`);
     // A suspended rider must stop hearing about new orders at once (not only after a reconnect).
     if (next !== 'APPROVED' && kind === 'DRIVER' && row.userId) await dropFromPartnerRooms(row.userId, ['drivers']);
+    if (next !== 'APPROVED' && kind === 'VENDOR' && row.userId) await dropFromPartnerRooms(row.userId, [`vendor_${row.id}`]);
+    // A suspended partner's old sessions end now (they sign in again and get the "suspended" answer). Rejection of a
+    // pending application changes nothing for a signed-in applicant: they keep their session to see the reason / re-apply.
+    if (next === 'SUSPENDED' && row.userId) {
+      await bumpTokenVersion(row.userId);
+      io_disconnect(req, row.userId);
+    }
     notifyAdmins(req, 'partner_application_updated', { kind, id: row.id, status: next });
     return res.json({ success: true, data: applicationRow(kind, updated) });
   } catch (err) {
-    console.error('partner status failed:', err);
+    console.error('partner status failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Could not update the partner.' });
   }
 });
 
 // There is no self-service "forgot password" (no SMS), so an admin sets a new one.
-partnerRouter.post('/admin/partners/:userId/reset-password', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+partnerRouter.post('/admin/partners/:userId/reset-password', requireAuth, requireRole('ADMIN'), validParams('userId'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const problem = passwordProblem(req.body?.password);
     if (problem) return res.status(400).json({ success: false, field: 'password', message: problem });
     const user = await prisma.user.findUnique({ where: { id: req.params.userId } });
     if (!user || (user.role !== Role.VENDOR && user.role !== Role.DRIVER)) return res.status(404).json({ success: false, message: 'Partner account not found.' });
-    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await hashPassword(req.body.password) } });
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await hashPassword(req.body.password), tokenVersion: { increment: 1 } } });
+    invalidateAuthCache(user.id); // every session of this partner ends: the old password's tokens are dead
+    io_disconnect(req, user.id);
     if (user.phone) recordSuccess(last10(user.phone));
     await audit('PASSWORD_RESET', user.role, user.id, `Reset the password of ${user.role.toLowerCase()} ${user.name} (${user.phone ?? 'no phone'})`);
     return res.json({ success: true });
   } catch (err) {
-    console.error('reset-password failed:', err);
+    console.error('reset-password failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Could not reset the password.' });
   }
 });
@@ -466,12 +489,12 @@ partnerRouter.get('/admin/customers', requireAuth, requireRole('ADMIN'), async (
       })),
     });
   } catch (err) {
-    console.error('admin/customers failed:', err);
+    console.error('admin/customers failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Could not load customers.' });
   }
 });
 
-partnerRouter.get('/admin/customers/:id', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+partnerRouter.get('/admin/customers/:id', requireAuth, requireRole('ADMIN'), validParams('id'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const user = await prisma.user.findFirst({ where: { id: req.params.id, role: Role.STUDENT } });
     if (!user) return res.status(404).json({ success: false, message: 'Customer not found.' });
@@ -520,7 +543,7 @@ partnerRouter.get('/admin/customers/:id', requireAuth, requireRole('ADMIN'), asy
       },
     });
   } catch (err) {
-    console.error('admin/customers/:id failed:', err);
+    console.error('admin/customers/:id failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Could not load the customer.' });
   }
 });

@@ -61,6 +61,12 @@ model User {
   kraveoCoins  Int      @default(0)
   upiId        String?
   fcmToken     String?
+  // Bumped on password reset, suspension and account deletion: JWTs carry `tv` and are refused when it differs.
+  tokenVersion Int      @default(0)
+  // Set when the student deletes the account (row is anonymised, kept for order/payment FKs).
+  deletedAt    DateTime?
+  // How many times 50 coins were exchanged for the KRAVEO20 coupon (each redemption = one use of the code).
+  kraveo20Redeemed Int  @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -140,6 +146,9 @@ model Order {
   subtotal         Float     @default(0)
   taxAndPackaging  Float     @default(0)
   discount         Float     @default(0)
+  // The coupon that produced `discount` (normalised, upper case). A code is single use per customer
+  // while a non-CANCELLED order holds it; cancelling releases it.
+  couponCode       String?
   // Idempotency key made by the app per checkout attempt (unique per customer).
   clientRequestId  String?
   paidAt           DateTime?
@@ -152,6 +161,9 @@ model Order {
   // Gate OTP brute-force guard: 5 wrong attempts lock the order until an admin unlocks it.
   otpAttempts      Int       @default(0)
   otpLocked        Boolean   @default(false)
+  // HMAC of (orderId, code) written at delivery: lets a rider's retry of the SAME code answer "already delivered"
+  // while a wrong code on a delivered order is refused. The plain code is never kept (otpCode = 'USED').
+  otpProof         String?
   // Refund bookkeeping: null/NONE | PENDING | DONE | FAILED. The lease stops two workers refunding at once.
   refundStatus     String?
   refundError      String?
@@ -167,6 +179,7 @@ model Order {
 
   @@unique([customerId, clientRequestId])
   @@index([customerId, createdAt])
+  @@index([customerId, couponCode])
   @@index([vendorId, status])
   @@index([driverId, status])
   @@index([status, createdAt])

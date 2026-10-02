@@ -7,6 +7,8 @@ export interface TokenPayload {
   id: string;
   phone: string;
   role: Role;
+  /** tokenVersion claim; a missing claim counts as 0 (tokens issued before revocation existed). */
+  tv?: number;
 }
 
 export const generateTestToken = (payload: TokenPayload): string => {

@@ -224,11 +224,17 @@ describe('Partner approval pipeline', () => {
       expect(sus.status).toBe(200);
       expect((await prisma.vendor.findUniqueOrThrow({ where: { id: vendorId } })).isAcceptingOrders).toBe(false);
       expect((await request.get('/api/vendors')).body.data.some((v: any) => v.id === vendorId)).toBe(false);
-      const blocked = await request.patch(`/api/vendors/${vendorId}/toggle`).set(getAuthHeader(token));
+      // Suspension ends the owner's sessions (tokenVersion bump); signing in again says why they are blocked.
+      const revoked = await request.patch(`/api/vendors/${vendorId}/toggle`).set(getAuthHeader(token));
+      expect([revoked.status, revoked.body.code]).toEqual([401, 'TOKEN_REVOKED']);
+      __resetLoginLimiter();
+      const relogin = await request.post('/api/auth/partner-login').send({ phone, password: PW, role: 'VENDOR' });
+      expect(relogin.body.approvalStatus).toBe('SUSPENDED');
+      const blocked = await request.patch(`/api/vendors/${vendorId}/toggle`).set(getAuthHeader(relogin.body.token));
       expect(blocked.status).toBe(403);
       expect(blocked.body.approvalStatus).toBe('SUSPENDED');
-      expect((await request.post('/api/auth/partner-login').send({ phone, password: PW, role: 'VENDOR' })).body.approvalStatus).toBe('SUSPENDED');
       expect((await setStatus('vendor', vendorId, 'APPROVED')).status).toBe(200);
+      token = relogin.body.token;
       expect((await request.patch(`/api/vendors/${vendorId}/toggle`).set(getAuthHeader(token))).status).toBe(200);
     });
 
@@ -236,7 +242,12 @@ describe('Partner approval pipeline', () => {
       expect((await request.post(`/api/admin/partners/${userId}/reset-password`).set(adminHeader()).send({ password: 'short' })).status).toBe(400);
       expect((await request.post(`/api/admin/partners/${userId}/reset-password`).set(adminHeader()).send({ password: 'Brand-New-Pass1' })).status).toBe(200);
       expect((await request.post('/api/auth/partner-login').send({ phone, password: PW, role: 'VENDOR' })).status).toBe(401);
-      expect((await request.post('/api/auth/partner-login').send({ phone, password: 'Brand-New-Pass1', role: 'VENDOR' })).status).toBe(200);
+      const fresh = await request.post('/api/auth/partner-login').send({ phone, password: 'Brand-New-Pass1', role: 'VENDOR' });
+      expect(fresh.status).toBe(200);
+      // The old session (issued with the old password) is dead, the new login works.
+      expect((await request.get('/api/partner/me').set(getAuthHeader(token))).status).toBe(401);
+      expect((await request.get('/api/partner/me').set(getAuthHeader(fresh.body.token))).status).toBe(200);
+      token = fresh.body.token;
       expect((await request.post(`/api/admin/partners/${userId}/reset-password`).set(getAuthHeader(getStudentToken())).send({ password: 'Brand-New-Pass1' })).status).toBe(403);
       expect((await request.post('/api/admin/partners/usr-1/reset-password').set(adminHeader()).send({ password: 'Brand-New-Pass1' })).status).toBe(404);
     });
@@ -289,8 +300,11 @@ describe('Partner approval pipeline', () => {
     test('suspending a rider puts them offline and blocks the work endpoints', async () => {
       expect((await setStatus('driver', driverId, 'SUSPENDED', 'No-show on three orders')).status).toBe(200);
       expect((await prisma.driverPartner.findUniqueOrThrow({ where: { id: driverId } })).dutyStatus).toBe('OFFLINE');
-      expect((await request.post('/api/drivers/location').set(getAuthHeader(token)).send({ lat: 23.07, lng: 76.85 })).status).toBe(403);
-      expect((await request.get('/api/partner/me').set(getAuthHeader(token))).body.rejectionReason).toBe('No-show on three orders');
+      expect((await request.post('/api/drivers/location').set(getAuthHeader(token)).send({ lat: 23.07, lng: 76.85 })).status).toBe(401); // old session revoked
+      __resetLoginLimiter();
+      const again = (await request.post('/api/auth/partner-login').send({ phone, password: PW, role: 'DRIVER' })).body.token;
+      expect((await request.post('/api/drivers/location').set(getAuthHeader(again)).send({ lat: 23.07, lng: 76.85 })).status).toBe(403);
+      expect((await request.get('/api/partner/me').set(getAuthHeader(again))).body.rejectionReason).toBe('No-show on three orders');
     });
   });
 
@@ -331,6 +345,9 @@ describe('Partner approval pipeline', () => {
       expect((await request.post('/api/drivers/duty-status').send({ isOnline: true })).status).toBe(401);
       expect((await duty(true, getStudentToken())).status).toBe(403);
       await setStatus('driver', driverId, 'SUSPENDED', 'Testing a pause');
+      expect((await duty(true)).status).toBe(401); // the suspended session is revoked
+      __resetLoginLimiter();
+      token = (await request.post('/api/auth/partner-login').send({ phone, password: PW, role: 'DRIVER' })).body.token;
       const blocked = await duty(true);
       expect(blocked.status).toBe(403);
       expect(blocked.body.code).toBe('PARTNER_NOT_APPROVED');
@@ -374,7 +391,10 @@ describe('Partner approval pipeline', () => {
       expect((await prisma.vendor.findUniqueOrThrow({ where: { id: vendorId } })).isAcceptingOrders).toBe(false);
       const refused = await request.post('/api/orders').set(getAuthHeader(getStudentToken())).send({ vendorId, items: [{ itemId: item.id, quantity: 1 }], dropoffHostel: 'Block 1' });
       expect(refused.status).toBe(400);
-      const accept = await request.patch(`/api/orders/${live.id}/status`).set(getAuthHeader(token)).send({ status: 'ACCEPTED' });
+      expect((await request.patch(`/api/orders/${live.id}/status`).set(getAuthHeader(token)).send({ status: 'ACCEPTED' })).status).toBe(401); // session revoked
+      __resetLoginLimiter();
+      const token2 = (await request.post('/api/auth/partner-login').send({ phone: '9000000351', password: PW, role: 'VENDOR' })).body.token;
+      const accept = await request.patch(`/api/orders/${live.id}/status`).set(getAuthHeader(token2)).send({ status: 'ACCEPTED' });
       expect(accept.status).toBe(403);
       expect(accept.body.code).toBe('PARTNER_NOT_APPROVED');
       expect((await request.get(`/api/orders/${live.id}`).set(adminHeader())).status).toBe(200);

@@ -1,5 +1,6 @@
+import { errSummary } from '../utils/log';
 import { Prisma } from '@prisma/client';
-import { randomInt, timingSafeEqual } from 'crypto';
+import { createHmac, randomInt, timingSafeEqual } from 'crypto';
 import { prisma } from '../db';
 import { MAX_ACTIVE_ORDERS_PER_RIDER, MAX_UNPAID_OPEN_ORDERS, OTP_MAX_ATTEMPTS, paymentWindowMin } from '../config/orderFlow';
 import { ORDER_VIEW_INCLUDE, OrderWithRelations, ACTIVE_RIDER_STATUSES, isPoolEligible, isVendorVisible } from './orderView';
@@ -8,7 +9,7 @@ import { executeRefund, runInBackground } from './refundService';
 import { writeAudit } from './audit';
 import { createRazorpayOrder } from './paymentService';
 import { triggerDhabaAlarmPushNotification, triggerStudentArrivalNotification } from './notificationService';
-import { validateAndCalculateOrder } from '../utils/validation';
+import { validateAndCalculateOrder, normaliseCoupon, couponEligibilityProblem } from '../utils/validation';
 
 /**
  * Every order state change lives here (Docs/16_order_flow_contract.md sections 1, 2 and 4).
@@ -49,9 +50,11 @@ export const secureOtp = () => randomInt(0, 10_000).toString().padStart(4, '0');
 export const loadOrder = (id: string) => prisma.order.findUnique({ where: { id }, include: ORDER_VIEW_INCLUDE });
 
 /** Run `fn` with the order row locked. 404 when it does not exist. */
-const withOrderLock = <T>(orderId: string, fn: (tx: Tx, order: OrderWithRelations) => Promise<T>): Promise<T> =>
+const withOrderLock = <T>(orderId: string, fn: (tx: Tx, order: OrderWithRelations) => Promise<T>, opts: { riderUserIdFirst?: string } = {}): Promise<T> =>
   prisma.$transaction(
     async (tx) => {
+      // Lock order is rider -> order everywhere (claimOrder does the same), so a claim and an admin reassign cannot deadlock.
+      if (opts.riderUserIdFirst) await tx.$queryRaw`SELECT "id" FROM "DriverPartner" WHERE "userId" = ${opts.riderUserIdFirst} FOR UPDATE`;
       const rows = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "Order" WHERE "id" = ${orderId} FOR UPDATE`;
       if (rows.length === 0) throw notFound();
       const order = await tx.order.findUniqueOrThrow({ where: { id: orderId }, include: ORDER_VIEW_INCLUDE });
@@ -80,7 +83,7 @@ export const finishChange = async (r: ChangeResult, opts: { awaitRefund?: boolea
   if (!r.changed) return r.order;
   await publishOrderChange(r.order, { wasPoolEligible: isPoolEligible(r.before), newOrderAlert: r.newOrderAlert });
   if (r.newOrderAlert) {
-    triggerDhabaAlarmPushNotification(r.order.vendorId, r.order.id, r.order.totalAmount).catch((e) => console.error('vendor alarm push failed:', e.message));
+    triggerDhabaAlarmPushNotification(r.order.vendorId, r.order.id, r.order.totalAmount).catch((e) => console.error('vendor alarm push failed:', errSummary(e)));
   }
   const riders = new Set([r.before.driverId, r.order.driverId].filter((x): x is string => !!x));
   for (const riderId of riders) await refreshRiderDuty(riderId);
@@ -106,7 +109,7 @@ export const refreshRiderDuty = async (riderUserId: string) => {
       if (d) getIo()?.to('admins').emit('driver_duty_update', d);
     }
   } catch (err) {
-    console.error('refreshRiderDuty failed:', (err as Error).message);
+    console.error('refreshRiderDuty failed:', errSummary(err));
   }
 };
 
@@ -122,6 +125,26 @@ export type PlaceOrderInput = {
   clientRequestId: string | null;
 };
 
+/** Same checkout attempt = same request: vendor, items (by id and quantity), drop point, notes and coupon must all match. */
+const sameRequest = (o: OrderWithRelations, input: PlaceOrderInput): boolean => {
+  if (o.vendorId !== input.vendorId || o.dropoffHostel !== input.dropoffHostel) return false;
+  if ((o.dropoffNotes ?? '') !== (input.dropoffNotes ?? '')) return false;
+  if ((o.couponCode ?? null) !== normaliseCoupon(input.couponCode)) return false;
+  const want = new Map<string, number>();
+  if (!Array.isArray(input.items)) return false;
+  for (const i of input.items) {
+    if (!i || typeof i.itemId !== 'string' || !Number.isInteger(i.quantity)) return false;
+    want.set(i.itemId, (want.get(i.itemId) ?? 0) + i.quantity);
+  }
+  const have = new Map<string, number>();
+  for (const i of o.items) have.set(i.menuItemId ?? `deleted:${i.id}`, (have.get(i.menuItemId ?? `deleted:${i.id}`) ?? 0) + i.quantity);
+  if (want.size !== have.size) return false;
+  for (const [id, q] of want) if (have.get(id) !== q) return false;
+  return true;
+};
+
+const mismatch = () => new OrderFlowError(409, 'CLIENT_REQUEST_MISMATCH', 'This checkout id was already used for a different order. Start a new checkout.');
+
 export const placeOrder = async (customerId: string, input: PlaceOrderInput): Promise<{ order: OrderWithRelations; replay: boolean }> => {
   const findReplay = () =>
     input.clientRequestId
@@ -129,8 +152,16 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
       : null;
 
   // Same checkout attempt again (double tap, retry after a lost response): the same order, never a second one.
+  // The same id with a different cart / drop point / coupon is a client bug (or tampering): refuse, do not hand back the old order.
   const existing = await findReplay();
-  if (existing) return { order: existing, replay: true };
+  if (existing) {
+    if (!sameRequest(existing, input)) throw mismatch();
+    return { order: existing, replay: true };
+  }
+
+  // The account must exist and not be deleted (a valid 30-day token of a removed user used to end in a 500).
+  const customer = await prisma.user.findUnique({ where: { id: customerId }, select: { id: true, deletedAt: true } });
+  if (!customer || customer.deletedAt) throw new OrderFlowError(401, 'ACCOUNT_UNAVAILABLE', 'This account is no longer available. Please sign in again.');
 
   const vendor = await prisma.vendor.findUnique({ where: { id: input.vendorId } });
   if (!vendor || vendor.approvalStatus !== 'APPROVED') throw new OrderFlowError(400, 'VENDOR_UNAVAILABLE', 'This restaurant is not available right now.');
@@ -138,12 +169,19 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
 
   const priced = await validateAndCalculateOrder(input.vendorId, input.items, input.couponCode);
   if (!priced.isValid) throw new OrderFlowError(400, 'INVALID_ITEMS', priced.errorMessage || 'Some items are not available.', { field: 'items' });
+  // A coupon that was sent but gives nothing is an error the customer must see, not a silently ignored field.
+  if (priced.couponProblem) throw new OrderFlowError(400, 'COUPON_NOT_APPLICABLE', priced.couponProblem, { field: 'couponCode' });
 
   try {
     const created = await prisma.$transaction(
       async (tx) => {
-        // One checkout at a time per customer, so the unpaid-orders limit cannot be raced.
-        await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${customerId} FOR UPDATE`;
+        // One checkout at a time per customer, so the unpaid-orders limit and single-use coupons cannot be raced.
+        const locked = await tx.$queryRaw<{ deletedAt: Date | null }[]>`SELECT "deletedAt" FROM "User" WHERE "id" = ${customerId} FOR UPDATE`;
+        if (locked.length === 0 || locked[0].deletedAt) throw new OrderFlowError(401, 'ACCOUNT_UNAVAILABLE', 'This account is no longer available. Please sign in again.');
+        if (priced.appliedCoupon) {
+          const problem = await couponEligibilityProblem(tx, customerId, priced.appliedCoupon);
+          if (problem) throw new OrderFlowError(400, 'COUPON_NOT_APPLICABLE', problem, { field: 'couponCode' });
+        }
         const unpaid = await tx.order.count({
           where: { customerId, status: { notIn: ['DELIVERED', 'CANCELLED'] }, paymentStatus: { in: ['PENDING', 'FAILED'] } },
         });
@@ -159,6 +197,7 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
             deliveryFee: priced.calculatedDeliveryFee,
             taxAndPackaging: priced.calculatedTaxAndPackaging,
             discount: priced.calculatedDiscount,
+            couponCode: priced.appliedCoupon ?? null,
             totalAmount: priced.calculatedTotalAmount,
             dropoffHostel: input.dropoffHostel,
             dropoffNotes: input.dropoffNotes,
@@ -178,7 +217,10 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
     if (err?.code === 'P2002') {
       // Two identical requests raced: the other one created the order.
       const again = await findReplay();
-      if (again) return { order: again, replay: true };
+      if (again) {
+        if (!sameRequest(again, input)) throw mismatch();
+        return { order: again, replay: true };
+      }
     }
     throw err;
   }
@@ -339,7 +381,7 @@ export const advanceStatus = async (orderId: string, actor: Actor, target: strin
 
   if (result.changed && target === 'ARRIVED_AT_GATE' && result.order.otpCode) {
     triggerStudentArrivalNotification(result.order.customer.fcmToken || undefined, result.order.id, result.order.otpCode)
-      .catch((err) => console.error('arrival push failed:', err.message));
+      .catch((err) => console.error('arrival push failed:', errSummary(err)));
   }
   return { order: await finishChange(result), idempotent: !result.changed };
 };
@@ -413,6 +455,8 @@ export const claimOrder = async (orderId: string, riderUserId: string): Promise<
 
       const current = await tx.order.findUnique({ where: { id: orderId }, select: { driverId: true, status: true, paymentStatus: true } });
       if (!current) throw notFound();
+      // A cancelled / delivered order is not in the pool, whoever used to carry it (it keeps its driverId for the record).
+      if (isTerminal(current.status)) throw new OrderFlowError(409, 'ORDER_NOT_AVAILABLE', 'This order is not available for pickup.');
       if (current.driverId === riderUserId) return { changed: false };
       if (rider.dutyStatus === 'OFFLINE') throw new OrderFlowError(409, 'RIDER_OFFLINE', 'Go on duty to accept orders.');
 
@@ -425,7 +469,8 @@ export const claimOrder = async (orderId: string, riderUserId: string): Promise<
         data: { driverId: riderUserId },
       });
       if (claimed.count === 1) return { changed: true };
-      const now = await tx.order.findUnique({ where: { id: orderId }, select: { driverId: true } });
+      const now = await tx.order.findUnique({ where: { id: orderId }, select: { driverId: true, status: true } });
+      if (now && isTerminal(now.status)) throw new OrderFlowError(409, 'ORDER_NOT_AVAILABLE', 'This order is not available for pickup.');
       if (now?.driverId && now.driverId !== riderUserId) throw new OrderFlowError(409, 'ALREADY_TAKEN', 'Another rider has already taken this order.');
       // Unpaid, cancelled, not accepted yet, already delivered: one code for "not in the pool".
       throw new OrderFlowError(409, 'ORDER_NOT_AVAILABLE', 'This order is not available for pickup.');
@@ -452,8 +497,13 @@ export const releaseOrder = async (orderId: string, riderUserId: string) => {
   return finishChange(result);
 };
 
-/** Admin assigns, moves or removes the rider (PATCH /orders/:id/reassign). */
-export const reassignOrder = async (orderId: string, driverIdOrProfileId: string | null) => {
+/**
+ * Admin assigns, moves or removes the rider (PATCH /orders/:id/reassign).
+ * - a rider never gets a second active order (409 RIDER_BUSY, no override);
+ * - an OFFLINE rider is refused (409 RIDER_OFFLINE) unless the admin sends `force: true`;
+ * - once the food is picked up (PICKED_UP, ARRIVED_AT_GATE) the order cannot be left without a rider (409 CANNOT_UNASSIGN).
+ */
+export const reassignOrder = async (orderId: string, driverIdOrProfileId: string | null, opts: { force?: boolean } = {}) => {
   let resolved: string | null = null;
   if (driverIdOrProfileId) {
     const driver = await prisma.driverPartner.findFirst({ where: { OR: [{ id: driverIdOrProfileId }, { userId: driverIdOrProfileId }] } });
@@ -465,11 +515,23 @@ export const reassignOrder = async (orderId: string, driverIdOrProfileId: string
     if (isTerminal(order.status)) throw new OrderFlowError(409, 'ORDER_CLOSED', 'Completed or cancelled orders cannot be reassigned.');
     if (resolved && order.paymentStatus !== 'PAID') throw new OrderFlowError(409, 'PAYMENT_NOT_CONFIRMED', 'An unpaid order cannot be given to a rider.');
     if (order.driverId === resolved) return { order, before: order, changed: false };
+    if (!resolved && (order.status === 'PICKED_UP' || order.status === 'ARRIVED_AT_GATE')) {
+      throw new OrderFlowError(409, 'CANNOT_UNASSIGN', 'The food is already with the rider. Assign another rider or cancel the order instead of removing the rider.');
+    }
+    if (resolved) {
+      const rider = await tx.driverPartner.findUnique({ where: { userId: resolved }, select: { dutyStatus: true, approvalStatus: true } });
+      if (!rider || rider.approvalStatus !== 'APPROVED') throw new OrderFlowError(400, 'RIDER_NOT_APPROVED', 'Only an approved rider can be assigned to an order.');
+      const active = await tx.order.count({ where: { driverId: resolved, id: { not: order.id }, status: { in: [...ACTIVE_RIDER_STATUSES] } } });
+      if (active >= MAX_ACTIVE_ORDERS_PER_RIDER) throw new OrderFlowError(409, 'RIDER_BUSY', 'That rider already has an active order. Finish or move it first.');
+      if (rider.dutyStatus === 'OFFLINE' && opts.force !== true) {
+        throw new OrderFlowError(409, 'RIDER_OFFLINE', 'That rider is offline. Send force: true to assign them anyway.');
+      }
+    }
     await tx.order.update({ where: { id: order.id }, data: { driverId: resolved } });
     return { order: await reload(tx, order.id), before: order, changed: true };
-  });
+  }, resolved ? { riderUserIdFirst: resolved } : {});
   if (result.changed) {
-    await writeAudit('ORDER_REASSIGNED', 'ORDER', orderId, `Rider changed from ${result.before.driver?.name ?? 'none'} to ${result.order.driver?.name ?? 'none'} (${result.order.status}).`);
+    await writeAudit('ORDER_REASSIGNED', 'ORDER', orderId, `Rider changed from ${result.before.driver?.name ?? 'none'} to ${result.order.driver?.name ?? 'none'} (${result.order.status}).${opts.force && result.order.driverId ? ' Forced by admin.' : ''}`);
   }
   return finishChange(result);
 };
@@ -489,12 +551,30 @@ const sameOtp = (given: string, stored: string | null) => {
   return timingSafeEqual(Buffer.from(given, 'utf8'), Buffer.from(stored, 'utf8'));
 };
 
+// Delivered orders keep only an HMAC of (order id, code): enough to recognise the rider's retry of the SAME code,
+// useless for anything else. The plain code is gone (otpCode = 'USED').
+const proofKey = () => process.env.JWT_SECRET || (process.env.NODE_ENV === 'test' ? 'kraveo_vit_bhopal_super_secret_jwt_key_2026' : 'kraveo-otp-proof');
+const otpProof = (orderId: string, otp: string) => createHmac('sha256', proofKey()).update(`${orderId}:${otp}`).digest('hex');
+const proofMatches = (orderId: string, otp: string, stored: string | null) => {
+  if (!stored) return false;
+  const a = Buffer.from(otpProof(orderId, otp));
+  const b = Buffer.from(stored);
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+
 export const verifyGateOtp = async (orderId: string, actor: Actor, rawOtp: unknown): Promise<{ order: OrderWithRelations; alreadyDelivered: boolean }> => {
   type Outcome = ChangeResult & { kind: 'DELIVERED' | 'ALREADY' | 'WRONG'; attempts?: number; locked?: boolean };
   const result = await withOrderLock(orderId, async (tx, order): Promise<Outcome> => {
     if (actor.role === 'DRIVER' && order.driverId !== actor.id) throw notFound();
     if (actor.role !== 'DRIVER' && actor.role !== 'ADMIN') throw notFound();
-    if (order.status === 'DELIVERED') return { order, before: order, changed: false, kind: 'ALREADY' };
+    if (order.status === 'DELIVERED') {
+      // Idempotent only for the retry of the SAME correct code (lost response) or for an admin. A wrong or missing
+      // code on a delivered order is never answered with a success; it does not count as an attempt either.
+      if (actor.role === 'ADMIN') return { order, before: order, changed: false, kind: 'ALREADY' };
+      const given = normaliseOtp(rawOtp);
+      if (given && proofMatches(order.id, given, order.otpProof)) return { order, before: order, changed: false, kind: 'ALREADY' };
+      throw new OrderFlowError(409, 'ALREADY_DELIVERED', 'This order has already been delivered.');
+    }
     if (order.otpLocked) throw new OrderFlowError(423, 'OTP_LOCKED', 'Too many wrong codes. Kraveo support has to unlock this delivery.');
     if (order.status !== 'ARRIVED_AT_GATE') throw new OrderFlowError(409, 'NOT_AT_GATE', 'Gate OTP can only be verified after the runner arrives at the gate.');
     if (order.paymentStatus !== 'PAID') throw new OrderFlowError(409, 'PAYMENT_NOT_CONFIRMED', 'This order is not paid.');
@@ -511,7 +591,7 @@ export const verifyGateOtp = async (orderId: string, actor: Actor, rawOtp: unkno
       // Committed (the attempt counts even though the caller gets an error).
       return { order: await reload(tx, order.id), before: order, changed: locked, kind: 'WRONG', attempts, locked };
     }
-    await tx.order.update({ where: { id: order.id }, data: { status: 'DELIVERED', deliveredAt: new Date(), otpCode: 'USED' } });
+    await tx.order.update({ where: { id: order.id }, data: { status: 'DELIVERED', deliveredAt: new Date(), otpCode: 'USED', otpProof: otpProof(order.id, otp) } });
     return { order: await reload(tx, order.id), before: order, changed: true, kind: 'DELIVERED' };
   });
 
@@ -538,7 +618,7 @@ export const resetOtpLock = async (orderId: string) => {
   });
   await writeAudit('OTP_UNLOCKED', 'ORDER', orderId, `Admin unlocked the gate OTP (was ${result.before.otpLocked ? 'locked' : 'not locked'}, ${result.before.otpAttempts} wrong attempts). A new code was sent to the customer.`);
   if (result.order.otpCode) {
-    triggerStudentArrivalNotification(result.order.customer.fcmToken || undefined, result.order.id, result.order.otpCode).catch((e) => console.error('arrival push failed:', e.message));
+    triggerStudentArrivalNotification(result.order.customer.fcmToken || undefined, result.order.id, result.order.otpCode).catch((e) => console.error('arrival push failed:', errSummary(e)));
   }
   return finishChange(result);
 };

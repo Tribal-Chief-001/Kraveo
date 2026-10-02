@@ -31,7 +31,8 @@ try {
 
 // Sends push notifications to dhaba tablet phones, runners, and student devices
 export const sendPushNotification = async (payload: PushNotificationPayload): Promise<boolean> => {
-  console.log(`🔔 [FCM Notification Engine] Dispatching alert: "${payload.title}" - ${payload.body}`);
+  // Never log the title/body/data: pushes carry the gate OTP and customer details. Event type and order id only.
+  console.log(`🔔 [FCM Notification Engine] Dispatching ${payload.data?.eventType ?? 'PUSH'} for order ${payload.data?.orderId ?? 'n/a'}`);
   if (process.env.NODE_ENV === 'test') return true;
 
   try {
@@ -80,7 +81,7 @@ export const sendPushNotification = async (payload: PushNotificationPayload): Pr
     }
     return true;
   } catch (err: any) {
-    console.log(`ℹ️ [FCM Notification Dispatch]: Recorded alert "${payload.title}" (${err.message})`);
+    console.log(`ℹ️ [FCM Notification Dispatch]: ${payload.data?.eventType ?? 'PUSH'} for order ${payload.data?.orderId ?? 'n/a'} not delivered (${err?.code ?? 'push error'})`);
     return true;
   }
 };

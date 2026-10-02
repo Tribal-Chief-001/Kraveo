@@ -5,6 +5,7 @@ import cors from 'cors';
 import supertest from 'supertest';
 import { apiRouter } from '../../src/routes/api';
 import { attachRealtime } from '../../src/realtime';
+import { globalErrorHandler } from '../../src/middleware/errorHandler';
 
 export interface TestServerInstance {
   app: Express;
@@ -17,6 +18,7 @@ export interface TestServerInstance {
 export const createTestApp = (): { app: Express; server: http.Server; io: SocketIOServer } => {
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', 1); // same as src/index.ts (nginx is one hop)
   const server = http.createServer(app);
 
   const io = new SocketIOServer(server, {
@@ -59,19 +61,8 @@ export const createTestApp = (): { app: Express; server: http.Server; io: Socket
     });
   });
 
-  // Global Express Error Handler (Handles JSON Syntax Errors & Bad Payloads)
-  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (err && (err.status === 400 || err.type === 'entity.parse.failed' || err instanceof SyntaxError)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid or malformed JSON payload.'
-      });
-    }
-    return res.status(500).json({
-      success: false,
-      message: err.message || 'Internal Server Error'
-    });
-  });
+  // Same handler as src/index.ts.
+  app.use(globalErrorHandler);
 
   return { app, server, io };
 };

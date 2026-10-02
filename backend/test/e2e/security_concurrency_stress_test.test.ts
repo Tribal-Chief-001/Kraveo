@@ -217,8 +217,9 @@ describe('Adversarial Security & Concurrency Stress Test Suite', () => {
   // 2. AUTHENTICATION & AUTHORIZATION BYPASSES
   // =========================================================================
   describe('2. Authentication & Authorization Security Stress Testing', () => {
-    test('AUTH_01: Forged Admin JWT using hardcoded fallback secret grants unauthorized access', async () => {
-      // Attacker signs arbitrary token using the known repo secret
+    test('AUTH_01: a JWT forged with the known test fallback secret is useless for a user id that does not exist (account check)', async () => {
+      // Attacker signs arbitrary token using the known repo secret. The fallback secret only exists under NODE_ENV=test
+      // (production refuses to boot without JWT_SECRET) and a token must also belong to a real, non-revoked account.
       const forgedAdminToken = jwt.sign(
         { id: 'usr-rogue-attacker', phone: '+91 9999999999', role: 'ADMIN' },
         DEFAULT_JWT_SECRET,
@@ -229,11 +230,8 @@ describe('Adversarial Security & Concurrency Stress Test Suite', () => {
         .get('/api/drivers')
         .set(getAuthHeader(forgedAdminToken));
 
-      // Demonstrates vulnerability of hardcoded fallback secret:
-      // Backend validates signature with default secret and returns 200 OK
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
-      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
     });
 
     test('AUTH_02: Unauthenticated WebSocket client connects, joins rooms, and broadcasts spoofed updates', async () => {

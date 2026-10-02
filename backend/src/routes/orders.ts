@@ -16,6 +16,7 @@ import { executeRefund } from '../services/refundService';
 import { verifyRazorpayPaymentSignature, verifyRazorpayWebhookSignature, razorpayPublicKeyId } from '../services/paymentService';
 import { recordRiderLocation } from '../realtime';
 import { writeAudit } from '../services/audit';
+import { fail } from '../utils/http';
 
 /**
  * Order lifecycle and payment endpoints (Docs/16_order_flow_contract.md section 2).
@@ -29,12 +30,6 @@ const STATUSES = new Set(['PLACED', 'ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP',
 
 const bad = (res: Response, message: string, field?: string, code = 'BAD_REQUEST') =>
   res.status(400).json({ success: false, code, message, ...(field ? { field } : {}) });
-
-const fail = (res: Response, err: unknown, what: string) => {
-  if (err instanceof OrderFlowError) return res.status(err.status).json({ success: false, code: err.code, message: err.message, ...err.extra });
-  console.error(`${what} failed:`, err);
-  return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
-};
 
 /** 400 for an order id that cannot exist (runs after auth, so unauthenticated callers still get 401). */
 const validId = (req: Request, res: Response, next: NextFunction) => (ID_RE.test(req.params.id) ? next() : bad(res, 'Invalid order id.', 'id'));
@@ -310,7 +305,9 @@ orderRouter.patch('/orders/:id/reassign', requireAuth, requireRole('ADMIN'), val
   try {
     const driverId = req.body?.driverId;
     if (driverId !== null && driverId !== undefined && (typeof driverId !== 'string' || !ID_RE.test(driverId))) return bad(res, 'driverId must be a rider id or null.', 'driverId');
-    const order = await reassignOrder(req.params.id, driverId || null);
+    const force = req.body?.force;
+    if (force !== undefined && typeof force !== 'boolean') return bad(res, 'force must be true or false.', 'force');
+    const order = await reassignOrder(req.params.id, driverId || null, { force: force === true });
     return res.json({ success: true, data: viewFor(req, order) });
   } catch (err) {
     return fail(res, err, 'reassign order');

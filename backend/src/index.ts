@@ -6,13 +6,14 @@ import dotenv from 'dotenv';
 import { apiRouter } from './routes/api';
 import { attachRealtime } from './realtime';
 import { startOrderMaintenance } from './services/orderMaintenance';
+import { globalErrorHandler } from './middleware/errorHandler';
+import { assertRuntimeConfig } from './config/runtimeConfig';
 
 dotenv.config();
 
-if (process.env.NODE_ENV === 'production') {
-  const requiredProductionConfig = ['JWT_SECRET', 'ADMIN_PASSCODE', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET'];
-  const missingConfig = requiredProductionConfig.filter((key) => !process.env[key]);
-  if (missingConfig.length > 0) throw new Error(`Missing required production configuration: ${missingConfig.join(', ')}`);
+// Anything that is not the test runner must have its secrets; GOOGLE_WEB_CLIENT_ID is only a warning.
+if (process.env.NODE_ENV !== 'test') {
+  for (const warning of assertRuntimeConfig(process.env).warnings) console.warn(`⚠️  ${warning}`);
 }
 
 // Global Process Crash Protection
@@ -26,6 +27,8 @@ process.on('unhandledRejection', (reason, promise) => {
 
 const app = express();
 app.disable('x-powered-by');
+// Production runs behind exactly one proxy (nginx), which sets X-Forwarded-For: req.ip is the real client address.
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 
 const allowedOrigins = [
@@ -42,7 +45,7 @@ const allowedOrigins = [
 const corsOptions = {
   origin: (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error('Origin is not allowed by CORS.'));
+    return callback(Object.assign(new Error('Origin is not allowed by CORS.'), { status: 403, code: 'CORS_NOT_ALLOWED' }));
   },
   credentials: true,
 };
@@ -87,29 +90,14 @@ app.use((req: express.Request, res: express.Response) => {
   });
 });
 
-// Global Express Error Handler (Handles JSON Syntax Errors & Bad Payloads)
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (err && (err.status === 400 || err.type === 'entity.parse.failed' || err instanceof SyntaxError)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid or malformed JSON payload.'
-    });
-  }
-  return res.status(500).json({
-    success: false,
-    message: err.message || 'Internal Server Error'
-  });
-});
+// Global Express Error Handler (body-parser errors keep their status; nothing internal reaches the client).
+app.use(globalErrorHandler);
 
 // Socket.io: token auth, server-checked rooms, per-viewer order events (src/realtime.ts).
 attachRealtime(io);
 
 // Order housekeeping every 60 s: expire unpaid orders, auto-cancel unaccepted paid orders, retry refunds.
 if (process.env.NODE_ENV !== 'test') startOrderMaintenance();
-
-if (process.env.NODE_ENV === 'production' && !process.env.GOOGLE_WEB_CLIENT_ID) {
-  console.warn('⚠️  GOOGLE_WEB_CLIENT_ID is not set: student Google sign-in will answer 503 until it is configured.');
-}
 
 server.listen(PORT, () => {
   console.log(`🚀 Kraveo Backend Engine running on http://localhost:${PORT}`);

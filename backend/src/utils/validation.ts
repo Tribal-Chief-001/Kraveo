@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import { OrderItem } from '../types';
 
@@ -10,7 +11,50 @@ export interface OrderValidationResult {
   calculatedTaxAndPackaging: number;
   calculatedDiscount: number;
   calculatedTotalAmount: number;
+  /** The normalised code that produced `calculatedDiscount` (null when no coupon was sent or it gave nothing). */
+  appliedCoupon?: string | null;
+  /** Set when a coupon WAS sent but gives no discount for this cart (unknown code, cart below the minimum). */
+  couponProblem?: string;
 }
+
+// ----------------------------------------------------------------------------
+// Coupons. Rules (single use per customer; a CANCELLED order releases its code again):
+//   VITFIRST  20% off up to Rs 50, cart >= Rs 100, only for a customer with no earlier non-cancelled order.
+//   KRAVEO20  Rs 20 off, cart >= Rs 80. Paid for with 50 Kraveo Coins (POST /coupons/redeem-coins): each
+//             redemption is one use; the code is refused when the customer has no unused redemption.
+//   KRAVEO50  Rs 50 off, cart >= Rs 150, once per customer.
+// ----------------------------------------------------------------------------
+export const COUPONS: Record<string, { minSubtotal: number; discount: (subtotal: number) => number }> = {
+  VITFIRST: { minSubtotal: 100, discount: (sub) => Math.min(sub * 0.2, 50) },
+  KRAVEO20: { minSubtotal: 80, discount: () => 20 },
+  KRAVEO50: { minSubtotal: 150, discount: () => 50 },
+};
+
+/** '', undefined, null and whitespace mean "no coupon". Otherwise upper-case and trimmed. */
+export const normaliseCoupon = (raw: unknown): string | null => {
+  if (typeof raw !== 'string') return null;
+  const code = raw.trim().toUpperCase();
+  return code ? code : null;
+};
+
+/**
+ * Whether THIS customer may use `code` now. Call it inside the order transaction while the customer's
+ * row is locked (so two checkouts cannot both take the same single-use code). Returns a message when not allowed.
+ */
+export const couponEligibilityProblem = async (tx: Prisma.TransactionClient, customerId: string, code: string): Promise<string | null> => {
+  const usedBefore = await tx.order.count({ where: { customerId, couponCode: code, status: { not: 'CANCELLED' } } });
+  if (code === 'KRAVEO20') {
+    const user = await tx.user.findUnique({ where: { id: customerId }, select: { kraveo20Redeemed: true } });
+    if ((user?.kraveo20Redeemed ?? 0) - usedBefore <= 0) return 'KRAVEO20 needs 50 Kraveo Coins: redeem them first, then use the code.';
+    return null;
+  }
+  if (usedBefore > 0) return `You have already used ${code}.`;
+  if (code === 'VITFIRST') {
+    const earlier = await tx.order.count({ where: { customerId, status: { not: 'CANCELLED' } } });
+    if (earlier > 0) return 'VITFIRST is only for your first order.';
+  }
+  return null;
+};
 
 export const DELIVERY_FEE = 25; // ₹25 flat campus drop-off fee
 export const TAX_AND_PACKAGING = 15; // ₹15 packaging & GST fee
@@ -102,22 +146,25 @@ export const validateAndCalculateOrder = async (
   const deliveryFee = DELIVERY_FEE;
   const taxAndPackaging = TAX_AND_PACKAGING;
 
+  // Rupee amounts with paise precision, so total = subtotal + fee + tax - discount exactly in paise.
+  // The subtotal is rounded BEFORE any threshold is compared (0.7 x 14 + 8.2 x 11 is 99.99999999999999 in floats, i.e. Rs 100.00).
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  subtotal = round2(subtotal);
+
   let discount = 0;
-  if (typeof couponCode === 'string' && couponCode) {
-    const code = couponCode.trim().toUpperCase();
-    if (code === 'VITFIRST' && subtotal >= 100) {
-      discount = Math.min(subtotal * 0.20, 50);
-    } else if (code === 'KRAVEO20' && subtotal >= 80) {
-      discount = 20;
-    } else if (code === 'KRAVEO50' && subtotal >= 150) {
-      discount = 50;
+  let appliedCoupon: string | null = null;
+  let couponProblem: string | undefined;
+  const code = normaliseCoupon(couponCode);
+  if (code) {
+    const rule = COUPONS[code];
+    if (!rule) couponProblem = `The coupon ${code.slice(0, 30)} is not valid.`;
+    else if (subtotal < rule.minSubtotal) couponProblem = `${code} needs an order of at least ₹${rule.minSubtotal}.`;
+    else {
+      discount = round2(rule.discount(subtotal));
+      appliedCoupon = code;
     }
   }
 
-  // Rupee amounts with paise precision, so total = subtotal + fee + tax - discount exactly in paise.
-  const round2 = (n: number) => Math.round(n * 100) / 100;
-  subtotal = round2(subtotal);
-  discount = round2(discount);
   const totalAmount = round2(Math.max(0, subtotal + deliveryFee + taxAndPackaging - discount));
 
   return {
@@ -127,6 +174,8 @@ export const validateAndCalculateOrder = async (
     calculatedDeliveryFee: deliveryFee,
     calculatedTaxAndPackaging: taxAndPackaging,
     calculatedDiscount: discount,
-    calculatedTotalAmount: totalAmount
+    calculatedTotalAmount: totalAmount,
+    appliedCoupon,
+    ...(couponProblem ? { couponProblem } : {}),
   };
 };

@@ -175,6 +175,8 @@ describe('Order flow v1', () => {
     await prisma.order.updateMany({ where: { status: 'PLACED', paymentStatus: { in: ['PENDING', 'FAILED'] } }, data: { status: 'CANCELLED', cancelledAt: new Date() } });
     await prisma.vendor.update({ where: { id: 'ven-1' }, data: { isAcceptingOrders: true, approvalStatus: 'APPROVED' } });
     await prisma.driverPartner.updateMany({ where: { userId: { in: [RIDER.id, RIDER2.id] } }, data: { dutyStatus: 'ONLINE', approvalStatus: 'APPROVED' } });
+    // Suspending a rider through the API revokes their tokens (tokenVersion); the test tokens carry tv 0.
+    await prisma.user.updateMany({ where: { id: { in: [RIDER.id, RIDER2.id, VENDOR.id] } }, data: { tokenVersion: 0 } });
   });
 
   afterEach(async () => {

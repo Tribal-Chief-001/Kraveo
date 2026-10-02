@@ -1,6 +1,7 @@
+import { errSummary } from './utils/log';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { prisma } from './db';
-import { verifyToken } from './middleware/auth';
+import { verifyTokenForAccount } from './middleware/auth';
 import { orderView, isPoolEligible, OrderWithRelations, ORDER_VIEW_INCLUDE, ACTIVE_RIDER_STATUSES } from './services/orderView';
 
 /**
@@ -27,6 +28,12 @@ const isApprovedRider = async (userId: string) => {
   return d?.approvalStatus === 'APPROVED';
 };
 
+/** The `drivers` room (order offers) is for approved riders who are on duty. */
+const isRiderOnDuty = async (userId: string) => {
+  const d = await prisma.driverPartner.findUnique({ where: { userId }, select: { approvalStatus: true, dutyStatus: true } });
+  return d?.approvalStatus === 'APPROVED' && d.dutyStatus !== 'OFFLINE';
+};
+
 const isValidCoordinate = (lat: unknown, lng: unknown): lat is number =>
   typeof lat === 'number' && Number.isFinite(lat) && lat >= -90 && lat <= 90 &&
   typeof lng === 'number' && Number.isFinite(lng) && lng >= -180 && lng <= 180;
@@ -39,13 +46,14 @@ const canWatchOrder = (order: OrderWithRelations, user: SocketUser) => {
 
 const canJoin = async (room: string, user: SocketUser): Promise<boolean> => {
   if (room === 'admins') return user.role === 'ADMIN';
-  if (room === 'drivers') return user.role === 'DRIVER' && (await isApprovedRider(user.id));
+  if (room === 'drivers') return user.role === 'DRIVER' && (await isRiderOnDuty(user.id));
   if (room.startsWith('vendor_')) {
     if (user.role === 'ADMIN') return true;
     if (user.role !== 'VENDOR') return false;
     const vendorId = room.slice('vendor_'.length);
     if (!ORDER_ID_RE.test(vendorId)) return false;
-    return Boolean(await prisma.vendor.findFirst({ where: { id: vendorId, userId: user.id }, select: { id: true } }));
+    // Only an APPROVED restaurant: a suspended / pending / rejected owner hears nothing about orders.
+    return Boolean(await prisma.vendor.findFirst({ where: { id: vendorId, userId: user.id, approvalStatus: 'APPROVED' }, select: { id: true } }));
   }
   if (room.startsWith('order_')) {
     const orderId = room.slice('order_'.length);
@@ -64,13 +72,14 @@ export const attachRealtime = (io: SocketIOServer) => {
     try {
       const rawToken = socket.handshake.auth?.token;
       if (typeof rawToken !== 'string' || !rawToken.trim()) return next(new Error('Authentication required.'));
-      const decoded = verifyToken(rawToken.replace(/^Bearer\s+/i, ''));
+      // Signature + the account still exists + the token was not revoked (password reset, suspension, deletion).
+      const decoded = await verifyTokenForAccount(rawToken.replace(/^Bearer\s+/i, ''));
       socket.data.user = { id: decoded.id, role: decoded.role } as SocketUser;
       const autoRooms = [`user_${decoded.id}`];
       if (decoded.role === 'ADMIN') autoRooms.push('admins');
-      if (decoded.role === 'DRIVER' && (await isApprovedRider(decoded.id))) autoRooms.push('drivers');
+      if (decoded.role === 'DRIVER' && (await isRiderOnDuty(decoded.id))) autoRooms.push('drivers');
       if (decoded.role === 'VENDOR') {
-        const owned = await prisma.vendor.findMany({ where: { userId: decoded.id }, select: { id: true } });
+        const owned = await prisma.vendor.findMany({ where: { userId: decoded.id, approvalStatus: 'APPROVED' }, select: { id: true } });
         autoRooms.push(...owned.map((v) => `vendor_${v.id}`));
       }
       socket.data.autoRooms = autoRooms;
@@ -91,7 +100,7 @@ export const attachRealtime = (io: SocketIOServer) => {
         if (typeof room === 'string' && room.length <= 100) ok = await canJoin(room, user);
         if (ok) socket.join(room as string);
       } catch (err) {
-        console.error('join_room failed:', (err as Error).message);
+        console.error('join_room failed:', errSummary(err));
         ok = false;
       }
       if (typeof ack === 'function') ack({ ok });
@@ -118,12 +127,21 @@ export const attachRealtime = (io: SocketIOServer) => {
   });
 };
 
-/** Sockets of `userId` leave `rooms` now (used when a partner is suspended). */
+/** Sockets of `userId` join `rooms` now (a rider going on duty). The caller has already checked they may. */
+export const addToPartnerRooms = (userId: string, rooms: string[]) => {
+  try {
+    ioRef?.in(`user_${userId}`).socketsJoin(rooms);
+  } catch (err) {
+    console.error('addToPartnerRooms failed:', errSummary(err));
+  }
+};
+
+/** Sockets of `userId` leave `rooms` now (used when a partner is suspended or a rider goes off duty). */
 export const dropFromPartnerRooms = async (userId: string, rooms: string[]) => {
   try {
     ioRef?.in(`user_${userId}`).socketsLeave(rooms);
   } catch (err) {
-    console.error('dropFromPartnerRooms failed:', (err as Error).message);
+    console.error('dropFromPartnerRooms failed:', errSummary(err));
   }
 };
 
@@ -156,16 +174,22 @@ export const publishOrderChange = async (order: OrderWithRelations, opts: { wasP
     const nowEligible = isPoolEligible(order);
     if (nowEligible) {
       const riders = await io.in('drivers').fetchSockets();
+      // Offers go to approved riders who are ONLINE right now, whatever the room membership says.
+      const ids = [...new Set(riders.map((s) => (s.data.user as SocketUser | undefined)?.id).filter((x): x is string => !!x))];
+      const eligible = new Set(
+        ids.length === 0 ? [] : (await prisma.driverPartner.findMany({ where: { userId: { in: ids }, approvalStatus: 'APPROVED', dutyStatus: 'ONLINE' }, select: { userId: true } })).map((d) => d.userId),
+      );
       for (const s of riders) {
         const u = s.data.user as SocketUser | undefined;
-        const view = u ? orderView(order, u.role, u.id) : null;
+        if (!u || !eligible.has(u.id)) continue;
+        const view = orderView(order, u.role, u.id);
         if (view) s.emit('order_available', view);
       }
     } else if (opts.wasPoolEligible) {
       io.to('drivers').emit('order_unavailable', { id: order.id });
     }
   } catch (err) {
-    console.error('publishOrderChange failed:', (err as Error).message);
+    console.error('publishOrderChange failed:', errSummary(err));
   }
 };
 
@@ -207,7 +231,7 @@ export const recordRiderLocation = async (riderUserId: string, lat: unknown, lng
         }
       }
     } catch (err) {
-      console.error('rider location fan-out failed:', (err as Error).message);
+      console.error('rider location fan-out failed:', errSummary(err));
     }
   }
   return loc;

@@ -64,3 +64,21 @@ Each entry: `{ problem, problems[], detail, since, hint, order }` (`order` = adm
 | `PAYMENT_FAILED` | Informational; the order expires by itself. |
 
 All admin/system actions land in `GET /admin/audit-log` (ORDER_CANCELLED, REFUND_DONE/FAILED, PAYMENT_*, OTP_LOCKED/UNLOCKED, ORDER_RELEASED/REASSIGNED).
+
+## Hardening release (2026-10-03, migration `20261003_hardening`)
+Additive columns: `User.tokenVersion`, `User.deletedAt`, `User.kraveo20Redeemed`, `Order.couponCode`, `Order.otpProof`.
+
+| Topic | Behaviour |
+|---|---|
+| Tokens | JWT carries `tv` (tokenVersion; missing = 0). `requireAuth` and the socket handshake reject a token whose `tv` differs from the database or whose user does not exist / is deleted (401 `TOKEN_REVOKED`). 15 s in-memory cache (`AUTH_CACHE_TTL_MS`, 0 under `NODE_ENV=test`), cleared on every bump. Bumped by: `DELETE /auth/account`, admin reset-password, partner SUSPENDED (live sockets are closed too). A suspended partner signs in again and gets the "suspended" answer (403 `PARTNER_NOT_APPROVED`). |
+| Coupons | `Order.couponCode` records the code. Single use per customer while a non-CANCELLED order holds it (cancel releases it). `VITFIRST` also needs a customer with no earlier non-cancelled order. `KRAVEO20` costs 50 coins at `POST /coupons/redeem-coins` (each redemption = one use, counted in `User.kraveo20Redeemed`). A code that gives nothing is `400 COUPON_NOT_APPLICABLE`. Thresholds use the subtotal rounded to paise. |
+| `clientRequestId` | Same id + different vendor / items / drop point / notes / coupon = `409 CLIENT_REQUEST_MISMATCH`. |
+| Gate OTP on a delivered order | Only the retry of the same code (HMAC `Order.otpProof`) or an admin gets the idempotent success; otherwise `409 ALREADY_DELIVERED`. Pushes are never logged (event type + order id only). |
+| Claim | Cancelled / delivered orders answer `ORDER_NOT_AVAILABLE` (not `ALREADY_TAKEN`). |
+| Reassign | `409 RIDER_BUSY` (second active order, no override), `409 RIDER_OFFLINE` unless `force: true`, `409 CANNOT_UNASSIGN` after pickup. |
+| Rate limits (per user / per IP, in memory) | order create 8 / 10 min, order cancel 5 / 10 min, payment create-order 10 / 10 min, auth routes 60 / min / IP, partner-login 30 wrong / 15 min / IP, admin passcode 5 wrong / 15 min / IP. `429 {code:'RATE_LIMITED', retryAfterSeconds}`. Env: `RL_<ORDER_CREATE\|ORDER_CANCEL\|PAYMENT_CREATE\|AUTH_IP>_MAX` and `_WINDOW_MS`. Under `NODE_ENV=test` a rule is off unless its `_MAX` is set. |
+| Proxy | `app.set('trust proxy', 1)` (nginx = one hop): `req.ip` is the right-most `X-Forwarded-For` entry. nginx must set/append `X-Forwarded-For $proxy_add_x_forwarded_for`. |
+| Boot | Whenever `NODE_ENV` is not `test` the server refuses to start without `JWT_SECRET, DATABASE_URL, ADMIN_PASSCODE, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET` (`GOOGLE_WEB_CLIENT_ID` only warns). Local dev needs a `.env` with them. |
+| Errors | `fail(res, err, what)` (`src/utils/http.ts`) logs a data-free summary and answers a generic 500; body-parser errors keep their status (413 / 400); path ids are validated (`validParams`). |
+| Sockets | Vendor rooms need an APPROVED restaurant (connect + `join_room`; suspension drops the room). `drivers` room = approved and on duty; going OFFLINE leaves it, going ONLINE joins it; `order_available` only reaches riders who are ONLINE. |
+| Public catalogue | `GET /vendors`, `/vendors/:id`, `/menus/:vendorId` return only customer fields; admin and the owning restaurant keep the full rows. |
