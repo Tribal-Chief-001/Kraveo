@@ -38,6 +38,8 @@ const tRider2 = getDriverToken(RIDER2.id, RIDER2.phone);
 const tAdmin = getAdminToken(ADMIN.id, ADMIN.phone);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Time shift past the refund retry backoff (transient provider failures wait 30 s, 1, 2, 4 ... minutes). */
+const soon = (min = 5) => new Date(Date.now() + min * 60_000);
 const until = async (fn: () => boolean | Promise<boolean>, ms = 4000) => {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -913,12 +915,13 @@ describe('Order flow v1', () => {
       capture('admin_needs_attention_row', row);
       expect((await getOrder(o.id, tStudent)).body.data).toMatchObject({ paymentStatus: 'PAID', refundStatus: 'FAILED' });
 
-      const still = await runOrderMaintenance(new Date());
+      const still = await runOrderMaintenance(soon());
       expect(still.refundsRetried).toContain(o.id);
-      expect((await db(o.id))).toMatchObject({ refundStatus: 'FAILED', refundAttempts: 2 });
+      // A provider outage is transient: the attempt is given back (refundAttempts only counts permanent failures).
+      expect((await db(o.id))).toMatchObject({ refundStatus: 'FAILED', refundAttempts: 0 });
 
       setPaymentProvider(sim);
-      const later = await runOrderMaintenance(new Date());
+      const later = await runOrderMaintenance(soon(30));
       expect(later.refundsDone).toContain(o.id);
       expect((await db(o.id))).toMatchObject({ refundStatus: 'DONE', paymentStatus: 'REFUNDED', refundError: null });
       expect(await refundsOf(o.id)).toHaveLength(1);
@@ -936,7 +939,7 @@ describe('Order flow v1', () => {
       await request.post(`/api/admin/orders/${o.id}/cancel`).set(H(tAdmin)).send({ reason: 'Testing lost answers' });
       expect((await db(o.id)).refundStatus).toBe('FAILED');
       setPaymentProvider(sim);
-      await runOrderMaintenance(new Date());
+      await runOrderMaintenance(soon());
       expect((await db(o.id))).toMatchObject({ refundStatus: 'DONE', paymentStatus: 'REFUNDED' });
       expect(await refundsOf(o.id)).toHaveLength(1);
     });

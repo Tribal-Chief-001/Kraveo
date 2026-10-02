@@ -1041,7 +1041,7 @@ describe('Lifecycle journeys', () => {
       void wr;
     });
 
-    test('provider down during refund: FAILED + visible to admin with the right problem; job retries; recovery refunds exactly once; attempts stop at 10 until the admin retries', async () => {
+    test('provider down during refund: FAILED + visible to admin with the right problem; the job retries with backoff WITHOUT using up attempts; recovery refunds exactly once', async () => {
       const [c1] = W.customers; const [v1] = W.vendors;
       const wc = await watch(c1);
       const { id } = await placePaid(c1, v1);
@@ -1057,23 +1057,19 @@ describe('Lifecycle journeys', () => {
       expect(wc.last('order_updated', id)).toMatchObject({ refundStatus: 'FAILED' });
       let na = (await api.needsAttention(W.admin)).body.data.find((x: any) => x.order.id === id);
       expect(na).toMatchObject({ problem: 'REFUND_FAILED', detail: expect.stringContaining('Razorpay is down'), since: expect.stringMatching(/Z$/) });
-      expect(na.order.refundAttempts).toBe(1);
-      // Job ticks while the provider is still down: each retries, attempts grow, still visible.
-      for (let i = 0; i < 3; i++) expect((await runOrderMaintenance(new Date())).refundsRetried).toContain(id);
-      expect((await row(id)).refundAttempts).toBe(4);
-      expect(await refundsOf(id)).toHaveLength(0);
-      // Up to the cap (10), then the job gives up but the admin still sees it.
-      for (let i = 0; i < 10; i++) await runOrderMaintenance(new Date());
-      expect((await row(id)).refundAttempts).toBe(10);
+      // The outage is transient: the attempt taken by the lease is given back, so the cap (3 permanent failures) is untouched.
+      expect(na.order.refundAttempts).toBe(0);
+      // Backoff: a tick right away does not hammer the provider; ticks after the "not before" time retry, still no attempts used.
       expect((await runOrderMaintenance(new Date())).refundsRetried).not.toContain(id);
+      for (let i = 1; i <= 14; i++) expect((await runOrderMaintenance(minutesFromNow(i * 70))).refundsRetried).toContain(id);
+      expect((await row(id)).refundAttempts).toBe(0);
+      expect((await row(id)).refundStatus).toBe('FAILED');
+      expect(await refundsOf(id)).toHaveLength(0);
       na = (await api.needsAttention(W.admin)).body.data.find((x: any) => x.order.id === id);
       expect(na.problem).toBe('REFUND_FAILED');
-      // Provider recovers. The job alone does not retry (cap reached) -> admin button.
+      // Provider recovers: the job alone refunds it (no admin button needed), once.
       ledger.mode.refundDown = false;
-      expect((await runOrderMaintenance(new Date())).refundsDone).not.toContain(id);
-      const retry = await api.retryRefund(W.admin, id);
-      expect(retry.status).toBe(200);
-      expect(retry.body.data).toMatchObject({ paymentStatus: 'REFUNDED', refundStatus: 'DONE' });
+      expect((await runOrderMaintenance(minutesFromNow(14 * 70 + 120))).refundsDone).toContain(id);
       await flushAll();
       expect(await refundsOf(id)).toHaveLength(1);
       expect((await api.get(c1, id)).body.data).toMatchObject({ paymentStatus: 'REFUNDED', refundStatus: 'DONE' });
@@ -1089,7 +1085,7 @@ describe('Lifecycle journeys', () => {
       await api.cancel(c1, id);
       expect((await row(id)).refundStatus).toBe('FAILED');
       ledger.mode.refundDown = false;
-      expect((await runOrderMaintenance(new Date())).refundsDone).toContain(id);
+      expect((await runOrderMaintenance(minutesFromNow(5))).refundsDone).toContain(id);
       expect(await row(id)).toMatchObject({ paymentStatus: 'REFUNDED', refundStatus: 'DONE', refundError: null });
       expect(await refundsOf(id)).toHaveLength(1);
     });
@@ -1102,7 +1098,7 @@ describe('Lifecycle journeys', () => {
       expect((await row(id)).refundStatus).toBe('FAILED');
       expect(await refundsOf(id)).toHaveLength(1); // the provider already refunded
       ledger.mode.refundLostAnswer = false;
-      await runOrderMaintenance(new Date());
+      await runOrderMaintenance(minutesFromNow(5));
       expect(await row(id)).toMatchObject({ paymentStatus: 'REFUNDED', refundStatus: 'DONE' });
       expect(await refundsOf(id)).toHaveLength(1);
       expect(ledger.calls.refundPayment).toBe(1);
@@ -1122,7 +1118,7 @@ describe('Lifecycle journeys', () => {
       expect((await row(id)).refundError).toMatch(/did not answer/);
       expect(await refundsOf(id)).toHaveLength(1);
       ledger.mode.refundHangAfterSuccess = false;
-      expect((await runOrderMaintenance(new Date())).refundsDone).toContain(id);
+      expect((await runOrderMaintenance(minutesFromNow(5))).refundsDone).toContain(id);
       expect(await row(id)).toMatchObject({ paymentStatus: 'REFUNDED', refundStatus: 'DONE' });
       expect(await refundsOf(id)).toHaveLength(1);
       expect(ledger.calls.refundPayment).toBe(1);
@@ -1141,7 +1137,7 @@ describe('Lifecycle journeys', () => {
       expect(await row(id)).toMatchObject({ status: 'CANCELLED', paymentStatus: 'PAID', refundStatus: 'FAILED' });
       expect((await api.needsAttention(W.admin)).body.data.find((x: any) => x.order.id === id).problem).toBe('REFUND_FAILED');
       ledger.mode.refundDown = false;
-      await runOrderMaintenance(new Date());
+      await runOrderMaintenance(minutesFromNow(5));
       expect(await row(id)).toMatchObject({ paymentStatus: 'REFUNDED', refundStatus: 'DONE' });
       expect(await refundsOf(id)).toHaveLength(1);
     });

@@ -21,12 +21,29 @@ export const OTP_MAX_ATTEMPTS = 5;
 export const RECENTLY_FINISHED_MIN = 10;
 export const POOL_LIMIT = 20;
 export const MAINTENANCE_INTERVAL_MS = 60_000;
-/** Automatic refund retries stop after this many attempts; the order stays in needs-attention. */
-export const MAX_REFUND_ATTEMPTS = 10;
+/**
+ * Automatic refund retries stop after this many PERMANENT failures (provider answered 4xx other than 429, or a
+ * local problem such as "no captured payment"). Network errors, timeouts, 5xx and 429 are transient: they do not
+ * count, they are retried with exponential backoff (REFUND_BACKOFF_*), and the order stays in needs-attention meanwhile.
+ */
+export const MAX_REFUND_ATTEMPTS = 3;
 /** A refund worker owns the order for this long; after that another worker (the job) may retry. */
 export const REFUND_LEASE_MS = 2 * 60_000;
-/** Provider calls (Razorpay) give up after this long so a hung request never blocks a worker forever. */
-export const PROVIDER_TIMEOUT_MS = 15_000;
+/** Transient refund failures wait 30 s, 1, 2, 4 ... minutes before the next automatic try, never more than an hour. */
+export const REFUND_BACKOFF_BASE_MS = 30_000;
+export const REFUND_BACKOFF_MAX_MS = 60 * 60_000;
+/** Provider calls (Razorpay) give up after this long so a hung request never blocks a worker forever. Env: PROVIDER_TIMEOUT_MS. */
+export const providerTimeoutMs = () => envNumber('PROVIDER_TIMEOUT_MS', 15_000);
+/** Maintenance tick: at most this many provider calls in flight, and the provider phase stops after this many transient failures in a row. */
+export const PROVIDER_CONCURRENCY = 5;
+export const PROVIDER_BREAKER_FAILURES = 3;
+/** Reconciliation (pull): unpaid Payment rows older than MIN_AGE and younger than MAX_AGE are asked about at Razorpay, at most BATCH per tick. */
+export const RECONCILE_MIN_AGE_MS = 2 * 60_000;
+export const RECONCILE_MAX_AGE_MS = 6 * 60 * 60_000;
+export const RECONCILE_BATCH = 20;
+/** GET /admin/payments/reconcile bounds. */
+export const ORPHAN_MAX_RANGE_MS = 7 * 24 * 60 * 60_000;
+export const ORPHAN_MAX_ROWS = 200;
 
 /** needs-attention thresholds (minutes). */
 export const READY_NO_RIDER_ALERT_MIN = 10;

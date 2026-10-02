@@ -185,6 +185,9 @@ describe(`Lifecycle stress (seed ${SEED})`, () => {
       if (p && p.status !== 'PAID' && p.status !== 'REFUNDED') await api.webhookCaptured(c.rzpOrderId, payId, c.amountPaise);
     }
     await __waitForBackgroundWork();
+    // The outage is over; the retry backoff (up to an hour) has passed in the real world: clear the "not before" times instead of shifting the clock.
+    await prisma.order.updateMany({ where: { refundStatus: 'FAILED' }, data: { refundLeaseUntil: null } });
+    await prisma.payment.updateMany({ where: { status: { in: ['PENDING', 'FAILED'] }, refundedAt: { not: null } }, data: { refundedAt: null } });
     for (let i = 0; i < 2; i++) { await runOrderMaintenance(new Date()); await __waitForBackgroundWork(); }
     // partners come back so the next wave can make progress
     for (const r of W.riders) await api.partnerStatus(W.admin, 'driver', r.profileId, 'APPROVED');

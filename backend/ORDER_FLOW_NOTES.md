@@ -9,7 +9,9 @@ Contract: `Docs/16_order_flow_contract.md`. Sample payloads: `Docs/fixtures/orde
 | Constants / env | `src/config/orderFlow.ts` |
 | The only order JSON shape (`orderView`) | `src/services/orderView.ts` |
 | Every state change (row-locked transactions), `markOrderPaid`, claim/release, gate OTP | `src/services/orderFlow.ts` |
-| Refunds (lease + provider check, never twice) | `src/services/refundService.ts` |
+| Refunds (lease + provider check, never twice), extra-payment refunds, refund webhooks | `src/services/refundService.ts` |
+| Reconcile (pull), verify-signature confirmation, orphan report | `src/services/paymentReconcile.ts` |
+| Circuit breaker + bounded parallelism for provider calls | `src/services/providerPool.ts` |
 | Maintenance job `runOrderMaintenance(now)` | `src/services/orderMaintenance.ts` |
 | Razorpay seam (`setPaymentProvider`, simulator in tests) | `src/services/paymentService.ts` |
 | Socket.io (auth, rooms, per-viewer events) | `src/realtime.ts` |
@@ -23,21 +25,47 @@ Contract: `Docs/16_order_flow_contract.md`. Sample payloads: `Docs/fixtures/orde
 | `MAX_UNPAID_OPEN_ORDERS` | 3 | per customer, else 429 `TOO_MANY_UNPAID_ORDERS` |
 | `MAX_ACTIVE_ORDERS_PER_RIDER` | 1 | else 409 `RIDER_BUSY` |
 | `OTP_MAX_ATTEMPTS` | 5 | wrong gate codes before 423 `OTP_LOCKED` |
-| `MAX_REFUND_ATTEMPTS` | 10 | automatic refund retries (once a minute) before they stop |
-| `REFUND_LEASE_MS` / `PROVIDER_TIMEOUT_MS` | 2 min / 15 s | refund worker lease / Razorpay call timeout |
+| `MAX_REFUND_ATTEMPTS` | 3 | PERMANENT refund failures (provider 4xx other than 429, local problems) before automatic retries stop. Transient failures never count |
+| `REFUND_LEASE_MS` | 2 min | refund worker lease |
+| `PROVIDER_TIMEOUT_MS` (env) | 15000 | every Razorpay call is abandoned after this long |
+| `REFUND_BACKOFF_BASE_MS` / `_MAX_MS` | 30 s / 1 h | transient refund failure n waits 30 s, 1, 2, 4 ... min (max 1 h) |
+| `PROVIDER_CONCURRENCY` / `PROVIDER_BREAKER_FAILURES` | 5 / 3 | max provider calls in flight in a tick / the provider phase stops after this many transient failures in a row |
+| `RECONCILE_MIN_AGE_MS` / `_MAX_AGE_MS` / `_BATCH` | 2 min / 6 h / 20 | unpaid Payment rows asked about at Razorpay: age window and rows per tick |
 
 Existing env still required in production: `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `JWT_SECRET`.
-Razorpay must have **automatic capture** on (refunds only work on captured payments). Subscribe the webhook to
-`payment.captured` (or `order.paid`) and `payment.failed`.
+Razorpay orders are created with `payment_capture: 1` (automatic capture; refunds only work on captured payments). Subscribe the webhook to
+`payment.captured` (or `order.paid`), `payment.failed`, `refund.processed` and `refund.failed`.
 
 ## The job
 Started in `src/index.ts` every 60 s (`setInterval(...).unref()`, not in `NODE_ENV=test`, overlapping ticks skipped).
+Database-only work comes first and never waits for Razorpay:
 1. Expire unpaid `PLACED` orders older than the payment window.
-2. Cancel + refund `PLACED`+`PAID` orders whose `paidAt` is older than the accept window.
-3. Retry `refundStatus=FAILED` (attempts < 10) and `PENDING` refunds whose worker died.
+2. Cancel `PLACED`+`PAID` orders whose `paidAt` is older than the accept window (their refund is left `PENDING` for step 3).
+Then the **provider phase** (at most 5 Razorpay calls in flight, each bounded by `PROVIDER_TIMEOUT_MS`, and the whole phase stops after 3 transient provider failures in a row; the next tick tries again):
+3. Refunds: the ones from step 2, `FAILED` ones whose backoff has passed (permanent failures < 3), and `PENDING` ones whose worker died.
+4. Extra (duplicate) payments that still need their refund (see below).
+5. Reconcile (pull): unpaid `Payment` rows (PENDING/FAILED, no captured amount on record, order not yet paid) older than 2 minutes and younger than 6 hours are asked about with `orders.fetchPayments`, newest 10 every tick plus a rotating slice (20 per tick in all). A captured payment goes through `markOrderPaid` (source `RECONCILE`): the order becomes PAID, or, when it was cancelled/expired meanwhile, the money is refunded (once). An `authorized` payment of the right amount is captured first. A wrong amount is recorded and flagged (`PAYMENT_MISMATCH`), never paid, and not asked again. Audit: `PAYMENT_RECONCILED`.
 Every cancel re-checks its condition under the order row lock, so two instances or a racing request are safe.
 Orders paid before this release have no `paidAt` and are **never** auto-refunded; they appear in needs-attention.
 On the first tick after deploy, old unpaid `PLACED` orders (>15 min) are cancelled — intended cleanup, no money moves.
+
+### Refund retry policy
+- Provider errors are typed (`PaymentProviderError`, `statusCode`, `transient`). **Transient**: no HTTP answer (network error, timeout, the SDK's "reading status" TypeError), 5xx, 429, 408. **Permanent**: other 4xx.
+- Transient: `refundAttempts` is not used up (the lease's increment is given back), `refundStatus=FAILED`, `refundError` = readable reason, and `refundLeaseUntil` is the "not before" time: 30 s, 1, 2, 4 ... min, capped at 1 h (the number of failures in a row is counted from the audit log since the last admin retry). A long outage ends with the refund done by the job, not with a dead FAILED. needs-attention shows `REFUND_FAILED` with "Next automatic try ...".
+- Permanent: `refundAttempts` counts, retried each tick, stops after 3 (`MAX_REFUND_ATTEMPTS`); the provider's message stays in `refundError`; `POST /admin/orders/:id/retry-refund` starts over.
+- A 4xx answer to a refund call is double-checked against the provider's refund list: if the payment is already fully refunded the order becomes `REFUNDED` (no loop, no second refund).
+- Webhooks: `refund.processed` (full amount) confirms a `PENDING`/`FAILED` refund as `REFUNDED` without calling Razorpay. `refund.failed` sets `refundStatus=FAILED` with the provider's reason and stops the automatic retries (attempts = cap; a refund we had booked as DONE is taken back: order `PAID` again); the admin retries. For an extra payment whose refund bounced, the row goes back to PENDING and is retried after an hour. Unknown payments/events answer 200 and are ignored.
+
+### Duplicate (extra) payments
+A second captured payment for an order that is already PAID/REFUNDED (another Razorpay order, or another payment id on the same one) is refunded automatically by **its own payment id**, exactly once (claim on `Payment.refundedAt` + the provider's refund list); the order and the original payment stay untouched. `Payment.status` of the extra row becomes `REFUNDED` (+`razorpayRefundId`), so the `DUPLICATE_PAYMENT` flag clears. While a refund is pending/failed, `Payment.refundedAt` on a PENDING row means "owned until / not before" (retried with backoff by the job). Audit: `PAYMENT_DUPLICATE`, `PAYMENT_DUPLICATE_REFUNDED`, `PAYMENT_DUPLICATE_REFUND_FAILED`. A wrong-amount payment on a paid order is still only flagged (`PAYMENT_MISMATCH`).
+
+### POST /payments/verify-signature (changed)
+After a valid signature the server fetches the payment (`payments.fetch`) and requires `captured` (an `authorized` one is captured with `payments.capture`), this Razorpay order and the exact amount, then marks PAID with the amount Razorpay reports. If Razorpay cannot be reached or the payment is not captured yet, **nothing is marked paid** and the answer is
+`200 { success: true, status: 'PENDING_CONFIRMATION', paymentStatus: 'PENDING', message, data: <OrderView, still unpaid> }`.
+The app treats `success: true` as "go to tracking" as before; the order flips to PAID by the webhook or the next reconcile tick (the order screen updates over the socket/polling). Normal success is unchanged (`success: true`, no `status` field, `data.paymentStatus = 'PAID'`). A replay of an already confirmed payment answers success without calling Razorpay. A payment of another Razorpay order answers `404 NOT_FOUND`; a different amount `409 PAYMENT_AMOUNT_MISMATCH`.
+
+### GET /admin/payments/reconcile?from=&to= (new, ADMIN, read-only)
+`from`/`to`: ISO date-time or unix seconds (default: the last 24 h; max 7 days, else `400 RANGE_TOO_LARGE`). Looks at most 200 payments at Razorpay (`payments.all`) and returns the **captured** ones that no `PAID`/`REFUNDED` Payment row accounts for: `{ success, from, to, scanned, truncated, count, data: [{ paymentId, razorpayOrderId, amountPaise, createdAt, kraveoOrderId|null, kraveoPaymentStatus|null }] }`. Razorpay unreachable: `503 PROVIDER_UNAVAILABLE`. No contact/card data is returned.
 
 ## Run
 ```
@@ -52,8 +80,8 @@ Each entry: `{ problem, problems[], detail, since, hint, order }` (`order` = adm
 | problem | What to do |
 |---|---|
 | `PAYMENT_MISMATCH` | Captured amount ≠ order total; not marked paid. Refund in the Razorpay dashboard, cancel the order. |
-| `DUPLICATE_PAYMENT` | Second captured payment on a paid order. Refund that payment in Razorpay. |
-| `REFUND_FAILED` | Read `detail`/`order.refundError`. Job retries 10×. Fix cause, then `POST /admin/orders/:id/retry-refund`, or refund by hand in Razorpay (then nothing else is needed: the next retry finds the refund and marks it done). |
+| `DUPLICATE_PAYMENT` | Second captured payment on a paid order. Refunded automatically (retried with backoff); stays only if the refund keeps failing: read the audit log (`PAYMENT_DUPLICATE_REFUND_FAILED`) and refund that payment in Razorpay. |
+| `REFUND_FAILED` | Read `detail`/`order.refundError`. Razorpay unreachable: the job keeps retrying by itself with backoff (up to hourly). Razorpay refused (permanent): the job stops after 3 tries. Fix cause, then `POST /admin/orders/:id/retry-refund`, or refund by hand in Razorpay (then nothing else is needed: the next retry finds the refund and marks it done). |
 | `PAID_AFTER_CANCEL` | Money arrived after cancel; refund normally clears within a minute. If it stays (old orders), refund in Razorpay. |
 | `REFUND_PENDING` | Refund started >5 min ago, not finished. Check Razorpay before doing anything by hand. |
 | `OTP_LOCKED` | Call the customer. `POST /admin/orders/:id/reset-otp-lock` issues a **new** code to the customer; or cancel. |

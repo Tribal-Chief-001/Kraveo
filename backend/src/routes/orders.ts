@@ -12,7 +12,9 @@ import {
   OrderFlowError, placeOrder, cancelOrder, advanceStatus, claimOrder, releaseOrder, reassignOrder, verifyGateOtp, resetOtpLock,
   markOrderPaid, markPaymentFailed, createPaymentForOrder, loadOrder,
 } from '../services/orderFlow';
-import { executeRefund } from '../services/refundService';
+import { executeRefund, applyRefundEvent } from '../services/refundService';
+import { confirmAndMarkPaid, findOrphanPayments } from '../services/paymentReconcile';
+import { ORPHAN_MAX_RANGE_MS, ORPHAN_MAX_ROWS } from '../config/orderFlow';
 import { verifyRazorpayPaymentSignature, verifyRazorpayWebhookSignature, razorpayPublicKeyId } from '../services/paymentService';
 import { recordRiderLocation } from '../realtime';
 import { writeAudit } from '../services/audit';
@@ -349,6 +351,48 @@ orderRouter.post('/admin/orders/:id/retry-refund', requireAuth, requireRole('ADM
 });
 
 /**
+ * Read-only reconciliation report: payments that Razorpay captured in [from, to] but that no PAID/REFUNDED Payment row accounts for
+ * ("orphans": a lost webhook, an extra payment still waiting for its refund, a payment for an unknown order).
+ * from/to: ISO date-time or unix seconds; default = the last 24 hours; at most 7 days; at most 200 payments are looked at.
+ */
+orderRouter.get('/admin/payments/reconcile', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const parse = (raw: unknown): number | null | undefined => {
+      if (raw === undefined || raw === '') return undefined;
+      if (typeof raw !== 'string' || raw.length > 40) return null;
+      const t = /^\d{9,11}$/.test(raw) ? Number(raw) * 1000 : Date.parse(raw);
+      return Number.isFinite(t) ? t : null;
+    };
+    const toMs = parse(req.query.to);
+    const fromMs = parse(req.query.from);
+    if (toMs === null || fromMs === null) return bad(res, 'from and to must be ISO dates or unix seconds.', 'from');
+    const end = toMs ?? Date.now();
+    const start = fromMs ?? end - 24 * 60 * 60_000;
+    if (start >= end) return bad(res, 'from must be before to.', 'from');
+    if (end - start > ORPHAN_MAX_RANGE_MS) return bad(res, 'The range can be at most 7 days.', 'from', 'RANGE_TOO_LARGE');
+    let report;
+    try {
+      report = await findOrphanPayments(Math.floor(start / 1000), Math.floor(end / 1000));
+    } catch (err) {
+      console.error('reconcile report: payment provider unavailable:', (err as Error)?.message);
+      return res.status(503).json({ success: false, code: 'PROVIDER_UNAVAILABLE', message: 'The payment provider could not be reached. Try again in a minute.' });
+    }
+    return res.json({
+      success: true,
+      from: new Date(start).toISOString(),
+      to: new Date(end).toISOString(),
+      maxRows: ORPHAN_MAX_ROWS,
+      scanned: report.scanned,
+      truncated: report.truncated,
+      count: report.orphans.length,
+      data: report.orphans,
+    });
+  } catch (err) {
+    return fail(res, err, 'payment reconcile report');
+  }
+});
+
+/**
  * needs-attention problem codes, most urgent first. One entry per order:
  * { problem, problems[], detail, since, hint, order: OrderView(admin) }  (problem = problems[0]).
  */
@@ -360,8 +404,8 @@ type Problem = (typeof PROBLEM_ORDER)[number];
 
 const PROBLEM_HINTS: Record<Problem, string> = {
   PAYMENT_MISMATCH: 'Razorpay captured a different amount than the order total; it was not marked paid. Refund it in the Razorpay dashboard and cancel the order.',
-  DUPLICATE_PAYMENT: 'A second payment was captured for an order that was already paid. Refund the extra payment in the Razorpay dashboard.',
-  REFUND_FAILED: 'Razorpay refused or did not answer. The job retries every minute (up to 10 times). Check the payment in Razorpay; use retry-refund once fixed, or refund by hand there.',
+  DUPLICATE_PAYMENT: 'A second payment was captured for an order that was already paid. Kraveo refunds the extra payment automatically (it keeps retrying with backoff); if this stays, check the audit log (PAYMENT_DUPLICATE_REFUND_FAILED) and refund that payment in the Razorpay dashboard.',
+  REFUND_FAILED: 'The refund did not go through. If Razorpay was unreachable the job keeps retrying by itself (waiting 30 seconds, 1, 2, 4 ... up to 60 minutes between tries). If Razorpay refused it (permanent error) the job stops after 3 tries: read the reason, fix the cause, then use retry-refund, or refund by hand in Razorpay.',
   PAID_AFTER_CANCEL: 'Money arrived after the order was cancelled. The automatic refund is still running; it should clear within a minute.',
   REFUND_PENDING: 'A refund started but did not finish. The job retries it; if it stays, check the payment in Razorpay before refunding by hand.',
   OTP_LOCKED: 'Five wrong gate codes. Call the customer, then reset the OTP lock (a new code is sent to the customer) or cancel the order.',
@@ -418,7 +462,10 @@ orderRouter.get('/admin/orders/needs-attention', requireAuth, requireRole('ADMIN
         if (p.capturedAmountPaise !== expected) add('PAYMENT_MISMATCH', `Captured ${rupees(p.capturedAmountPaise)} (payment ${p.razorpayPaymentId ?? '?'}) but the order total is ${rupees(expected)}.`, p.createdAt);
         else add('DUPLICATE_PAYMENT', `Extra payment ${p.razorpayPaymentId ?? '?'} of ${rupees(p.capturedAmountPaise)} on an order that was already paid.`, p.createdAt);
       }
-      if (o.refundStatus === 'FAILED') add('REFUND_FAILED', `Refund failed after ${o.refundAttempts} attempt(s): ${o.refundError ?? 'unknown error'}`, o.updatedAt);
+      if (o.refundStatus === 'FAILED') {
+        const waiting = o.refundLeaseUntil && o.refundLeaseUntil.getTime() > now ? ` Next automatic try ${iso(o.refundLeaseUntil)}.` : o.refundAttempts >= MAX_REFUND_ATTEMPTS ? ' Automatic retries stopped.' : '';
+        add('REFUND_FAILED', `Refund failed (${o.refundAttempts} permanent failure(s) so far): ${o.refundError ?? 'unknown error'}.${waiting}`, o.updatedAt);
+      }
       if (o.status === 'CANCELLED' && o.paymentStatus === 'PAID' && (!o.paidAt || !o.refundStatus)) {
         add('PAID_AFTER_CANCEL', o.refundStatus ? 'Payment captured after the order was cancelled; refund in progress.' : 'Cancelled while paid and never refunded (order from before automatic refunds). Refund it in Razorpay.', o.cancelledAt ?? o.updatedAt);
       }
@@ -487,8 +534,20 @@ orderRouter.post('/payments/verify-signature', requireAuth, requireRole('STUDENT
       return res.status(400).json({ success: false, code: 'BAD_SIGNATURE', message: 'Invalid payment signature. Verification failed.' });
     }
 
-    const { outcome, order } = await markOrderPaid({ razorpayOrderId, razorpayPaymentId, source: 'VERIFY' });
+    // The signature only proves Razorpay signed this order+payment pair. The payment itself is fetched from Razorpay and must be
+    // captured (an authorized one is captured now) for this order and amount. If Razorpay cannot be asked right now nothing is
+    // marked paid: success:true + PENDING_CONFIRMATION, and the webhook / the maintenance reconcile finishes the job.
+    const { outcome, order } = await confirmAndMarkPaid({ razorpayOrderId, razorpayPaymentId });
     const data = order ? viewFor(req, order) : null;
+    if (outcome === 'PENDING_CONFIRMATION') {
+      return res.json({
+        success: true,
+        status: 'PENDING_CONFIRMATION',
+        paymentStatus: 'PENDING',
+        message: 'Your payment was received. We are waiting for the payment provider to confirm it; your order updates automatically.',
+        data,
+      });
+    }
     if (outcome === 'PAID' || outcome === 'ALREADY_PAID') {
       if (order?.status === 'CANCELLED') {
         return res.status(409).json({ success: false, code: 'ORDER_CANCELLED', message: 'This order was cancelled before the payment arrived. The money is refunded automatically.', data });
@@ -502,7 +561,7 @@ orderRouter.post('/payments/verify-signature', requireAuth, requireRole('STUDENT
       return res.status(409).json({ success: false, code: 'PAYMENT_AMOUNT_MISMATCH', message: 'The amount paid does not match the order. Kraveo support will contact you.', data });
     }
     if (outcome === 'DUPLICATE_PAYMENT') {
-      return res.status(409).json({ success: false, code: 'DUPLICATE_PAYMENT', message: 'This order was already paid. The extra payment will be refunded by Kraveo support.', data });
+      return res.status(409).json({ success: false, code: 'DUPLICATE_PAYMENT', message: 'This order was already paid. The extra payment is being refunded automatically.', data });
     }
     return res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Payment order not found.' });
   } catch (err) {
@@ -534,6 +593,18 @@ orderRouter.post('/payments/webhook', async (req: Request, res: Response) => {
     if (event === 'payment.failed') {
       if (razorpayOrderId) await markPaymentFailed(razorpayOrderId);
       return res.json({ success: true, status: 'processed', message: 'Payment failure recorded.' });
+    }
+    if (event === 'refund.processed' || event === 'refund.failed') {
+      const r: any = body.payload?.refund?.entity && typeof body.payload.refund.entity === 'object' ? body.payload.refund.entity : {};
+      const reasonRaw = r.error_description ?? r.error_reason ?? r.failure_reason ?? null;
+      const result = await applyRefundEvent(event, {
+        refundId: s(r.id),
+        paymentId: s(r.payment_id) ?? razorpayPaymentId,
+        amountPaise: typeof r.amount === 'number' && Number.isFinite(r.amount) ? r.amount : null,
+        reason: typeof reasonRaw === 'string' && reasonRaw.trim() ? reasonRaw.trim().slice(0, 280) : null,
+      });
+      const applied = result === 'CONFIRMED' || result === 'FAILED_RECORDED';
+      return res.json({ success: true, status: applied ? 'processed' : 'ignored', message: applied ? 'Refund event recorded.' : 'Refund event needed no change.' });
     }
     if (event !== 'payment.captured' && event !== 'order.paid') {
       return res.json({ success: true, status: 'ignored', message: 'Webhook event is not a captured payment.' });

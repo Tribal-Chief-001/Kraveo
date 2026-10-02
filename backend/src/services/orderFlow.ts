@@ -5,7 +5,7 @@ import { prisma } from '../db';
 import { MAX_ACTIVE_ORDERS_PER_RIDER, MAX_UNPAID_OPEN_ORDERS, OTP_MAX_ATTEMPTS, paymentWindowMin } from '../config/orderFlow';
 import { ORDER_VIEW_INCLUDE, OrderWithRelations, ACTIVE_RIDER_STATUSES, isPoolEligible, isVendorVisible } from './orderView';
 import { publishOrderChange, getIo } from '../realtime';
-import { executeRefund, runInBackground } from './refundService';
+import { executeRefund, refundExtraPayment, runInBackground, ExtraRefundInput } from './refundService';
 import { writeAudit } from './audit';
 import { createRazorpayOrder } from './paymentService';
 import { triggerDhabaAlarmPushNotification, triggerStudentArrivalNotification } from './notificationService';
@@ -78,8 +78,10 @@ export type ChangeResult = {
 /**
  * After-commit side effects of a change. `awaitRefund` lets user-facing endpoints answer with the
  * final refund state; the webhook runs refunds in the background so Razorpay gets its 200 quickly.
+ * `deferRefund` leaves the refund (refundStatus stays PENDING) to the caller: the maintenance job runs its refunds in its own
+ * bounded, circuit-broken provider phase so a hung Razorpay can never stall the cancellations.
  */
-export const finishChange = async (r: ChangeResult, opts: { awaitRefund?: boolean } = { awaitRefund: true }): Promise<OrderWithRelations> => {
+export const finishChange = async (r: ChangeResult, opts: { awaitRefund?: boolean; deferRefund?: boolean } = { awaitRefund: true }): Promise<OrderWithRelations> => {
   if (!r.changed) return r.order;
   await publishOrderChange(r.order, { wasPoolEligible: isPoolEligible(r.before), newOrderAlert: r.newOrderAlert });
   if (r.newOrderAlert) {
@@ -87,7 +89,7 @@ export const finishChange = async (r: ChangeResult, opts: { awaitRefund?: boolea
   }
   const riders = new Set([r.before.driverId, r.order.driverId].filter((x): x is string => !!x));
   for (const riderId of riders) await refreshRiderDuty(riderId);
-  if (r.refundNeeded) {
+  if (r.refundNeeded && !opts.deferRefund) {
     if (opts.awaitRefund) {
       await executeRefund(r.order.id);
       return (await loadOrder(r.order.id)) ?? r.order;
@@ -261,14 +263,15 @@ export type PaidOutcome = 'PAID' | 'ALREADY_PAID' | 'LATE_PAYMENT_REFUND' | 'AMO
  * PENDING/FAILED -> PAID does the side effects (new_order_alert, push, sockets).
  * - Amount in paise must equal Math.round(totalAmount * 100); a mismatch is recorded, never marked paid.
  * - A payment for an order that is already CANCELLED is recorded and refunded; the order stays cancelled.
- * - A second, different captured payment for an already-paid order is recorded and flagged for the admin.
+ * - A second, different captured payment for an already-paid (or already refunded) order is recorded, flagged, and refunded
+ *   automatically by its own payment id (exactly once); the order and its original payment stay as they are.
  */
 export const markOrderPaid = async (input: {
   razorpayOrderId?: string | null;
   razorpayPaymentId?: string | null;
   amountPaise?: number | null;
   orderIdHint?: string | null;
-  source: 'VERIFY' | 'WEBHOOK';
+  source: 'VERIFY' | 'WEBHOOK' | 'RECONCILE';
   awaitRefund?: boolean;
 }): Promise<{ outcome: PaidOutcome; order: OrderWithRelations | null }> => {
   const { razorpayOrderId, razorpayPaymentId, orderIdHint, source } = input;
@@ -286,7 +289,7 @@ export const markOrderPaid = async (input: {
     return { outcome: 'ORDER_MISMATCH', order: null };
   }
 
-  const result = await withOrderLock(payment.orderId, async (tx, order): Promise<ChangeResult & { outcome: PaidOutcome; paidPaise: number; expectedPaise: number }> => {
+  const result = await withOrderLock(payment.orderId, async (tx, order): Promise<ChangeResult & { outcome: PaidOutcome; paidPaise: number; expectedPaise: number; extra?: ExtraRefundInput }> => {
     const p = await tx.payment.findUniqueOrThrow({ where: { id: payment.id } });
     const expectedPaise = Math.round(order.totalAmount * 100);
     const paidPaise = typeof input.amountPaise === 'number' && Number.isFinite(input.amountPaise) ? Math.round(input.amountPaise) : Math.round(p.amount * 100);
@@ -294,7 +297,11 @@ export const markOrderPaid = async (input: {
     const paymentId = razorpayPaymentId || p.razorpayPaymentId || null;
 
     if (p.status === 'PAID' || p.status === 'REFUNDED') {
-      if (razorpayPaymentId && p.razorpayPaymentId && p.razorpayPaymentId !== razorpayPaymentId) return { ...base, outcome: 'DUPLICATE_PAYMENT' };
+      if (razorpayPaymentId && p.razorpayPaymentId && p.razorpayPaymentId !== razorpayPaymentId) {
+        // Another payment id on a Razorpay order that is already paid: there is no row for it, refund it by its own id.
+        const extra = typeof input.amountPaise === 'number' && Number.isFinite(input.amountPaise) ? { orderId: order.id, providerPaymentId: razorpayPaymentId, amountPaise: paidPaise, paymentRowId: null } : undefined;
+        return { ...base, outcome: 'DUPLICATE_PAYMENT', extra };
+      }
       return { ...base, outcome: 'ALREADY_PAID' };
     }
     if (paidPaise !== expectedPaise) {
@@ -302,9 +309,10 @@ export const markOrderPaid = async (input: {
       return { ...base, outcome: 'AMOUNT_MISMATCH' };
     }
     if (order.paymentStatus === 'PAID' || order.paymentStatus === 'REFUNDED') {
-      // Paid already through another Razorpay order: keep the evidence, the admin refunds it.
+      // Paid already through another Razorpay order: keep the evidence and refund this extra payment (below, after the commit).
       await tx.payment.update({ where: { id: p.id }, data: { capturedAmountPaise: paidPaise, razorpayPaymentId: paymentId } });
-      return { ...base, outcome: 'DUPLICATE_PAYMENT' };
+      const extra = paymentId ? { orderId: order.id, providerPaymentId: paymentId, amountPaise: paidPaise, paymentRowId: p.id } : undefined;
+      return { ...base, outcome: 'DUPLICATE_PAYMENT', extra };
     }
 
     await tx.payment.update({ where: { id: p.id }, data: { status: 'PAID', razorpayPaymentId: paymentId, capturedAmountPaise: paidPaise } });
@@ -322,11 +330,16 @@ export const markOrderPaid = async (input: {
   if (result.outcome === 'AMOUNT_MISMATCH') {
     await writeAudit('PAYMENT_AMOUNT_MISMATCH', 'ORDER', result.order.id, `${source}: payment ${razorpayPaymentId ?? '?'} captured ${rupees(result.paidPaise)} but the order total is ${rupees(result.expectedPaise)}. Not marked paid.`);
   } else if (result.outcome === 'DUPLICATE_PAYMENT') {
-    await writeAudit('PAYMENT_DUPLICATE', 'ORDER', result.order.id, `${source}: second captured payment ${razorpayPaymentId ?? '?'} (${rupees(result.paidPaise)}) for an order that is already paid. Refund it in Razorpay.`);
+    await writeAudit('PAYMENT_DUPLICATE', 'ORDER', result.order.id, `${source}: second captured payment ${razorpayPaymentId ?? '?'} (${rupees(result.paidPaise)}) for an order that is already paid. ${result.extra ? 'Refunding it automatically.' : 'No payment id or amount to refund automatically: refund it in Razorpay.'}`);
   } else if (result.outcome === 'LATE_PAYMENT_REFUND') {
     await writeAudit('PAYMENT_AFTER_CANCEL', 'ORDER', result.order.id, `${source}: payment ${razorpayPaymentId ?? '?'} arrived after the order was cancelled; refunding automatically.`);
   }
   const order = await finishChange(result, { awaitRefund: input.awaitRefund ?? true });
+  if (result.outcome === 'DUPLICATE_PAYMENT' && result.extra) {
+    const extra = result.extra;
+    if (input.awaitRefund ?? true) await refundExtraPayment(extra);
+    else runInBackground(refundExtraPayment(extra));
+  }
   return { outcome: result.outcome, order };
 };
 
@@ -394,7 +407,7 @@ export const cancelOrder = async (
   actor: Actor,
   by: CancelledBy,
   reason: string,
-  opts: { guard?: (o: OrderWithRelations) => boolean; awaitRefund?: boolean } = {},
+  opts: { guard?: (o: OrderWithRelations) => boolean; awaitRefund?: boolean; deferRefund?: boolean } = {},
 ): Promise<{ order: OrderWithRelations; idempotent: boolean } | null> => {
   let skipped = false;
   const result = await withOrderLock(orderId, async (tx, order): Promise<ChangeResult> => {
@@ -437,7 +450,7 @@ export const cancelOrder = async (
   if (result.changed && by !== 'CUSTOMER') {
     await writeAudit('ORDER_CANCELLED', 'ORDER', orderId, `${by} cancelled the order (${result.before.status}, payment ${result.before.paymentStatus})${reason ? `: ${reason}` : ''}`);
   }
-  return { order: await finishChange(result, { awaitRefund: opts.awaitRefund ?? true }), idempotent: !result.changed };
+  return { order: await finishChange(result, { awaitRefund: opts.awaitRefund ?? true, deferRefund: opts.deferRefund }), idempotent: !result.changed };
 };
 
 // ----------------------------------------------------------------------------
