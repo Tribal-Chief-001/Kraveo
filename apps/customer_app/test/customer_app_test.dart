@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:customer_app/providers/cart_provider.dart';
 import 'package:customer_app/providers/dhaba_provider.dart';
-import 'package:customer_app/providers/order_provider.dart';
 import 'package:customer_app/models/menu_item.dart';
-import 'package:customer_app/models/order.dart';
 import 'package:customer_app/widgets/split_bill_modal.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+
+import 'support/order_fakes.dart';
 
 void main() {
   group('Customer App - CartProvider Tests', () {
@@ -121,13 +121,11 @@ void main() {
       expect(cart.grandTotal, equals(200.0)); // 180 + 25 + 15 - 20
     });
 
-    test('Kraveo Coins Redemption - Flat ₹20 OFF math', () {
+    test('Kraveo Coins are a balance only: they never lower the estimate (the server cannot redeem them)', () {
+      cart.setKraveoCoins(120);
       cart.addItem(item: dummyItem1, dhabaId: 'ven-1', dhabaName: 'Sharma Dhaba'); // ₹180 subtotal
-      cart.toggleKraveoCoinsRedemption();
-
-      expect(cart.isKraveoCoinsRedeemed, isTrue);
-      expect(cart.kraveoCoinsDiscountAmount, equals(20.0));
-      expect(cart.grandTotal, equals(200.0)); // 180 + 25 + 15 - 20
+      expect(cart.userKraveoCoins, 120);
+      expect(cart.grandTotal, equals(220.0)); // 180 + 25 + 15, same formula as the server
     });
 
     test('Decrementing item invalidates coupon when subtotal falls below threshold', () {
@@ -169,77 +167,9 @@ void main() {
     });
   });
 
-  group('Customer App - OrderProvider Tests', () {
-    late OrderProvider orderProvider;
-    late CartProvider cartProvider;
-
-    setUp(() {
-      orderProvider = OrderProvider();
-      cartProvider = CartProvider();
-      cartProvider.addItem(
-        item: const MenuItemModel(
-          id: 'item-1',
-          vendorId: 'ven-1',
-          name: 'Paneer Thali',
-          price: 180,
-          category: 'Thalis',
-          description: 'Thali',
-          imageUrl: '',
-          isAvailable: true,
-          isVeg: true,
-        ),
-        dhabaId: 'ven-1',
-        dhabaName: 'Sharma Dhaba',
-      );
-    });
-
-    test('Place order creates valid order with OTP code', () {
-      final order = orderProvider.placeOrder(
-        cart: cartProvider,
-        hostel: 'Block 2',
-        deliveryNote: 'Gate 1',
-        paymentMethod: 'UPI',
-      );
-
-      expect(order.id, startsWith('ORD-'));
-      expect(order.otpCode.length, equals(4));
-      expect(orderProvider.activeOrder, equals(order));
-      expect(cartProvider.items.isEmpty, isTrue);
-    });
-
-    test('Gate Handshake OTP verification succeeds with correct OTP', () {
-      final order = orderProvider.placeOrder(
-        cart: cartProvider,
-        hostel: 'Block 2',
-        deliveryNote: 'Gate 1',
-        paymentMethod: 'UPI',
-      );
-
-      final result = orderProvider.verifyGateHandshakeOtp(order.otpCode);
-      expect(result, isTrue);
-      expect(orderProvider.activeOrder!.status, equals(OrderProgressStatus.delivered));
-    });
-  });
-
   group('Customer App - SplitBillModal Widget Test', () {
     testWidgets('SplitBillModal displays correct per-person split', (WidgetTester tester) async {
-      final order = OrderModel(
-        id: 'ORD-100',
-        dhabaId: 'ven-1',
-        dhabaName: 'Sharma Dhaba',
-        items: [],
-        subtotal: 200,
-        discount: 0,
-        deliveryFee: 20,
-        taxAndPackaging: 10,
-        totalAmount: 230,
-        hostel: 'Block 1',
-        deliveryNote: '',
-        paymentMethod: 'UPI',
-        status: OrderProgressStatus.placed,
-        otpCode: '1234',
-        createdAt: DateTime.now(),
-      );
+      final order = orderModel(status: 'ACCEPTED', paymentStatus: 'PAID', totalAmount: 230);
 
       await tester.pumpWidget(
         MaterialApp(

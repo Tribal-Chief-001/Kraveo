@@ -18,10 +18,12 @@ void main() {
 }
 
 class KraveoCustomerApp extends StatelessWidget {
-  /// [googleAuth] is a test seam; the real Google layer is used when it is null.
-  const KraveoCustomerApp({super.key, this.googleAuth});
+  /// [googleAuth] and [createOrders] are test seams; the real Google layer and the real order
+  /// backend are used when they are null.
+  const KraveoCustomerApp({super.key, this.googleAuth, this.createOrders});
 
   final GoogleAuthService? googleAuth;
+  final OrderProvider Function()? createOrders;
 
   @override
   Widget build(BuildContext context) {
@@ -30,7 +32,7 @@ class KraveoCustomerApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => SessionProvider(googleAuth: googleAuth)),
         ChangeNotifierProvider(create: (_) => DhabaProvider()),
         ChangeNotifierProvider(create: (_) => CartProvider()),
-        ChangeNotifierProvider(create: (_) => OrderProvider()),
+        ChangeNotifierProvider(create: (_) => createOrders?.call() ?? OrderProvider()),
       ],
       child: MaterialApp(
         title: 'Kraveo',
@@ -57,7 +59,12 @@ class _AuthGateState extends State<AuthGate> {
   @override
   void initState() {
     super.initState();
-    _session.onUserLoaded = (user) => context.read<CartProvider>().setKraveoCoins(user.kraveoCoins);
+    _session.onUserLoaded = (user) {
+      context.read<CartProvider>().setKraveoCoins(user.kraveoCoins);
+      // Restore this student's active order(s) and history from the server. A different
+      // student than before wipes the previous one's orders first.
+      context.read<OrderProvider>().beginSession(user.id);
+    };
     _session.onSignedOut = _resetUserState;
     CustomerApiService.onUnauthorized = _handleUnauthorized;
     _session.restore();
@@ -72,6 +79,9 @@ class _AuthGateState extends State<AuthGate> {
   }
 
   void _resetUserState() {
+    // Orders are dropped immediately (and in-flight answers ignored) so nothing of the previous
+    // student can show up on the next account.
+    context.read<OrderProvider>().resetForLogout(notify: false);
     // Deferred: sign-out can happen mid-build of a screen that reads these providers.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;

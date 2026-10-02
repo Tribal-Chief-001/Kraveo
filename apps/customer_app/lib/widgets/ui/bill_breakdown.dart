@@ -1,19 +1,59 @@
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import '../../models/order.dart';
 import '../../providers/cart_provider.dart';
 import 'format.dart';
 
 /// Transparent bill: every line that moves the total, then a bold "To pay".
+/// Built either from the server's order ([BillBreakdown.order], authoritative) or from the cart
+/// ([BillBreakdown.cart], an estimate before the order exists).
 class BillBreakdown extends StatelessWidget {
-  const BillBreakdown({super.key, required this.cart});
+  const BillBreakdown({
+    super.key,
+    required this.subtotal,
+    required this.deliveryFee,
+    required this.taxAndPackaging,
+    required this.discount,
+    required this.total,
+    this.couponCode,
+    this.estimate = false,
+  });
 
-  final CartProvider cart;
+  factory BillBreakdown.cart({Key? key, required CartProvider cart}) => BillBreakdown(
+        key: key,
+        subtotal: cart.subtotal,
+        deliveryFee: cart.deliveryFee,
+        taxAndPackaging: cart.taxAndPackaging,
+        discount: cart.appliedCouponCode != null ? cart.couponDiscountAmount : 0,
+        couponCode: cart.appliedCouponCode,
+        total: cart.grandTotal,
+        estimate: true,
+      );
+
+  factory BillBreakdown.order({Key? key, required OrderModel order, String? couponCode}) => BillBreakdown(
+        key: key,
+        subtotal: order.subtotal,
+        deliveryFee: order.deliveryFee,
+        taxAndPackaging: order.taxAndPackaging,
+        discount: order.discount,
+        couponCode: couponCode,
+        total: order.totalAmount,
+      );
+
+  final double subtotal;
+  final double deliveryFee;
+  final double taxAndPackaging;
+  final double discount;
+  final double total;
+  final String? couponCode;
+
+  /// True for the local cart estimate (labelled as such).
+  final bool estimate;
 
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    final savings = (cart.appliedCouponCode != null ? cart.couponDiscountAmount : 0) + (cart.isKraveoCoinsRedeemed ? cart.kraveoCoinsDiscountAmount : 0);
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -24,20 +64,23 @@ class BillBreakdown extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Text('Bill details', style: KraveoType.titleMd.copyWith(color: k.ink)),
         const SizedBox(height: 12),
-        _Row('Items subtotal', rupee(cart.subtotal)),
-        _Row('Delivery to your gate', rupee(cart.deliveryFee)),
-        _Row('Packaging & taxes', rupee(cart.taxAndPackaging)),
-        if (cart.appliedCouponCode != null) _Row('Coupon (${cart.appliedCouponCode})', '-${rupee(cart.couponDiscountAmount)}', discount: true),
-        if (cart.isKraveoCoinsRedeemed) _Row('Kraveo Coins', '-${rupee(cart.kraveoCoinsDiscountAmount)}', discount: true),
+        _Row('Items subtotal', rupee(subtotal)),
+        _Row('Delivery to your gate', rupee(deliveryFee)),
+        _Row('Packaging & taxes', rupee(taxAndPackaging)),
+        if (discount > 0) _Row(couponCode != null ? 'Coupon ($couponCode)' : 'Discount', '-${rupee(discount)}', discount: true),
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
           child: Divider(height: 1, color: k.line),
         ),
         Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           Expanded(child: Text('To pay', style: KraveoType.titleLg.copyWith(color: k.ink))),
-          KAnimatedNumber(value: cart.grandTotal, prefix: '₹', style: KraveoType.numeric.copyWith(color: k.ink, fontSize: 30)),
+          KAnimatedNumber(value: total, prefix: '₹', style: KraveoType.numeric.copyWith(color: k.ink, fontSize: 30)),
         ]),
-        if (savings > 0) ...[
+        if (estimate) ...[
+          const SizedBox(height: 6),
+          Text('Estimate. Kraveo confirms the final amount when you place the order.', style: KraveoType.caption.copyWith(color: k.inkFaint, fontSize: 12)),
+        ],
+        if (discount > 0) ...[
           const SizedBox(height: 10),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -45,7 +88,7 @@ class BillBreakdown extends StatelessWidget {
             child: Row(children: [
               Icon(LucideIcons.sparkles, size: 16, color: k.brand),
               const SizedBox(width: 8),
-              Expanded(child: Text('You are saving ${rupee(savings)} on this order', style: KraveoType.bodySm.copyWith(color: k.brand, fontWeight: FontWeight.w700))),
+              Expanded(child: Text('You are saving ${rupee(discount)} on this order', style: KraveoType.bodySm.copyWith(color: k.brand, fontWeight: FontWeight.w700))),
             ]),
           ),
         ],

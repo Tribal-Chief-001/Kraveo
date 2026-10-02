@@ -33,12 +33,12 @@ class _SplitBillModalState extends State<SplitBillModal> {
     final perPerson = _formattedPerPerson;
     final buffer = StringBuffer();
     buffer.writeln('*KRAVEO LATE-NIGHT HOSTEL BILL SPLIT*');
-    buffer.writeln('Kitchen: ${widget.order.dhabaName}');
-    buffer.writeln('Drop-off: ${widget.order.hostel}');
+    buffer.writeln('Kitchen: ${widget.order.vendorName}');
+    buffer.writeln('Drop-off: ${widget.order.dropoffHostel}');
     buffer.writeln('--------------------------------');
     if (widget.order.items.isNotEmpty) {
       for (final item in widget.order.items) {
-        buffer.writeln('- ${item.quantity}x ${item.item.name} - ${rupee(item.totalPrice)}');
+        buffer.writeln('- ${item.quantity}x ${item.name} - ${rupee(item.lineTotal)}');
       }
       buffer.writeln('--------------------------------');
     }

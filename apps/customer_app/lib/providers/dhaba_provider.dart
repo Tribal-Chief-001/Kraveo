@@ -271,6 +271,16 @@ class DhabaProvider with ChangeNotifier {
     ],
   };
 
+  /// Kitchens that came from the live server catalog. The built-in list above is only a preview
+  /// shown while offline; its ids do not exist on the server, so checkout refuses them.
+  final Set<String> _liveVendorIds = {};
+
+  bool isLiveVendor(String? id) => id != null && _liveVendorIds.contains(id);
+
+  /// Test seam: treat these kitchens as coming from the live catalog.
+  @visibleForTesting
+  void markLiveForTest(Iterable<String> ids) => _liveVendorIds.addAll(ids);
+
   // Getters
   String get searchQuery => _searchQuery;
   int get selectedCategoryIndex => _selectedCategoryIndex;
@@ -337,6 +347,9 @@ class DhabaProvider with ChangeNotifier {
       _menuItems
         ..clear()
         ..addAll(loadedMenus);
+      _liveVendorIds
+        ..clear()
+        ..addAll(loadedDhabas.map((d) => d.id));
       notifyListeners();
     } catch (error) {
       debugPrint('⚠️ [Catalog] Live catalog unavailable; retaining local catalog: $error');

@@ -15,6 +15,7 @@ import 'package:customer_app/screens/checkout_screen.dart';
 import 'package:customer_app/services/google_auth_service.dart';
 import 'package:customer_app/widgets/ui/google_button.dart';
 import 'package:customer_app/services/customer_api_service.dart';
+import 'package:customer_app/services/order_api.dart';
 import 'package:customer_app/widgets/ui/hostel_pill.dart';
 import 'package:customer_app/widgets/ui/phone_input.dart';
 import 'package:flutter/material.dart';
@@ -393,9 +394,17 @@ void main() {
         expect(await CustomerApiService.getSavedToken(), isNull);
       }
 
-      await expectExpired(() => CustomerApiService.createOrder(vendorId: 'v', items: const [], dropoffHostel: 'Block 1', dropoffNotes: ''));
-      await expectExpired(() => CustomerApiService.createPaymentOrder('o1'));
-      await expectExpired(() => CustomerApiService.verifyPayment(razorpayOrderId: 'a', razorpayPaymentId: 'b', razorpaySignature: 'c'));
+      const api = HttpOrderApi();
+      Future<Object?> expectOrderUnauthorized(Future<OrderResult<Object?>> call) async {
+        final r = await call;
+        expect(r.error?.kind, OrderErrorKind.unauthorized);
+        expect(orderErrorMessage(r.error!), CustomerApiService.sessionExpiredMessage);
+        return r;
+      }
+
+      await expectExpired(() => expectOrderUnauthorized(api.createOrder(const CreateOrderRequest(vendorId: 'v', items: [], dropoffHostel: 'Block 1', dropoffNotes: '', clientRequestId: 'k1'))));
+      await expectExpired(() => expectOrderUnauthorized(api.createPayment('o1')));
+      await expectExpired(() => expectOrderUnauthorized(api.verifyPayment(const PaymentProof(razorpayOrderId: 'a', razorpayPaymentId: 'b', razorpaySignature: 'c'))));
       await expectExpired(() async {
         final r = await CustomerApiService.fetchProfile();
         expect(r?.unauthorized, isTrue);
@@ -1425,18 +1434,14 @@ void main() {
       await tester.pump(const Duration(seconds: 5));
       expect(find.text('DELIVERING TO'), findsOneWidget);
 
-      Object? error;
+      OrderResult<Object?>? result;
       await tester.runAsync(() async {
-        try {
-          await CustomerApiService.createOrder(vendorId: 'v1', items: const [], dropoffHostel: 'Block 3', dropoffNotes: '');
-        } catch (e) {
-          error = e;
-        }
+        result = await const HttpOrderApi().createOrder(const CreateOrderRequest(vendorId: 'v1', items: [], dropoffHostel: 'Block 3', dropoffNotes: '', clientRequestId: 'k2'));
       });
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump(const Duration(seconds: 1));
 
-      expect(error.toString(), contains('Session expired, please log in again'));
+      expect(result?.error?.kind, OrderErrorKind.unauthorized);
       expect(find.text('Continue with Google'), findsOneWidget);
       expect(find.text('Session expired, please log in again'), findsOneWidget);
       expect(await CustomerApiService.getSavedToken(), isNull);

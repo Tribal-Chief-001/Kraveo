@@ -5,17 +5,21 @@ import '../models/order.dart';
 import 'ui/status_map.dart';
 
 /// Stylised route strip: kitchen -> your gate, with the rider marker placed by the order's status.
-/// It shows status-driven progress only (no invented distances or timings).
+/// It shows status-driven progress only (no invented distances or timings). When the server
+/// forwards the rider's GPS ([liveLocation]) the strip says so and when it was last updated; the
+/// marker is not moved by coordinates because the app has no coordinates for the drop gates.
 class AnimatedRiderMap extends StatefulWidget {
   final OrderProgressStatus status;
   final String hostel;
   final String dhabaName;
+  final RiderLocation? liveLocation;
 
   const AnimatedRiderMap({
     super.key,
     required this.status,
     required this.hostel,
     required this.dhabaName,
+    this.liveLocation,
   });
 
   @override
@@ -60,13 +64,20 @@ class _AnimatedRiderMapState extends State<AnimatedRiderMap> with SingleTickerPr
 
   String get _caption => switch (widget.status) {
         OrderProgressStatus.placed => 'Waiting for the kitchen',
+        OrderProgressStatus.accepted => 'Accepted',
         OrderProgressStatus.preparing => 'Being cooked',
-        OrderProgressStatus.pickedUp => 'Picked up',
-        OrderProgressStatus.onTheWay => 'On the way',
+        OrderProgressStatus.readyForPickup => 'Ready for pickup',
+        OrderProgressStatus.pickedUp => 'On the way',
         OrderProgressStatus.arrivedAtGate => 'At your gate',
         OrderProgressStatus.delivered => 'Delivered',
         OrderProgressStatus.cancelled => 'Cancelled',
       };
+
+  static String _liveLabel(RiderLocation loc) {
+    final age = DateTime.now().difference(loc.receivedAt);
+    if (age.inSeconds < 60) return 'GPS live';
+    return 'GPS ${age.inMinutes} min ago';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -103,6 +114,16 @@ class _AnimatedRiderMapState extends State<AnimatedRiderMap> with SingleTickerPr
                   ]),
                 ),
               ),
+              if (widget.liveLocation != null)
+                Positioned(
+                  top: 14,
+                  right: 14,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(KRadius.pill)),
+                    child: Text(_liveLabel(widget.liveLocation!), style: KraveoType.label.copyWith(color: Colors.white, fontSize: 11.5)),
+                  ),
+                ),
               // Start pin: kitchen
               Positioned(left: 20, bottom: 14, width: 92, child: _Pin(icon: LucideIcons.store, label: widget.dhabaName, color: KraveoPalette.g400)),
               // End pin: gate

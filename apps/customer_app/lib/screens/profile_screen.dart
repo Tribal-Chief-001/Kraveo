@@ -444,8 +444,10 @@ class _OrdersCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    final delivered = orders.orderHistory.where((o) => o.status == OrderProgressStatus.delivered).toList();
+    // Counts what has been loaded from the server; "+" when more history pages exist.
+    final delivered = orders.history.where((o) => o.status == OrderProgressStatus.delivered).toList();
     final spent = delivered.fold<double>(0, (sum, o) => sum + o.totalAmount);
+    final more = orders.historyHasMore ? '+' : '';
     final active = orders.activeOrder;
     final live = active != null && active.status.isLive;
 
@@ -464,23 +466,23 @@ class _OrdersCard extends StatelessWidget {
           Text('No delivered orders yet. Your first one is a few taps away.', style: KraveoType.bodySm.copyWith(color: k.inkMuted))
         else
           Row(children: [
-            Expanded(child: _Stat(value: '${delivered.length}', label: delivered.length == 1 ? 'Order delivered' : 'Orders delivered')),
+            Expanded(child: _Stat(value: '${delivered.length}$more', label: delivered.length == 1 ? 'Order delivered' : 'Orders delivered')),
             Container(width: 1, height: 36, color: k.line),
             const SizedBox(width: 16),
-            Expanded(child: _Stat(value: rupee(spent), label: 'Spent so far')),
+            Expanded(child: _Stat(value: '${rupee(spent)}$more', label: 'Spent so far')),
           ]),
         if (live) ...[
           const SizedBox(height: 14),
           KPressable(
             onTap: onTrack,
-            semanticLabel: 'Order from ${active.dhabaName} is ${active.status.headline}. Open tracking',
+            semanticLabel: 'Order from ${active.vendorName}: ${orderHeadline(active)}. Open tracking',
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(color: k.brandSoft, borderRadius: BorderRadius.circular(KRadius.md)),
               child: Row(children: [
                 Icon(LucideIcons.bike, size: 18, color: k.brand),
                 const SizedBox(width: 10),
-                Expanded(child: Text('${active.dhabaName}: ${active.status.headline}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.brand, fontSize: 13))),
+                Expanded(child: Text('${active.vendorName}: ${orderHeadline(active)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.brand, fontSize: 13))),
                 const SizedBox(width: 8),
                 Icon(LucideIcons.arrowRight, size: 16, color: k.brand),
               ]),

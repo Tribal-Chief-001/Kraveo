@@ -4,12 +4,12 @@ import 'package:flutter/services.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
-import '../models/order.dart';
 import '../providers/dhaba_provider.dart';
 import '../providers/order_provider.dart';
 import '../providers/session_provider.dart';
 import '../widgets/dhaba_card.dart';
 import '../widgets/ui/display_text.dart';
+import '../widgets/ui/format.dart';
 import '../widgets/ui/floating_bar.dart';
 import '../widgets/ui/hostel_pill.dart';
 import '../widgets/ui/k_icon_button.dart';
@@ -29,6 +29,11 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentTab = 0;
+
+  /// Catch up on order changes when the app returns to the foreground (contract 3).
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () {
+    if (mounted) context.read<OrderProvider>().onAppResumed();
+  });
   final TextEditingController _searchController = TextEditingController();
 
   /// True until the live catalog answers (or a short grace period passes), so users see
@@ -40,6 +45,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _lifecycle; // start listening
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final load = Provider.of<DhabaProvider>(context, listen: false).loadCatalog();
@@ -52,6 +58,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -82,7 +89,7 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           // Builder: the feed must read the padding Scaffold reports for the floating nav.
           Builder(builder: _buildHomeFeed),
-          LiveTrackingScreen(onExplore: () => _goToTab(0)),
+          LiveTrackingScreen(visible: _currentTab == 1, onExplore: () => _goToTab(0)),
           OrderHistoryScreen(
             selectedHostel: selectedHostel,
             onTrackOrder: () => _goToTab(1),
@@ -459,7 +466,7 @@ class _ActiveOrderBar extends StatelessWidget {
     final k = context.k;
     final order = orderProvider.activeOrder!;
     return KFloatingBar(
-      semanticLabel: 'Active order from ${order.dhabaName}: ${order.status.headline}. Open tracking',
+      semanticLabel: 'Active order from ${order.vendorName}: ${orderHeadline(order)}. Open tracking',
       onTap: onTap,
       leading: Container(
         width: 44,
@@ -467,8 +474,10 @@ class _ActiveOrderBar extends StatelessWidget {
         decoration: BoxDecoration(color: k.onBrand.withValues(alpha: 0.16), shape: BoxShape.circle),
         child: Icon(LucideIcons.bike, size: 22, color: k.onBrand),
       ),
-      title: Text(order.status.headline, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.onBrand)),
-      subtitle: order.status == OrderProgressStatus.arrivedAtGate ? 'Gate OTP ${order.otpCode}' : order.dhabaName,
+      title: Text(orderHeadline(order), maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.onBrand)),
+      subtitle: order.otpCode != null
+          ? 'Gate OTP ${order.otpCode}'
+          : (order.awaitsPayment ? 'Pay by ${clockLabel(order.paymentDeadline)} · ${order.vendorName}' : order.vendorName),
       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
         Text('Track', style: KraveoType.button.copyWith(color: k.onBrand, fontSize: 14)),
         const SizedBox(width: 4),

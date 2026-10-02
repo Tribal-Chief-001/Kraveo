@@ -58,9 +58,9 @@ class CartSheet extends StatelessWidget {
         const SizedBox(height: 4),
         const CouponBox(),
         const SizedBox(height: 16),
-        CoinsToggle(cart: cart),
+        CoinsBalance(cart: cart),
         const SizedBox(height: 16),
-        BillBreakdown(cart: cart),
+        BillBreakdown.cart(cart: cart),
         const SizedBox(height: 4),
       ],
       footer: Column(mainAxisSize: MainAxisSize.min, children: [

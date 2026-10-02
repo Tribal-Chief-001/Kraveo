@@ -1,6 +1,7 @@
 import 'package:customer_app/models/customization.dart';
 import 'package:customer_app/models/menu_item.dart';
 import 'package:customer_app/models/order.dart';
+import 'package:customer_app/services/order_api.dart';
 import 'package:customer_app/providers/cart_provider.dart';
 import 'package:customer_app/providers/dhaba_provider.dart';
 import 'package:customer_app/providers/order_provider.dart';
@@ -20,6 +21,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:provider/provider.dart';
+
+import 'support/order_fakes.dart';
 
 /// Renders screens on the smallest supported phone (360x640) at 1.3x system text scale.
 /// Any RenderFlex overflow or build error surfaces as a test exception.
@@ -68,23 +71,17 @@ MenuItemModel _item(String id, {bool veg = true, bool available = true, double p
       isVeg: veg,
     );
 
-OrderModel _order(OrderProgressStatus status) => OrderModel(
-      id: 'ORD-4242',
-      dhabaId: 'ven-1',
-      dhabaName: 'Sharma Highway Dhaba',
-      items: const [],
-      subtotal: 270,
-      discount: 0,
-      deliveryFee: 25,
-      taxAndPackaging: 15,
-      totalAmount: 310,
-      hostel: 'Block 2',
-      deliveryNote: '',
-      paymentMethod: 'UPI',
-      status: status,
-      otpCode: '4827',
-      createdAt: DateTime(2026, 9, 30, 21, 42),
-    );
+/// A provider whose fake server knows [orders] (GET /orders/:id) and lists them in history.
+OrderProvider _ordersWith(List<OrderModel> orders) {
+  final api = FakeOrderApi();
+  for (final o in orders) {
+    api.server[o.id] = o;
+  }
+  api.onFetchList = (scope, cursor) async => OrderResult.ok(OrdersPage(scope == 'history' ? orders.where((o) => o.isTerminal).toList() : orders.where((o) => o.isLive).toList(), null));
+  return fakeOrders(api);
+}
+
+const _rider = {'id': 'd1', 'name': 'Vikram Singh', 'phone': '+91 98765 43210'};
 
 /// Flutter's test engine draws every glyph as a 1em box unless fonts are loaded, which would
 /// overstate text widths ~2x. Load the real bundled Kraveo fonts so layout checks are honest.
@@ -278,48 +275,54 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('LiveTrackingScreen shows status, next step, OTP and journey', (tester) async {
-    final orders = OrderProvider();
-    await pumpScreen(tester, LiveTrackingScreen(order: _order(OrderProgressStatus.onTheWay)), orders: orders);
+  testWidgets('LiveTrackingScreen (picked up) shows status, next step, rider and journey but no OTP yet', (tester) async {
+    final order = orderModel(status: 'PICKED_UP', paymentStatus: 'PAID', driver: _rider);
+    await pumpScreen(tester, LiveTrackingScreen(orderId: order.id), orders: _ordersWith([order]));
     await tester.pump(const Duration(milliseconds: 1500));
 
     expect(find.text('On the way to campus'), findsOneWidget);
     expect(find.textContaining('Next:'), findsOneWidget);
+    expect(find.text('Your gate OTP'), findsNothing, reason: 'the OTP only exists at the gate');
+    await tester.scrollUntilVisible(find.text('Order journey'), 300, scrollable: find.byType(Scrollable).first);
+    expect(find.text('Order journey'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('YOUR DELIVERY PARTNER'), 300, scrollable: find.byType(Scrollable).first);
+    expect(find.text('Vikram Singh'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('LiveTrackingScreen at the gate shows the server OTP and no customer-side verification', (tester) async {
+    final order = orderModel(status: 'ARRIVED_AT_GATE', paymentStatus: 'PAID', driver: _rider, otpCode: '4827');
+    await pumpScreen(tester, LiveTrackingScreen(orderId: order.id), orders: _ordersWith([order]));
+    await tester.pump(const Duration(milliseconds: 1500));
+    expect(find.text('Your rider is at the gate'), findsOneWidget);
     expect(find.text('Your gate OTP'), findsOneWidget);
     for (final d in ['4', '8', '2', '7']) {
       expect(find.text(d), findsWidgets);
     }
-    await tester.scrollUntilVisible(find.text('Order journey'), 300, scrollable: find.byType(Scrollable).first);
-    expect(find.text('Order journey'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('YOUR DELIVERY PARTNER'), 300, scrollable: find.byType(Scrollable).first);
-    expect(find.text('YOUR DELIVERY PARTNER'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('LiveTrackingScreen at the gate offers handover confirmation', (tester) async {
-    await pumpScreen(tester, LiveTrackingScreen(order: _order(OrderProgressStatus.arrivedAtGate)));
-    await tester.pump(const Duration(milliseconds: 1500));
-    expect(find.text('Your runner is at the gate'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('Confirm handover'), 300, scrollable: find.byType(Scrollable).first);
-    expect(find.text('Confirm handover'), findsOneWidget);
+    expect(find.text('Confirm handover'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
   testWidgets('LiveTrackingScreen renders cancelled and delivered states', (tester) async {
-    await pumpScreen(tester, LiveTrackingScreen(order: _order(OrderProgressStatus.cancelled)));
+    final cancelled = orderModel(id: 'c1', status: 'CANCELLED', paymentStatus: 'PENDING', cancelledBy: 'SYSTEM', cancelReason: 'Payment not completed');
+    await pumpScreen(tester, LiveTrackingScreen(orderId: cancelled.id), orders: _ordersWith([cancelled]));
     expect(find.text('This order was cancelled'), findsOneWidget);
+    expect(find.textContaining('Payment not completed'), findsWidgets);
     expect(find.text('Your gate OTP'), findsNothing);
     expect(tester.takeException(), isNull);
 
-    await pumpScreen(tester, LiveTrackingScreen(order: _order(OrderProgressStatus.delivered)));
+    final delivered = orderModel(id: 'd1', status: 'DELIVERED', paymentStatus: 'PAID', driver: _rider);
+    await pumpScreen(tester, LiveTrackingScreen(orderId: delivered.id), orders: _ordersWith([delivered]));
     await tester.pump(const Duration(milliseconds: 1500));
     expect(find.text('Delivered. Enjoy!'), findsOneWidget);
     expect(find.text('Your gate OTP'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('OrderHistoryScreen lists orders with pills and actions', (tester) async {
-    await pumpScreen(tester, const OrderHistoryScreen());
+  testWidgets('OrderHistoryScreen lists server orders with pills and actions', (tester) async {
+    final orders = _ordersWith([orderModel(id: 'h1', status: 'DELIVERED', paymentStatus: 'PAID', driver: _rider)]);
+    await orders.loadHistory(refresh: true);
+    await pumpScreen(tester, const OrderHistoryScreen(), orders: orders);
     await tester.pump(const Duration(milliseconds: 800));
     expect(find.text('Your orders'), findsOneWidget);
     expect(find.text('Delivered'), findsWidgets);
@@ -332,7 +335,7 @@ void main() {
     await pumpScreen(tester, Scaffold(body: Builder(builder: (context) {
       return Center(
         child: ElevatedButton(
-          onPressed: () => ReviewModal.show(context, orderId: 'o1', dhabaName: 'Sharma Highway Dhaba', driverName: 'Vikram Singh', dishNames: const ['Special Shahi Paneer Thali', 'Kulhad Sweet Lassi'], onReviewSubmitted: (_) {}),
+          onPressed: () => ReviewModal.show(context, order: orderModel(status: 'DELIVERED', paymentStatus: 'PAID', driver: _rider)),
           child: const Text('open'),
         ),
       );
@@ -341,7 +344,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.text('Rate Sharma Highway Dhaba'), findsOneWidget);
-    expect(find.text('Submit and earn 10 coins'), findsOneWidget);
+    expect(find.text('Submit rating'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

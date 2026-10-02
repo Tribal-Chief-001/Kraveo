@@ -7,48 +7,70 @@ import '../models/order.dart';
 import '../providers/cart_provider.dart';
 import '../providers/dhaba_provider.dart';
 import '../providers/order_provider.dart';
+import '../providers/session_provider.dart';
+import '../services/order_api.dart';
 import '../widgets/animated_rider_map.dart';
 import '../widgets/review_modal.dart';
 import '../widgets/split_bill_modal.dart';
 import '../widgets/ui/format.dart';
 import '../widgets/ui/info_chip.dart';
 import '../widgets/ui/k_icon_button.dart';
-import '../widgets/ui/otp_boxes.dart';
 import '../widgets/ui/scroll_empty.dart';
+import '../widgets/ui/sheet_chrome.dart';
 import '../widgets/ui/snack.dart';
 import '../widgets/ui/status_map.dart';
 
+/// Live tracking of one real order. Everything comes from the server: `GET /orders/:id` when
+/// shown, every 15 s while visible (polling), and `order_updated` / `rider_location` on the
+/// socket. The gate OTP is the server's and only appears at ARRIVED_AT_GATE.
 class LiveTrackingScreen extends StatefulWidget {
-  final OrderModel? order;
-  final String? hostel;
-  final String? dhabaName;
-  final double? totalAmount;
+  /// The order to show. Null (the Track tab) shows the student's current order.
+  final String? orderId;
+
+  /// Whether this screen is on screen (the Track tab stays mounted while another tab shows).
+  /// Polling and the socket only run while visible.
+  final bool visible;
 
   /// Called from the empty state's button when this screen is a tab (so it can switch to Home).
   final VoidCallback? onExplore;
 
-  const LiveTrackingScreen({
-    super.key,
-    this.order,
-    this.hostel,
-    this.dhabaName,
-    this.totalAmount,
-    this.onExplore,
-  });
+  const LiveTrackingScreen({super.key, this.orderId, this.visible = true, this.onExplore});
 
   @override
   State<LiveTrackingScreen> createState() => _LiveTrackingScreenState();
 }
 
 class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
-  final TextEditingController _otpInputController = TextEditingController();
-  int _otpErrorTick = 0;
-  bool _otpHasError = false;
+  OrderProvider? _orders;
+  String? _watching;
+
+  /// The provider [_watching] was registered on (balanced even if the provider is swapped).
+  OrderProvider? _watchingOn;
+
+  /// The order picked from the switcher when several are live (Track tab only).
+  String? _picked;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _orders = Provider.of<OrderProvider>(context, listen: false);
+  }
 
   @override
   void dispose() {
-    _otpInputController.dispose();
+    final id = _watching;
+    if (id != null) _watchingOn?.unwatch(id);
     super.dispose();
+  }
+
+  void _syncWatch(String? wanted) {
+    final target = widget.visible ? wanted : null;
+    if (target == _watching && identical(_watchingOn, _orders)) return;
+    final previous = _watching;
+    if (previous != null) _watchingOn?.unwatch(previous);
+    _watching = target;
+    _watchingOn = _orders;
+    if (target != null) _orders?.watch(target);
   }
 
   void _explore() {
@@ -59,34 +81,66 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
     }
   }
 
-  static String _clock(DateTime d) {
-    final hour = d.hour % 12 == 0 ? 12 : d.hour % 12;
-    final minute = d.minute.toString().padLeft(2, '0');
-    return '$hour:$minute ${d.hour >= 12 ? 'PM' : 'AM'}';
+  Future<void> _pay(OrderProvider orders, OrderModel order) async {
+    final outcome = await orders.payForOrder(order.id, contact: context.read<SessionProvider>().user?.phone);
+    if (!mounted) return;
+    switch (outcome.kind) {
+      case PaymentOutcomeKind.paid:
+        showKSnack(context, 'Payment successful. The restaurant has your order now.', icon: LucideIcons.circleCheck);
+      case PaymentOutcomeKind.confirming:
+        showKSnack(context, outcome.message ?? 'Payment received. Confirming it with Kraveo.', icon: LucideIcons.loader);
+      case PaymentOutcomeKind.cancelled:
+      case PaymentOutcomeKind.failed:
+      case PaymentOutcomeKind.orderClosed:
+        showKSnack(context, outcome.message ?? 'Payment not completed. You can try again.', error: true);
+    }
   }
 
-  void _verifyHandover(OrderProvider orderProvider) {
-    final success = orderProvider.verifyGateHandshakeOtp(_otpInputController.text);
-    if (success) {
-      setState(() => _otpHasError = false);
-      showKSnack(context, 'Handover confirmed. Order delivered!', icon: LucideIcons.packageCheck);
+  Future<void> _cancel(OrderProvider orders, OrderModel order) async {
+    final ok = await showKConfirm(
+      context,
+      title: 'Cancel this order?',
+      message: order.isPaid
+          ? 'The restaurant has not accepted it yet. Your ${rupee(order.totalAmount)} will be refunded to your account.'
+          : 'Nothing has been paid for this order, so nothing is charged.',
+      confirmLabel: 'Cancel order',
+      cancelLabel: 'Keep it',
+      danger: true,
+    );
+    if (ok != true || !mounted) return;
+    final r = await orders.cancelOrder(order.id, reason: 'Cancelled by customer');
+    if (!mounted) return;
+    if (r.ok) {
+      showKSnack(context, order.isPaid ? 'Order cancelled. Your refund has been started.' : 'Order cancelled.', icon: LucideIcons.circleX);
     } else {
-      setState(() {
-        _otpHasError = true;
-        _otpErrorTick++;
-      });
-      showKSnack(context, 'That OTP does not match. Check the code above.', error: true);
+      final e = r.error!;
+      showKSnack(
+        context,
+        e.kind == OrderErrorKind.conflict || e.kind == OrderErrorKind.rejected
+            ? (e.message ?? 'The restaurant already accepted this order, so it can\'t be cancelled in the app.')
+            : orderErrorMessage(e, action: 'cancel the order'),
+        error: true,
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    final orderProvider = Provider.of<OrderProvider>(context);
-    final activeOrder = widget.order ?? orderProvider.activeOrder;
+    final orders = Provider.of<OrderProvider>(context);
+    final live = orders.liveOrders;
+    String? id = widget.orderId;
+    if (id == null) {
+      final picked = _picked;
+      id = (picked != null && live.any((o) => o.id == picked)) ? picked : orders.currentOrder?.id;
+    }
+    final order = id == null ? null : orders.orderById(id);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncWatch(id);
+    });
+
     final canPop = Navigator.of(context).canPop();
     final bottomInset = MediaQuery.paddingOf(context).bottom;
-
     final leading = canPop
         ? Padding(
             padding: const EdgeInsets.only(left: 20),
@@ -94,235 +148,216 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
           )
         : null;
 
-    if (activeOrder == null) {
-      return Scaffold(
-        backgroundColor: k.bg,
-        appBar: AppBar(
+    AppBar bar(Widget title) => AppBar(
           automaticallyImplyLeading: false,
           leading: leading,
           leadingWidth: canPop ? 68 : null,
           toolbarHeight: 68,
           titleSpacing: canPop ? 0 : KSpace.gutter,
-          title: const Text('Track order'),
-        ),
-        body: KEmptyScroll(
+          title: title,
+        );
+
+    if (order == null) {
+      final Widget body;
+      if (id != null || (orders.isLoadingActive && !orders.hasLoadedActive)) {
+        body = const Center(child: SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 3)));
+      } else if (orders.activeError != null && !orders.hasLoadedActive) {
+        body = KEmptyScroll(
           bottomInset: bottomInset,
           child: KEmptyState(
-            icon: LucideIcons.bike,
-            title: 'No active order',
-            message: 'Place an order and its live status, gate OTP and delivery partner show up here.',
-            action: KButton(label: 'Explore kitchens', icon: LucideIcons.utensils, kind: KButtonKind.tonal, expand: false, onPressed: _explore),
+            icon: LucideIcons.wifiOff,
+            title: 'Couldn\'t load your orders',
+            message: orderErrorMessage(orders.activeError!, action: 'load your orders'),
+            action: KButton(label: 'Try again', icon: LucideIcons.rotateCcw, kind: KButtonKind.tonal, expand: false, onPressed: orders.refreshActive),
           ),
-        ),
-      );
+        );
+      } else {
+        body = RefreshIndicator(
+          onRefresh: orders.refreshActive,
+          child: KEmptyScroll(
+            bottomInset: bottomInset,
+            child: KEmptyState(
+              icon: LucideIcons.bike,
+              title: 'No active order',
+              message: 'Place an order and its live status, gate OTP and delivery partner show up here.',
+              action: KButton(label: 'Explore kitchens', icon: LucideIcons.utensils, kind: KButtonKind.tonal, expand: false, onPressed: _explore),
+            ),
+          ),
+        );
+      }
+      return Scaffold(backgroundColor: k.bg, appBar: bar(const Text('Track order')), body: body);
     }
 
-    final status = activeOrder.status;
-    final hasRunner = status.index >= OrderProgressStatus.pickedUp.index && status != OrderProgressStatus.cancelled;
+    final status = order.status;
+    final confirming = orders.isConfirmingPayment(order.id);
+    final paidAndLive = order.isLive && !order.awaitsPayment;
 
     return Scaffold(
       backgroundColor: k.bg,
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        leading: leading,
-        leadingWidth: canPop ? 68 : null,
-        toolbarHeight: 68,
-        titleSpacing: canPop ? 0 : KSpace.gutter,
-        title: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          const Text('Live tracking'),
-          Text('Order ${activeOrder.id}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
-        ]),
-        actions: [
-          // Demo status step button (existing feature).
-          if (status.isLive)
-            KPressable(
-              semanticLabel: 'Advance order status (demo)',
-              onTap: orderProvider.advanceActiveOrderStatus,
-              child: Container(
-                margin: const EdgeInsets.only(right: KSpace.gutter),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(color: k.surfaceAlt, borderRadius: BorderRadius.circular(KRadius.pill)),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(LucideIcons.fastForward, size: 15, color: k.inkMuted),
-                  const SizedBox(width: 6),
-                  Text('Next step', style: KraveoType.label.copyWith(color: k.inkMuted, fontSize: 12.5)),
-                ]),
+      appBar: bar(Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        const Text('Live tracking'),
+        Text('Order ${orderRef(order.id)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+      ])),
+      body: RefreshIndicator(
+        onRefresh: () async {
+          await orders.refreshOrder(order.id);
+        },
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, bottomInset + 24),
+          children: [
+            if (widget.orderId == null && live.length > 1) ...[
+              SizedBox(
+                height: 48,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: live.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, i) => KChoiceChip(
+                    label: '${live[i].vendorName} · ${live[i].awaitsPayment ? 'Unpaid' : live[i].status.pillLabel}',
+                    selected: live[i].id == order.id,
+                    onTap: () => setState(() => _picked = live[i].id),
+                  ),
+                ),
               ),
-            ),
-        ],
-      ),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, bottomInset + 24),
-        children: [
-          KReveal(child: _StatusHero(order: activeOrder, clock: _clock(activeOrder.createdAt))),
-          const SizedBox(height: 14),
-          if (status.isLive) ...[
-            KReveal(index: 1, child: _buildOtpCard(context, activeOrder, orderProvider)),
+              const SizedBox(height: 10),
+            ],
+            KReveal(child: _StatusHero(order: order, confirming: confirming)),
             const SizedBox(height: 14),
-          ],
-          if (status == OrderProgressStatus.cancelled)
-            KReveal(
-              index: 1,
-              child: KCard(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    Icon(LucideIcons.circleX, size: 20, color: kDangerInk),
+            if (order.awaitsPayment) ...[
+              KReveal(
+                index: 1,
+                child: _PaymentCard(
+                  order: order,
+                  confirming: confirming,
+                  unconfirmed: orders.paymentUnconfirmed(order.id),
+                  paying: orders.isPaying(order.id),
+                  cancelling: orders.isCancelling(order.id),
+                  onPay: () => _pay(orders, order),
+                  onCancel: () => _cancel(orders, order),
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
+            if (status == OrderProgressStatus.arrivedAtGate) ...[
+              KReveal(index: 1, child: _OtpCard(order: order)),
+              const SizedBox(height: 14),
+            ],
+            if (status == OrderProgressStatus.cancelled)
+              KReveal(index: 1, child: _CancelledCard(order: order, onAgain: _explore))
+            else if (!order.awaitsPayment) ...[
+              KReveal(
+                index: 2,
+                child: AnimatedRiderMap(
+                  status: status,
+                  hostel: order.dropoffHostel.isEmpty ? 'Campus gate' : order.dropoffHostel,
+                  dhabaName: order.vendorName,
+                  liveLocation: orders.riderLocation(order.id),
+                ),
+              ),
+              const SizedBox(height: 14),
+              KReveal(index: 3, child: _TimelineCard(status: status)),
+            ],
+            const SizedBox(height: 14),
+            if (order.rider != null && status != OrderProgressStatus.cancelled)
+              KReveal(index: 4, child: _RunnerCard(rider: order.rider!))
+            else if (paidAndLive)
+              KReveal(
+                index: 4,
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(color: k.surfaceAlt, borderRadius: BorderRadius.circular(KRadius.lg)),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Icon(LucideIcons.bike, size: 18, color: k.inkMuted),
                     const SizedBox(width: 10),
-                    Expanded(child: Text('This order was cancelled', style: KraveoType.titleLg.copyWith(color: k.ink))),
+                    Expanded(child: Text('Your delivery partner’s name and number appear here once a rider takes your order.', style: KraveoType.bodySm.copyWith(color: k.inkMuted))),
                   ]),
-                  const SizedBox(height: 8),
-                  Text('Nothing will be delivered for this order. You can place a fresh one any time.', style: KraveoType.body.copyWith(color: k.inkMuted)),
-                  const SizedBox(height: 14),
-                  KButton(label: 'Order again', icon: LucideIcons.utensils, kind: KButtonKind.tonal, expand: false, onPressed: _explore),
-                ]),
+                ),
               ),
-            )
-          else ...[
-            KReveal(index: 2, child: AnimatedRiderMap(status: status, hostel: activeOrder.hostel, dhabaName: activeOrder.dhabaName)),
-            const SizedBox(height: 14),
-            KReveal(index: 3, child: _TimelineCard(status: status)),
-          ],
-          const SizedBox(height: 14),
-          if (hasRunner) ...[
-            KReveal(index: 4, child: _RunnerCard(order: activeOrder)),
-          ] else if (status.isLive) ...[
-            KReveal(
-              index: 4,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(color: k.surfaceAlt, borderRadius: BorderRadius.circular(KRadius.lg)),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Icon(LucideIcons.bike, size: 18, color: k.inkMuted),
-                  const SizedBox(width: 10),
-                  Expanded(child: Text('Your delivery partner’s details appear here once your food is picked up.', style: KraveoType.bodySm.copyWith(color: k.inkMuted))),
-                ]),
-              ),
-            ),
-          ],
-          const SizedBox(height: 14),
-          if (status == OrderProgressStatus.delivered) ...[
-            KButton(
-              label: 'Rate your meal · +10 coins',
-              icon: LucideIcons.star,
-              onPressed: () {
-                final cart = Provider.of<CartProvider>(context, listen: false);
-                ReviewModal.show(
-                  context,
-                  orderId: activeOrder.id,
-                  dhabaName: activeOrder.dhabaName,
-                  driverName: activeOrder.riderName,
-                  dishNames: activeOrder.items.map((i) => i.item.name).toList(),
-                  onReviewSubmitted: (coins) => cart.addKraveoCoins(coins),
-                );
-              },
-            ),
-            const SizedBox(height: 10),
-          ],
-          if (status != OrderProgressStatus.cancelled)
-            KButton(
-              label: 'Split the bill with roommates',
-              icon: LucideIcons.users,
-              kind: KButtonKind.ghost,
-              onPressed: () => SplitBillModal.show(context, order: activeOrder),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOtpCard(BuildContext context, OrderModel order, OrderProvider orderProvider) {
-    final k = context.k;
-    final atGate = order.status == OrderProgressStatus.arrivedAtGate;
-    return KCard(
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
-      borderColor: atGate ? order.status.kStatus.color : null,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Row(children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(color: k.brandSoft, shape: BoxShape.circle),
-            child: Icon(LucideIcons.keyRound, size: 18, color: k.brand),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Your gate OTP', style: KraveoType.titleLg.copyWith(color: k.ink)),
+            if (status == OrderProgressStatus.placed && order.isPaid) ...[
+              const SizedBox(height: 14),
               Text(
-                atGate ? 'Your runner is here. Tell them this code.' : 'Keep it handy. Share it only when your runner reaches the gate.',
+                order.acceptBy != null
+                    ? 'The restaurant has until ${clockLabel(order.acceptBy!)} to accept. If it doesn’t, the order is cancelled and refunded automatically.'
+                    : 'The restaurant has 10 minutes to accept. If it doesn’t, the order is cancelled and refunded automatically.',
                 style: KraveoType.bodySm.copyWith(color: k.inkMuted),
               ),
-            ]),
-          ),
-        ]),
-        const SizedBox(height: 18),
-        FittedBox(fit: BoxFit.scaleDown, child: KOtpDisplay(code: order.otpCode)),
-        const SizedBox(height: 14),
-        KButton(
-          label: 'Copy code',
-          icon: LucideIcons.copy,
-          kind: KButtonKind.tonal,
-          onPressed: () {
-            Clipboard.setData(ClipboardData(text: order.otpCode));
-            showKSnack(context, 'Gate OTP copied.', icon: LucideIcons.copyCheck, duration: const Duration(seconds: 2));
-          },
+              const SizedBox(height: 10),
+              KButton(
+                label: 'Cancel order',
+                icon: LucideIcons.circleX,
+                kind: KButtonKind.ghost,
+                loading: orders.isCancelling(order.id),
+                onPressed: orders.isCancelling(order.id) ? null : () => _cancel(orders, order),
+              ),
+            ],
+            const SizedBox(height: 14),
+            if (status == OrderProgressStatus.delivered && !orders.hasReviewed(order.id)) ...[
+              KButton(
+                label: 'Rate your meal',
+                icon: LucideIcons.star,
+                onPressed: () {
+                  final cart = Provider.of<CartProvider>(context, listen: false);
+                  ReviewModal.show(context, order: order, onReviewed: (r) {
+                    if (r.totalCoins != null) cart.setKraveoCoins(r.totalCoins!);
+                  });
+                },
+              ),
+              const SizedBox(height: 10),
+            ],
+            if (order.isPaid && status != OrderProgressStatus.cancelled)
+              KButton(
+                label: 'Split the bill with roommates',
+                icon: LucideIcons.users,
+                kind: KButtonKind.ghost,
+                onPressed: () => SplitBillModal.show(context, order: order),
+              ),
+          ],
         ),
-        if (atGate) ...[
-          const SizedBox(height: 20),
-          Text('Confirm handover', style: KraveoType.titleMd.copyWith(color: k.ink)),
-          const SizedBox(height: 4),
-          Text('Once you have your food, enter the OTP to close the order.', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
-          const SizedBox(height: 12),
-          OtpBoxes(
-            controller: _otpInputController,
-            autofocus: false,
-            boxHeight: 56,
-            hasError: _otpHasError,
-            errorTick: _otpErrorTick,
-            onChanged: (_) {
-              if (_otpHasError) setState(() => _otpHasError = false);
-            },
-          ),
-          const SizedBox(height: 12),
-          KButton(label: 'Verify and complete', icon: LucideIcons.badgeCheck, onPressed: () => _verifyHandover(orderProvider)),
-        ],
-      ]),
+      ),
     );
   }
 }
 
 /// Current status, what happens next, and honest context (placed time, kitchen's usual ETA).
 class _StatusHero extends StatelessWidget {
-  const _StatusHero({required this.order, required this.clock});
+  const _StatusHero({required this.order, required this.confirming});
 
   final OrderModel order;
-  final String clock;
+  final bool confirming;
 
   @override
   Widget build(BuildContext context) {
     final k = context.k;
     final status = order.status;
     final color = status.kStatus.color;
-    final dhabas = Provider.of<DhabaProvider>(context, listen: false).dhabas.where((d) => d.id == order.dhabaId);
+    final dhabas = Provider.of<DhabaProvider>(context, listen: false).dhabas.where((d) => d.id == order.vendorId);
     final usualEta = dhabas.isEmpty ? null : dhabas.first.eta;
+    final unpaid = order.awaitsPayment;
+    final String hint;
+    if (unpaid) {
+      hint = confirming ? 'Razorpay reported your payment. Kraveo is confirming it; this page updates by itself.' : 'The restaurant only sees your order after you pay.';
+    } else {
+      hint = status.nextHint;
+    }
 
     return KCard(
       padding: const EdgeInsets.all(20),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        KStatusPill(status: status.kStatus, label: status.pillLabel),
+        KStatusPill(status: status.kStatus, label: unpaid ? 'Unpaid' : status.pillLabel),
         const SizedBox(height: 14),
         AnimatedSwitcher(
           duration: KMotion.base,
           transitionBuilder: (child, anim) => FadeTransition(opacity: anim, child: SlideTransition(position: Tween<Offset>(begin: const Offset(0, 0.15), end: Offset.zero).animate(anim), child: child)),
           child: Align(
-            key: ValueKey(status),
+            key: ValueKey('${status.name}-${order.paymentStatus.name}-$confirming'),
             alignment: Alignment.centerLeft,
-            child: Text(status.headline, style: KraveoType.headline.copyWith(color: k.ink)),
+            child: Text(orderHeadline(order, confirmingPayment: confirming), style: KraveoType.headline.copyWith(color: k.ink)),
           ),
         ),
         const SizedBox(height: 6),
-        Text(status.nextHint, style: KraveoType.body.copyWith(color: k.inkMuted)),
-        if (status != OrderProgressStatus.cancelled) ...[
+        Text(hint, style: KraveoType.body.copyWith(color: k.inkMuted)),
+        if (status != OrderProgressStatus.cancelled && !unpaid) ...[
           const SizedBox(height: 18),
           TweenAnimationBuilder<double>(
             tween: Tween(begin: 0, end: status.progressValue),
@@ -335,16 +370,184 @@ class _StatusHero extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 16),
-        if (status.isLive && usualEta != null) ...[
+        if (status.isLive && !unpaid && usualEta != null) ...[
           KInfoChip(icon: LucideIcons.timer, label: 'Kitchen usually delivers in $usualEta'),
           const SizedBox(height: 12),
         ],
         Text(
-          '${order.dhabaName} \u00B7 ${order.hostel.isEmpty ? 'Campus gate' : order.hostel} \u00B7 ${rupee(order.totalAmount)}',
+          '${order.vendorName} · ${order.dropoffHostel.isEmpty ? 'Campus gate' : order.dropoffHostel} · ${rupee(order.totalAmount)}',
           style: KraveoType.bodySm.copyWith(color: k.ink, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 2),
-        Text('Placed at $clock', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+        Text('Placed at ${clockLabel(order.createdAt)}', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+      ]),
+    );
+  }
+}
+
+/// PLACED but not paid: pay (again) on the same order, see the deadline, or cancel.
+class _PaymentCard extends StatelessWidget {
+  const _PaymentCard({
+    required this.order,
+    required this.confirming,
+    required this.unconfirmed,
+    required this.paying,
+    required this.cancelling,
+    required this.onPay,
+    required this.onCancel,
+  });
+
+  final OrderModel order;
+  final bool confirming;
+  final bool unconfirmed;
+  final bool paying;
+  final bool cancelling;
+  final VoidCallback onPay;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    if (confirming) {
+      return KCard(
+        child: Row(children: [
+          const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.6)),
+          const SizedBox(width: 14),
+          Expanded(child: Text('Confirming your payment of ${rupee(order.totalAmount)}. Please don’t pay again.', style: KraveoType.body.copyWith(color: k.ink))),
+        ]),
+      );
+    }
+    return KCard(
+      borderColor: KStatus.placed.color,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('Payment not completed', style: KraveoType.titleLg.copyWith(color: k.ink)),
+        const SizedBox(height: 6),
+        Text(
+          'Pay by ${clockLabel(order.paymentDeadline)} to send this order to the restaurant. Unpaid orders are cancelled automatically after 15 minutes.',
+          style: KraveoType.bodySm.copyWith(color: k.inkMuted),
+        ),
+        if (unconfirmed) ...[
+          const SizedBox(height: 8),
+          Text(
+            'If money already left your account for this order, wait a few minutes before paying again: Kraveo confirms late payments automatically.',
+            style: KraveoType.bodySm.copyWith(color: kDangerInk, fontWeight: FontWeight.w600),
+          ),
+        ],
+        const SizedBox(height: 14),
+        KButton(label: 'Try payment again · ${rupee(order.totalAmount)}', icon: LucideIcons.lock, loading: paying, onPressed: paying || cancelling ? null : onPay),
+        const SizedBox(height: 8),
+        KButton(label: 'Cancel order', kind: KButtonKind.ghost, loading: cancelling, onPressed: paying || cancelling ? null : onCancel),
+      ]),
+    );
+  }
+}
+
+/// The server's gate OTP (only at ARRIVED_AT_GATE).
+class _OtpCard extends StatelessWidget {
+  const _OtpCard({required this.order});
+
+  final OrderModel order;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final code = order.otpCode;
+    return KCard(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+      borderColor: order.status.kStatus.color,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(color: k.brandSoft, shape: BoxShape.circle),
+            child: Icon(LucideIcons.keyRound, size: 18, color: k.brand),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Your gate OTP', style: KraveoType.titleLg.copyWith(color: k.ink)),
+              Text('Your rider is here. Tell them this code to get your food.', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+            ]),
+          ),
+        ]),
+        const SizedBox(height: 18),
+        if (code == null)
+          Row(children: [
+            const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.4)),
+            const SizedBox(width: 12),
+            Expanded(child: Text('Getting your code from Kraveo…', style: KraveoType.body.copyWith(color: k.inkMuted))),
+          ])
+        else ...[
+          FittedBox(fit: BoxFit.scaleDown, child: KOtpDisplay(code: code)),
+          const SizedBox(height: 14),
+          KButton(
+            label: 'Copy code',
+            icon: LucideIcons.copy,
+            kind: KButtonKind.tonal,
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: code));
+              showKSnack(context, 'Gate OTP copied.', icon: LucideIcons.copyCheck, duration: const Duration(seconds: 2));
+            },
+          ),
+        ],
+      ]),
+    );
+  }
+}
+
+/// Cancelled / refunded, with the reason (contract 1.3) and refund wording only when refunded.
+class _CancelledCard extends StatelessWidget {
+  const _CancelledCard({required this.order, required this.onAgain});
+
+  final OrderModel order;
+  final VoidCallback onAgain;
+
+  String get _why {
+    final reason = order.cancelReason;
+    if (reason == kReasonPaymentNotCompleted) return 'Payment not completed. The order was cancelled because it wasn’t paid within 15 minutes.';
+    if (reason == kReasonRestaurantNoResponse) return 'Restaurant did not respond. The kitchen didn’t accept your order in time.';
+    switch (order.cancelledBy) {
+      case CancelledBy.customer:
+        return 'You cancelled this order.';
+      case CancelledBy.vendor:
+        return reason == null ? 'The restaurant couldn’t take your order.' : 'The restaurant couldn’t take your order: $reason';
+      case CancelledBy.admin:
+        return reason == null ? 'Kraveo support cancelled this order.' : 'Kraveo support cancelled this order: $reason';
+      case CancelledBy.system:
+      case null:
+        return reason ?? 'This order was cancelled.';
+    }
+  }
+
+  String get _money {
+    if (order.paymentStatus == PaymentStatus.refunded) {
+      return 'Your refund of ${rupee(order.totalAmount)} has been issued. It will reach your account in 5–7 working days.';
+    }
+    if (order.paymentStatus == PaymentStatus.paid) {
+      return order.refundStatus == RefundStatus.failed
+          ? 'Your refund of ${rupee(order.totalAmount)} is taking longer than usual. Kraveo retries it automatically and support has been alerted.'
+          : 'You paid ${rupee(order.totalAmount)} for this order. Your refund is being processed.';
+    }
+    return 'No payment was taken for this order.';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return KCard(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(LucideIcons.circleX, size: 20, color: kDangerInk),
+          const SizedBox(width: 10),
+          Expanded(child: Text(order.paymentStatus == PaymentStatus.refunded ? 'Cancelled and refunded' : 'This order was cancelled', style: KraveoType.titleLg.copyWith(color: k.ink))),
+        ]),
+        const SizedBox(height: 8),
+        Text(_why, style: KraveoType.body.copyWith(color: k.ink)),
+        const SizedBox(height: 6),
+        Text(_money, style: KraveoType.body.copyWith(color: k.inkMuted)),
+        const SizedBox(height: 14),
+        KButton(label: 'Order again', icon: LucideIcons.utensils, kind: KButtonKind.tonal, expand: false, onPressed: onAgain),
       ]),
     );
   }
@@ -359,10 +562,11 @@ class _TimelineStep {
 }
 
 const List<_TimelineStep> _steps = [
-  _TimelineStep(OrderProgressStatus.placed, LucideIcons.receipt, 'Order placed', 'The kitchen has your order'),
+  _TimelineStep(OrderProgressStatus.placed, LucideIcons.receipt, 'Order placed', 'Paid and sent to the kitchen'),
+  _TimelineStep(OrderProgressStatus.accepted, LucideIcons.thumbsUp, 'Accepted', 'The restaurant confirmed your order'),
   _TimelineStep(OrderProgressStatus.preparing, LucideIcons.chefHat, 'Preparing', 'Your food is being cooked fresh'),
-  _TimelineStep(OrderProgressStatus.pickedUp, LucideIcons.packageCheck, 'Picked up', 'Your delivery partner collected it'),
-  _TimelineStep(OrderProgressStatus.onTheWay, LucideIcons.bike, 'On the way', 'Travelling from the kitchen to campus'),
+  _TimelineStep(OrderProgressStatus.readyForPickup, LucideIcons.package, 'Ready', 'Packed and waiting for your rider'),
+  _TimelineStep(OrderProgressStatus.pickedUp, LucideIcons.bike, 'On the way', 'Your rider is heading to campus'),
   _TimelineStep(OrderProgressStatus.arrivedAtGate, LucideIcons.doorOpen, 'At the gate', 'Share your OTP to receive your food'),
   _TimelineStep(OrderProgressStatus.delivered, LucideIcons.circleCheck, 'Delivered', 'Enjoy your meal'),
 ];
@@ -522,13 +726,14 @@ class _NodeState extends State<_Node> with SingleTickerProviderStateMixin {
 }
 
 class _RunnerCard extends StatelessWidget {
-  const _RunnerCard({required this.order});
+  const _RunnerCard({required this.rider});
 
-  final OrderModel order;
+  final OrderRider rider;
 
   @override
   Widget build(BuildContext context) {
     final k = context.k;
+    final phone = rider.phone;
     return KCard(
       padding: const EdgeInsets.all(16),
       child: Row(children: [
@@ -542,23 +747,25 @@ class _RunnerCard extends StatelessWidget {
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('YOUR DELIVERY PARTNER', style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 0.8)),
-            Text(order.riderName, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink)),
-            Text(order.riderVehicle, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+            Text(rider.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink)),
+            if (phone != null) Text(phone, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
           ]),
         ),
-        const SizedBox(width: 10),
-        KIconButton(
-          icon: LucideIcons.phone,
-          semanticLabel: 'Call ${order.riderName}',
-          color: k.onBrand,
-          background: k.brand,
-          bordered: false,
-          size: 48,
-          onTap: () {
-            Clipboard.setData(ClipboardData(text: order.riderPhone));
-            showKSnack(context, '${order.riderName}’s number (${order.riderPhone}) copied. Paste it in your dialer.', icon: LucideIcons.phone);
-          },
-        ),
+        if (phone != null) ...[
+          const SizedBox(width: 10),
+          KIconButton(
+            icon: LucideIcons.phone,
+            semanticLabel: 'Copy ${rider.name}’s number',
+            color: k.onBrand,
+            background: k.brand,
+            bordered: false,
+            size: 48,
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: phone));
+              showKSnack(context, '${rider.name}’s number ($phone) copied. Paste it in your dialer.', icon: LucideIcons.phone);
+            },
+          ),
+        ],
       ]),
     );
   }

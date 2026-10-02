@@ -267,142 +267,32 @@ class CustomerApiService {
     }
   }
 
-  /// Places order on AWS EC2 backend with dynamic JWT token
-  static Future<bool> placeOrder(Map<String, dynamic> orderPayload) async {
-    try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/orders');
-      final headers = await getAuthHeaders();
-
-      final response = await _post(url, headers: headers, body: jsonEncode(orderPayload), timeout: const Duration(seconds: 5));
-      if (await _rejectIfUnauthorized(response)) return false;
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        debugPrint('🛍️ [Customer API] Order placed successfully on AWS backend!');
-        return true;
-      }
-    } catch (e) {
-      debugPrint('⚠️ [Customer API Notice] Order placement sync delayed ($e).');
-    }
-    return false;
-  }
-
-  /// Creates the server-authoritative order used as the Razorpay receipt.
-  /// The backend recalculates prices from the database; client totals are never trusted.
-  static Future<Map<String, dynamic>> createOrder({
-    required String vendorId,
-    required List<Map<String, dynamic>> items,
-    required String dropoffHostel,
-    required String dropoffNotes,
-    String? couponCode,
+  /// Authenticated JSON request for the order/payment/review API (see `OrderApi`). Applies the
+  /// Bearer token, the test client seam, a hard [timeout] and the central 401 handling (token
+  /// cleared, [onUnauthorized] fired). Network failures and timeouts are thrown to the caller.
+  static Future<http.Response> authorizedRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? query,
+    Object? body,
+    Duration timeout = const Duration(seconds: 15),
   }) async {
-    final url = Uri.parse('${ApiConfig.baseUrl}/orders');
+    var uri = Uri.parse('${ApiConfig.baseUrl}$path');
+    if (query != null && query.isNotEmpty) {
+      uri = uri.replace(queryParameters: {for (final e in query.entries) if (e.value != null) e.key: '${e.value}'});
+    }
     final headers = await getAuthHeaders();
-    final payload = <String, dynamic>{
-      'vendorId': vendorId,
-      'items': items,
-      'dropoffHostel': dropoffHostel,
-      'dropoffNotes': dropoffNotes,
-    };
-    if (couponCode != null && couponCode.isNotEmpty) {
-      payload['couponCode'] = couponCode;
+    final encoded = body == null ? null : jsonEncode(body);
+    final http.Response response;
+    switch (method) {
+      case 'GET':
+        response = await _get(uri, headers: headers, timeout: timeout);
+      case 'POST':
+        response = await _post(uri, headers: headers, body: encoded, timeout: timeout);
+      default:
+        throw ArgumentError.value(method, 'method');
     }
-
-    try {
-      final response = await _post(url, headers: headers, body: jsonEncode(payload), timeout: const Duration(seconds: 15));
-      if (await _rejectIfUnauthorized(response)) throw Exception(sessionExpiredMessage);
-      final body = jsonDecode(response.body);
-      if (response.statusCode == 201 && body is Map && body['data'] is Map) {
-        return Map<String, dynamic>.from(body['data'] as Map);
-      }
-      throw Exception(body is Map ? body['message'] ?? 'Unable to create order.' : 'Unable to create order.');
-    } catch (e) {
-      debugPrint('⚠️ [Customer API] Create order failed: $e');
-      rethrow;
-    }
-  }
-
-  /// Creates a Razorpay order on the backend. The key ID is safe to return to the app.
-  static Future<Map<String, dynamic>> createPaymentOrder(String orderId) async {
-    final url = Uri.parse('${ApiConfig.baseUrl}/payments/create-order');
-    final headers = await getAuthHeaders();
-
-    try {
-      final response = await _post(url, headers: headers, body: jsonEncode({'orderId': orderId}), timeout: const Duration(seconds: 15));
-      if (await _rejectIfUnauthorized(response)) throw Exception(sessionExpiredMessage);
-      final body = jsonDecode(response.body);
-      if (response.statusCode == 200 && body is Map && body['success'] == true) {
-        return Map<String, dynamic>.from(body);
-      }
-      throw Exception(body is Map ? body['message'] ?? 'Unable to start payment.' : 'Unable to start payment.');
-    } catch (e) {
-      debugPrint('⚠️ [Customer API] Create payment order failed: $e');
-      rethrow;
-    }
-  }
-
-  /// Verifies Razorpay's checkout response on the backend before showing success.
-  static Future<void> verifyPayment({
-    required String razorpayOrderId,
-    required String razorpayPaymentId,
-    required String razorpaySignature,
-  }) async {
-    final url = Uri.parse('${ApiConfig.baseUrl}/payments/verify-signature');
-    final headers = await getAuthHeaders();
-
-    try {
-      final response = await _post(
-        url,
-        headers: headers,
-        body: jsonEncode({
-          'razorpayOrderId': razorpayOrderId,
-          'razorpayPaymentId': razorpayPaymentId,
-          'razorpaySignature': razorpaySignature,
-        }),
-        timeout: const Duration(seconds: 15),
-      );
-      if (await _rejectIfUnauthorized(response)) throw Exception(sessionExpiredMessage);
-      final body = jsonDecode(response.body);
-      if (response.statusCode == 200 && body is Map && body['success'] == true) {
-        return;
-      }
-      throw Exception(body is Map ? body['message'] ?? 'Payment verification failed.' : 'Payment verification failed.');
-    } catch (e) {
-      debugPrint('⚠️ [Customer API] Payment verification failed: $e');
-      rethrow;
-    }
-  }
-
-  /// Submits dish & runner review with dynamic JWT token
-  static Future<bool> submitReview({
-    required String orderId,
-    required double dhabaRating,
-    required double driverRating,
-    required String reviewText,
-  }) async {
-    try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/reviews');
-      final headers = await getAuthHeaders();
-
-      final response = await _post(
-        url,
-        headers: headers,
-        body: jsonEncode({
-          'orderId': orderId,
-          'dhabaRating': dhabaRating,
-          'driverRating': driverRating,
-          'reviewText': reviewText,
-        }),
-        timeout: const Duration(seconds: 5),
-      );
-      if (await _rejectIfUnauthorized(response)) return false;
-
-      if (response.statusCode == 200) {
-        debugPrint('⭐️ [Customer API] Review submitted! +10 Kraveo Coins awarded.');
-        return true;
-      }
-    } catch (e) {
-      debugPrint('⚠️ [Customer API Notice] Review submission delayed ($e).');
-    }
-    return false;
+    await _rejectIfUnauthorized(response);
+    return response;
   }
 }

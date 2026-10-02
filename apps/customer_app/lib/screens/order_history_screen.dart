@@ -11,8 +11,10 @@ import '../widgets/review_modal.dart';
 import '../widgets/ui/format.dart';
 import '../widgets/ui/scroll_empty.dart';
 import '../widgets/ui/snack.dart';
+import '../services/order_api.dart';
 import '../widgets/ui/status_map.dart';
 import 'dhaba_menu_screen.dart';
+import 'live_tracking_screen.dart';
 
 class OrderHistoryScreen extends StatelessWidget {
   const OrderHistoryScreen({
@@ -25,7 +27,7 @@ class OrderHistoryScreen extends StatelessWidget {
   /// Drop-off used when a reorder opens the cart. Falls back to the past order's hostel.
   final String? selectedHostel;
 
-  /// Switches to the tracking tab for an order that is still in progress.
+  /// Kept for callers; tracking now opens the tapped order directly.
   final VoidCallback? onTrackOrder;
 
   /// Switches to the home tab from the empty state.
@@ -51,8 +53,84 @@ class OrderHistoryScreen extends StatelessWidget {
     final orderProvider = Provider.of<OrderProvider>(context);
     final cart = Provider.of<CartProvider>(context, listen: false);
     final dhabaProvider = Provider.of<DhabaProvider>(context, listen: false);
-    final history = orderProvider.orderHistory;
+    final live = orderProvider.liveOrders;
+    final liveIds = live.map((o) => o.id).toSet();
+    final history = orderProvider.history.where((o) => !liveIds.contains(o.id)).toList();
+    final all = [...live, ...history];
     final bottomInset = MediaQuery.paddingOf(context).bottom;
+
+    Future<void> refresh() => Future.wait([orderProvider.refreshActive(), orderProvider.loadHistory(refresh: true)]);
+
+    final Widget body;
+    if (all.isEmpty && !orderProvider.hasLoadedHistory && orderProvider.historyError == null) {
+      body = ListView(
+        padding: EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, bottomInset + 24),
+        children: [
+          for (var i = 0; i < 3; i++) const Padding(padding: EdgeInsets.only(bottom: 14), child: KSkeleton(height: 150, radius: KRadius.xl)),
+        ],
+      );
+    } else if (all.isEmpty && orderProvider.historyError != null) {
+      body = RefreshIndicator(
+        onRefresh: refresh,
+        child: KEmptyScroll(
+          bottomInset: bottomInset,
+          child: KEmptyState(
+            icon: LucideIcons.wifiOff,
+            title: 'Couldn\'t load your orders',
+            message: orderErrorMessage(orderProvider.historyError!, action: 'load your orders'),
+            action: KButton(label: 'Try again', icon: LucideIcons.rotateCcw, kind: KButtonKind.tonal, expand: false, onPressed: refresh),
+          ),
+        ),
+      );
+    } else if (all.isEmpty) {
+      body = RefreshIndicator(
+        onRefresh: refresh,
+        child: KEmptyScroll(
+          bottomInset: bottomInset,
+          child: KEmptyState(
+            icon: LucideIcons.receipt,
+            title: 'No orders yet',
+            message: 'Your first order will show up here, ready to reorder in one tap.',
+            action: onExplore == null ? null : KButton(label: 'Find something tasty', icon: LucideIcons.utensils, kind: KButtonKind.tonal, expand: false, onPressed: onExplore),
+          ),
+        ),
+      );
+    } else {
+      body = RefreshIndicator(
+        onRefresh: refresh,
+        child: NotificationListener<ScrollNotification>(
+          onNotification: (n) {
+            if (n.metrics.extentAfter < 400 && orderProvider.historyHasMore && !orderProvider.isLoadingMoreHistory && orderProvider.historyError == null) {
+              orderProvider.loadMoreHistory();
+            }
+            return false;
+          },
+          child: ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, bottomInset + 24),
+            itemCount: all.length + 1,
+            itemBuilder: (context, index) {
+              if (index == all.length) return _ListFooter(orders: orderProvider);
+              final order = all[index];
+              return KReveal(
+                key: ValueKey(order.id),
+                index: index < 6 ? index : 0,
+                child: _OrderCard(
+                  order: order,
+                  whenLabel: _when(order.createdAt.toLocal()),
+                  reviewed: orderProvider.hasReviewed(order.id),
+                  onTrack: () => Navigator.push(context, MaterialPageRoute(builder: (_) => LiveTrackingScreen(orderId: order.id))),
+                  onReorder: () => _reorder(context, order, cart, dhabaProvider),
+                  onRate: () => ReviewModal.show(context, order: order, onReviewed: (r) {
+                    if (r.totalCoins != null) cart.setKraveoCoins(r.totalCoins!);
+                  }),
+                ),
+              );
+            },
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: k.bg,
@@ -62,63 +140,75 @@ class OrderHistoryScreen extends StatelessWidget {
         titleSpacing: KSpace.gutter,
         title: const Text('Your orders'),
       ),
-      body: history.isEmpty
-          ? KEmptyScroll(
-              bottomInset: bottomInset,
-              child: KEmptyState(
-                icon: LucideIcons.receipt,
-                title: 'No orders yet',
-                message: 'Your first order will show up here, ready to reorder in one tap.',
-                action: onExplore == null ? null : KButton(label: 'Find something tasty', icon: LucideIcons.utensils, kind: KButtonKind.tonal, expand: false, onPressed: onExplore),
-              ),
-            )
-          : ListView.builder(
-              padding: EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, bottomInset + 24),
-              itemCount: history.length,
-              itemBuilder: (context, index) {
-                final order = history[index];
-                return KReveal(
-                  key: ValueKey(order.id),
-                  index: index,
-                  child: _OrderCard(
-                    order: order,
-                    whenLabel: _when(order.createdAt),
-                    onTrack: onTrackOrder,
-                    onReorder: () => _reorder(context, order, orderProvider, cart, dhabaProvider),
-                    onRate: () => ReviewModal.show(
-                      context,
-                      orderId: order.id,
-                      dhabaName: order.dhabaName,
-                      driverName: order.riderName,
-                      dishNames: order.items.map((i) => i.item.name).toList(),
-                      onReviewSubmitted: (coins) => cart.addKraveoCoins(coins),
-                    ),
-                  ),
-                );
-              },
-            ),
+      body: body,
     );
   }
 
-  void _reorder(BuildContext context, OrderModel order, OrderProvider orderProvider, CartProvider cart, DhabaProvider dhabaProvider) {
-    orderProvider.reorder(order, cart, dhabaProvider);
-    final hostel = selectedHostel ?? order.hostel;
-    if (cart.items.isNotEmpty) {
-      // Items were rebuilt: go straight to the cart so the next tap is Checkout.
+  /// Rebuilds the cart from the dishes of a past order that are still on the kitchen's live
+  /// menu (by menu item id). Dishes that are gone or sold out are skipped and the student is told.
+  void _reorder(BuildContext context, OrderModel order, CartProvider cart, DhabaProvider dhabaProvider) {
+    final kitchens = dhabaProvider.dhabas.where((d) => d.id == order.vendorId).toList();
+    final menu = {for (final m in dhabaProvider.getMenuItemsForDhaba(order.vendorId)) m.id: m};
+    final hostel = selectedHostel ?? order.dropoffHostel;
+    if (kitchens.isEmpty || !dhabaProvider.isLiveVendor(order.vendorId)) {
+      showKSnack(context, '${order.vendorName} isn\'t taking orders in the app right now.', error: true);
+      return;
+    }
+    var added = 0;
+    var skipped = 0;
+    cart.clearCart();
+    for (final line in order.items) {
+      final item = menu[line.menuItemId];
+      if (item == null || !item.isAvailable) {
+        skipped++;
+        continue;
+      }
+      for (var i = 0; i < line.quantity; i++) {
+        cart.addItem(item: item, dhabaId: order.vendorId, dhabaName: kitchens.first.name);
+      }
+      added++;
+    }
+    if (added > 0) {
+      if (skipped > 0) showKSnack(context, '$skipped ${skipped == 1 ? 'dish is' : 'dishes are'} no longer available and ${skipped == 1 ? 'was' : 'were'} left out.', icon: LucideIcons.info);
       CartSheet.show(context, selectedHostel: hostel);
       return;
     }
-    // Older orders do not carry their dishes; open the kitchen so the user can pick again.
-    final kitchens = dhabaProvider.dhabas.where((d) => d.id == order.dhabaId);
-    if (kitchens.isNotEmpty) {
-      showKSnack(context, 'Pick your dishes from ${order.dhabaName} again.', icon: LucideIcons.utensils);
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => DhabaMenuScreen(dhaba: kitchens.first, selectedHostel: hostel)),
-      );
-    } else {
-      showKSnack(context, 'We could not rebuild this order. Open ${order.dhabaName} from Home to order again.', error: true);
+    showKSnack(context, 'These dishes aren\'t available now. Pick something from ${order.vendorName}.', icon: LucideIcons.utensils);
+    Navigator.push(context, MaterialPageRoute(builder: (_) => DhabaMenuScreen(dhaba: kitchens.first, selectedHostel: hostel)));
+  }
+}
+
+class _ListFooter extends StatelessWidget {
+  const _ListFooter({required this.orders});
+
+  final OrderProvider orders;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    if (orders.isLoadingMoreHistory) {
+      return const Padding(padding: EdgeInsets.all(16), child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.6))));
     }
+    if (orders.historyError != null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Column(children: [
+          Text(orderErrorMessage(orders.historyError!, action: 'load more orders'), textAlign: TextAlign.center, style: KraveoType.bodySm.copyWith(color: kDangerInk)),
+          const SizedBox(height: 8),
+          KButton(label: 'Try again', kind: KButtonKind.tonal, expand: false, onPressed: () => orders.loadHistory(refresh: !orders.hasLoadedHistory)),
+        ]),
+      );
+    }
+    if (orders.historyHasMore) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Center(child: KButton(label: 'Load more', kind: KButtonKind.ghost, expand: false, onPressed: orders.loadMoreHistory)),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Text('That\'s all your orders.', textAlign: TextAlign.center, style: KraveoType.caption.copyWith(color: k.inkFaint)),
+    );
   }
 }
 
@@ -126,6 +216,7 @@ class _OrderCard extends StatelessWidget {
   const _OrderCard({
     required this.order,
     required this.whenLabel,
+    required this.reviewed,
     required this.onTrack,
     required this.onReorder,
     required this.onRate,
@@ -133,6 +224,7 @@ class _OrderCard extends StatelessWidget {
 
   final OrderModel order;
   final String whenLabel;
+  final bool reviewed;
   final VoidCallback? onTrack;
   final VoidCallback onReorder;
   final VoidCallback onRate;
@@ -141,7 +233,7 @@ class _OrderCard extends StatelessWidget {
     if (order.items.isEmpty) {
       return 'Items ${rupee(order.subtotal)} · Delivery ${rupee(order.deliveryFee)} · Packaging ${rupee(order.taxAndPackaging)}';
     }
-    final parts = order.items.map((i) => '${i.quantity} × ${i.item.name}').toList();
+    final parts = order.items.map((i) => '${i.quantity} × ${i.name}').toList();
     if (parts.length <= 2) return parts.join(', ');
     return '${parts.take(2).join(', ')} +${parts.length - 2} more';
   }
@@ -151,6 +243,8 @@ class _OrderCard extends StatelessWidget {
     final k = context.k;
     final status = order.status;
     final delivered = status == OrderProgressStatus.delivered;
+    final canRate = delivered && !reviewed;
+    final pillLabel = order.awaitsPayment ? 'Unpaid' : (status == OrderProgressStatus.cancelled && order.paymentStatus == PaymentStatus.refunded ? 'Refunded' : status.pillLabel);
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: KCard(
@@ -160,14 +254,14 @@ class _OrderCard extends StatelessWidget {
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.only(top: 2),
-                child: Text(order.dhabaName, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink)),
+                child: Text(order.vendorName, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink)),
               ),
             ),
             const SizedBox(width: 10),
-            KStatusPill(status: status.kStatus, label: status.pillLabel, compact: true),
+            KStatusPill(status: status.kStatus, label: pillLabel, compact: true),
           ]),
           const SizedBox(height: 4),
-          Text('$whenLabel · ${order.hostel}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+          Text('$whenLabel · ${order.dropoffHostel}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
           const SizedBox(height: 12),
           Text(_summary, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 14)),
           const SizedBox(height: 14),
@@ -176,30 +270,30 @@ class _OrderCard extends StatelessWidget {
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(delivered ? 'PAID' : 'TOTAL', style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 0.8)),
+                Text(order.isPaid || delivered ? 'PAID' : 'TOTAL', style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 0.8)),
                 Text(rupee(order.totalAmount), style: KraveoType.numericSm.copyWith(color: k.ink)),
               ]),
             ),
-            Text('#${order.id}', style: KraveoType.caption.copyWith(color: k.inkFaint)),
+            Text(orderRef(order.id), style: KraveoType.caption.copyWith(color: k.inkFaint)),
           ]),
           const SizedBox(height: 14),
           if (status.isLive)
-            KButton(label: 'Track this order', icon: LucideIcons.bike, onPressed: onTrack)
+            KButton(label: order.awaitsPayment ? 'Pay or cancel' : 'Track this order', icon: LucideIcons.bike, onPressed: onTrack)
           else
             Row(children: [
-              if (delivered) ...[
+              if (canRate) ...[
                 Expanded(flex: 2, child: KButton(label: 'Rate', kind: KButtonKind.ghost, onPressed: onRate)),
                 const SizedBox(width: 10),
               ],
               Expanded(flex: 3, child: KButton(label: 'Reorder', icon: LucideIcons.rotateCcw, kind: KButtonKind.tonal, onPressed: onReorder)),
             ]),
-          if (delivered)
+          if (canRate)
             Padding(
               padding: const EdgeInsets.only(top: 10),
               child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                 Icon(LucideIcons.coins, size: 14, color: k.brand),
                 const SizedBox(width: 6),
-                Flexible(child: Text('Rate this order to earn 10 Kraveo Coins', textAlign: TextAlign.center, style: KraveoType.caption.copyWith(color: k.inkMuted))),
+                Flexible(child: Text('Rate this order to earn Kraveo Coins', textAlign: TextAlign.center, style: KraveoType.caption.copyWith(color: k.inkMuted))),
               ]),
             ),
         ]),

@@ -12,10 +12,9 @@ class CartProvider with ChangeNotifier {
   double _couponDiscountAmount = 0.0;
   String? _couponError;
 
-  // Kraveo Coins Rewards State
-  int _userKraveoCoins = 80; // Default student coin balance
-  bool _isKraveoCoinsRedeemed = false;
-  double _kraveoCoinsDiscountAmount = 0.0;
+  // Kraveo Coins balance (from the server). Coins are not redeemable on orders yet: POST /orders
+  // has no coins field, so a local coin discount would show a total the server never charges.
+  int _userKraveoCoins = 0;
 
   // Getters
   String? get dhabaId => _dhabaId;
@@ -28,17 +27,17 @@ class CartProvider with ChangeNotifier {
   String? get couponError => _couponError;
 
   int get userKraveoCoins => _userKraveoCoins;
-  bool get isKraveoCoinsRedeemed => _isKraveoCoinsRedeemed;
-  double get kraveoCoinsDiscountAmount => _kraveoCoinsDiscountAmount;
 
   double get subtotal => _items.fold(0.0, (sum, item) => sum + item.totalPrice);
 
   double get deliveryFee => _items.isEmpty ? 0.0 : 25.0;
   double get taxAndPackaging => _items.isEmpty ? 0.0 : 15.0;
 
+  /// Local estimate only (same formula as the server today). Checkout always shows and charges
+  /// the server's totals from `POST /orders`.
   double get grandTotal {
     if (_items.isEmpty) return 0.0;
-    final total = subtotal + deliveryFee + taxAndPackaging - _couponDiscountAmount - _kraveoCoinsDiscountAmount;
+    final total = subtotal + deliveryFee + taxAndPackaging - _couponDiscountAmount;
     return total < 0 ? 0.0 : total;
   }
 
@@ -179,22 +178,6 @@ class CartProvider with ChangeNotifier {
     }
   }
 
-  void toggleKraveoCoinsRedemption() {
-    if (_isKraveoCoinsRedeemed) {
-      _isKraveoCoinsRedeemed = false;
-      _kraveoCoinsDiscountAmount = 0.0;
-    } else {
-      if (_userKraveoCoins < 50) {
-        _couponError = 'Need 50 Kraveo Coins to redeem Flat ₹20 OFF';
-        notifyListeners();
-        return;
-      }
-      _isKraveoCoinsRedeemed = true;
-      _kraveoCoinsDiscountAmount = 20.0;
-    }
-    notifyListeners();
-  }
-
   /// Seeds the balance from the backend when a student signs in.
   void setKraveoCoins(int coins) {
     _userKraveoCoins = coins < 0 ? 0 : coins;
@@ -225,23 +208,12 @@ class CartProvider with ChangeNotifier {
     }
   }
 
-  void consumeRedeemedCoins() {
-    if (_isKraveoCoinsRedeemed) {
-      _userKraveoCoins = (_userKraveoCoins - 50).clamp(0, 999999);
-      _isKraveoCoinsRedeemed = false;
-      _kraveoCoinsDiscountAmount = 0.0;
-      notifyListeners();
-    }
-  }
-
   void clearCart() {
     _dhabaId = null;
     _dhabaName = null;
     _items.clear();
     _appliedCouponCode = null;
     _couponDiscountAmount = 0.0;
-    _kraveoCoinsDiscountAmount = 0.0;
-    _isKraveoCoinsRedeemed = false;
     _couponError = null;
     notifyListeners();
   }
