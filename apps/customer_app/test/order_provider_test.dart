@@ -244,6 +244,22 @@ void main() {
       expect(orders.paymentUnconfirmed(order.id), isTrue);
     });
 
+    test('server answers PENDING_CONFIRMATION (success but still unpaid): "confirming", then paid when the order flips', () async {
+      final api = FakeOrderApi();
+      final orders = fakeOrders(api);
+      final order = (await orders.placeOrder(draft())).value!;
+      // verify-signature: success:true with the still-unpaid order (Razorpay has not confirmed the capture yet).
+      api.onVerify = (p) async => OrderResult.ok(api.server[order.id]);
+      final outcome = await orders.payForOrder(order.id);
+      expect(outcome.kind, PaymentOutcomeKind.confirming);
+      expect(orders.isConfirmingPayment(order.id), isTrue);
+      expect(orders.orderById(order.id)!.isPaid, isFalse);
+      // The webhook/reconciliation marks it paid; the next refresh shows it.
+      api.server[order.id] = orderModel(id: order.id, paymentStatus: 'PAID', updatedAt: DateTime.now().toUtc().add(const Duration(seconds: 3)));
+      await orders.refreshOrder(order.id);
+      expect(orders.orderById(order.id)!.isPaid, isTrue);
+    });
+
     test('create-order refused because the webhook already marked it paid -> paid', () async {
       final api = FakeOrderApi();
       final orders = fakeOrders(api);

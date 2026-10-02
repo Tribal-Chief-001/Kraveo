@@ -580,8 +580,10 @@ class OrderProvider with ChangeNotifier {
     final latest = fresh ?? _orders[orderId];
     if (latest != null && latest.isPaid) return PaymentOutcome(PaymentOutcomeKind.paid, order: latest);
     if (v.ok) {
-      // The server accepted the signature; the order copy will catch up (poll / socket).
-      return PaymentOutcome(PaymentOutcomeKind.paid, order: latest);
+      // The server accepted the signature but the order is still unpaid on its side: it answers
+      // PENDING_CONFIRMATION while Razorpay has not confirmed the capture yet (the webhook or the
+      // server's own reconciliation finishes it). Keep the "confirming" state; polling/socket flips it.
+      return PaymentOutcome(PaymentOutcomeKind.confirming, order: latest, message: 'Payment received. Waiting for the bank to confirm it; this can take a minute.');
     }
     if (latest != null && latest.isTerminal) return PaymentOutcome(PaymentOutcomeKind.orderClosed, order: latest, message: _closedMessage(latest));
     // Razorpay took the payment but the server has not confirmed it (network, or a signature
