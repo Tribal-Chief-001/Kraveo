@@ -92,6 +92,8 @@ const RULES: Rule[] = [
     message: 'Too many cancellations. Please wait a few minutes.',
   },
   { name: 'PAYMENT_CREATE', scope: 'user', max: 10, windowMs: 10 * MIN, applies: (r) => r.method === 'POST' && r.path === '/payments/create-order', message: 'Too many payment attempts. Please wait a few minutes.' },
+  // Push device registration happens at app start / token refresh / logout: generous, but a loop cannot hammer the database.
+  { name: 'DEVICE_WRITE', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r) => (r.method === 'POST' || r.method === 'DELETE') && r.path === '/devices', message: 'Too many device updates. Please wait a few minutes.' },
   {
     name: 'AUTH_IP', scope: 'ip', max: 60, windowMs: MIN,
     applies: (r) => r.method === 'POST' && ['/auth/google', '/auth/partner-login', '/auth/admin-login', '/auth/partner-signup'].includes(r.path),

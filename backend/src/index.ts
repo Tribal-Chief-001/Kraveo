@@ -8,12 +8,18 @@ import { attachRealtime } from './realtime';
 import { startOrderMaintenance } from './services/orderMaintenance';
 import { globalErrorHandler } from './middleware/errorHandler';
 import { assertRuntimeConfig } from './config/runtimeConfig';
+import { initPushProvider } from './services/push/provider';
 
 dotenv.config();
 
 // Anything that is not the test runner must have its secrets; GOOGLE_WEB_CLIENT_ID is only a warning.
 if (process.env.NODE_ENV !== 'test') {
   for (const warning of assertRuntimeConfig(process.env).warnings) console.warn(`⚠️  ${warning}`);
+}
+
+// Push (FCM): reads FIREBASE_KEY_PATH / FIREBASE_SERVICE_ACCOUNT now so a missing key shows ONE warning at boot; never fails the boot.
+if (process.env.NODE_ENV !== 'test') {
+  try { if (initPushProvider()) console.log('push notifications are ON (FCM)'); } catch { console.warn('push notifications are OFF: could not start the push provider.'); }
 }
 
 // Global Process Crash Protection

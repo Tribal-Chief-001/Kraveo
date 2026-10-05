@@ -9,6 +9,7 @@ import { writeAudit as writeAuditLog } from '../services/audit';
 import { dropFromPartnerRooms, addToPartnerRooms } from '../realtime';
 import { errSummary } from '../utils/log';
 import { validParams } from '../utils/http';
+import { disableUserTokens } from '../services/push/deviceTokens';
 
 /**
  * Partner (restaurant / rider) applications and the admin tools around them.
@@ -384,6 +385,8 @@ partnerRouter.post('/admin/partners/:kind/:id/status', requireAuth, requireRole(
 
     const label = `${kind.toLowerCase()} ${row.name} (${row.user?.phone ?? 'no phone'})`;
     await audit(`PARTNER_${next}`, kind, row.id, `${next} ${label} from ${from}${reason ? `: ${reason}` : ''}`);
+    // Rejected / suspended partners get no pushes (new orders, deliveries) on any device; the recipient lookup also checks approval.
+    if (next !== 'APPROVED' && row.userId) await disableUserTokens(row.userId, `PARTNER_${next}`);
     // A suspended rider must stop hearing about new orders at once (not only after a reconnect).
     if (next !== 'APPROVED' && kind === 'DRIVER' && row.userId) await dropFromPartnerRooms(row.userId, ['drivers']);
     if (next !== 'APPROVED' && kind === 'VENDOR' && row.userId) await dropFromPartnerRooms(row.userId, [`vendor_${row.id}`]);

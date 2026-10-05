@@ -4,6 +4,7 @@ import { getPaymentProvider, withProviderTimeout, toProviderError, PaymentProvid
 import { ORDER_VIEW_INCLUDE } from './orderView';
 import { publishOrderChange } from '../realtime';
 import { writeAudit } from './audit';
+import { queuePush } from './push/pushService';
 
 /**
  * Full refund of the captured payment of a cancelled order (contract 1.3).
@@ -86,6 +87,7 @@ export const recordSuccess = async (orderId: string, paymentRowId: string, refun
   if (done) {
     await writeAudit('REFUND_DONE', 'ORDER', orderId, `Refunded ₹${(amountPaise / 100).toFixed(2)} (refund ${refundId}).`);
     await publish(orderId);
+    queuePush(orderId, 'REFUND_PROCESSED'); // after the commit; idempotent per order, never throws
   }
 };
 

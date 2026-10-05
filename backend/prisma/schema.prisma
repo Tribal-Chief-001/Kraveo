@@ -76,6 +76,7 @@ model User {
   vendorsOwned    Vendor[]
   reviewsGiven    ReviewRecord[] @relation("CustomerReviews")
   reviewsReceived ReviewRecord[] @relation("DriverReviews")
+  deviceTokens    DeviceToken[]
 }
 
 model Vendor {
@@ -290,4 +291,42 @@ model DriverLocation {
   lng         Float
   heading     Float    @default(0)
   lastUpdated DateTime @default(now())
+}
+
+// Push notifications (Docs/18_push_notifications_contract.md). One row per installed app that registered with FCM.
+// A token belongs to exactly one user at a time (it MOVES when another user signs in on the same phone).
+model DeviceToken {
+  id             String    @id @default(uuid())
+  userId         String
+  token          String    @unique
+  app            String // CUSTOMER | VENDOR | DRIVER
+  platform       String    @default("android")
+  appVersion     String?
+  createdAt      DateTime  @default(now())
+  lastSeenAt     DateTime  @default(now())
+  disabledAt     DateTime?
+  disabledReason String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, disabledAt])
+}
+
+// One row per (order, event, user): the idempotency key AND the delivery log. No foreign keys on purpose, so orders and
+// users can be removed without touching it; the maintenance job prunes rows after 14 days. lastError is a code only.
+model PushLog {
+  id            String    @id @default(uuid())
+  key           String    @unique // `${orderId}:${event}:${userId}`
+  orderId       String
+  userId        String
+  event         String
+  status        String // PENDING | SENT | FAILED | SKIPPED
+  attempts      Int       @default(0)
+  lastError     String?
+  nextAttemptAt DateTime?
+  createdAt     DateTime  @default(now())
+  sentAt        DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([createdAt])
 }

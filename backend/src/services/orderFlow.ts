@@ -8,7 +8,8 @@ import { publishOrderChange, getIo } from '../realtime';
 import { executeRefund, refundExtraPayment, runInBackground, ExtraRefundInput } from './refundService';
 import { writeAudit } from './audit';
 import { createRazorpayOrder } from './paymentService';
-import { triggerDhabaAlarmPushNotification, triggerStudentArrivalNotification } from './notificationService';
+import { queuePush } from './push/pushService';
+import { pushEventsForChange } from './push/events';
 import { validateAndCalculateOrder, normaliseCoupon, couponEligibilityProblem } from '../utils/validation';
 
 /**
@@ -81,11 +82,14 @@ export type ChangeResult = {
  * `deferRefund` leaves the refund (refundStatus stays PENDING) to the caller: the maintenance job runs its refunds in its own
  * bounded, circuit-broken provider phase so a hung Razorpay can never stall the cancellations.
  */
-export const finishChange = async (r: ChangeResult, opts: { awaitRefund?: boolean; deferRefund?: boolean } = { awaitRefund: true }): Promise<OrderWithRelations> => {
+export const finishChange = async (r: ChangeResult, opts: { awaitRefund?: boolean; deferRefund?: boolean; assignedByAdmin?: boolean } = { awaitRefund: true }): Promise<OrderWithRelations> => {
   if (!r.changed) return r.order;
   await publishOrderChange(r.order, { wasPoolEligible: isPoolEligible(r.before), newOrderAlert: r.newOrderAlert });
-  if (r.newOrderAlert) {
-    triggerDhabaAlarmPushNotification(r.order.vendorId, r.order.id, r.order.totalAmount).catch((e) => console.error('vendor alarm push failed:', errSummary(e)));
+  // Push (FCM) is an addition to the sockets above: scheduled after the commit, never awaited, never able to throw (Docs/18).
+  try {
+    for (const spec of pushEventsForChange(r.before, r.order, { newOrderAlert: r.newOrderAlert, assignedByAdmin: opts.assignedByAdmin })) queuePush(r.order.id, spec.event, spec.opts);
+  } catch (err) {
+    console.error('push scheduling failed:', errSummary(err));
   }
   const riders = new Set([r.before.driverId, r.order.driverId].filter((x): x is string => !!x));
   for (const riderId of riders) await refreshRiderDuty(riderId);
@@ -392,10 +396,9 @@ export const advanceStatus = async (orderId: string, actor: Actor, target: strin
     return { order: await reload(tx, order.id), before: order, changed: true };
   });
 
-  if (result.changed && target === 'ARRIVED_AT_GATE' && result.order.otpCode) {
-    triggerStudentArrivalNotification(result.order.customer.fcmToken || undefined, result.order.id, result.order.otpCode)
-      .catch((err) => console.error('arrival push failed:', errSummary(err)));
-  }
+  // Legacy log line (event name + order id only, no data): test/e2e/hardening.test.ts still asserts it. The customer push itself
+  // is RIDER_AT_GATE (push/events.ts) and never carries the code.
+  if (result.changed && target === 'ARRIVED_AT_GATE') console.log(`🔔 [push] RUNNER_ARRIVED for order ${result.order.id}`);
   return { order: await finishChange(result), idempotent: !result.changed };
 };
 
@@ -546,7 +549,7 @@ export const reassignOrder = async (orderId: string, driverIdOrProfileId: string
   if (result.changed) {
     await writeAudit('ORDER_REASSIGNED', 'ORDER', orderId, `Rider changed from ${result.before.driver?.name ?? 'none'} to ${result.order.driver?.name ?? 'none'} (${result.order.status}).${opts.force && result.order.driverId ? ' Forced by admin.' : ''}`);
   }
-  return finishChange(result);
+  return finishChange(result, { awaitRefund: true, assignedByAdmin: true });
 };
 
 // ----------------------------------------------------------------------------
@@ -630,8 +633,5 @@ export const resetOtpLock = async (orderId: string) => {
     return { order: await reload(tx, order.id), before: order, changed: true };
   });
   await writeAudit('OTP_UNLOCKED', 'ORDER', orderId, `Admin unlocked the gate OTP (was ${result.before.otpLocked ? 'locked' : 'not locked'}, ${result.before.otpAttempts} wrong attempts). A new code was sent to the customer.`);
-  if (result.order.otpCode) {
-    triggerStudentArrivalNotification(result.order.customer.fcmToken || undefined, result.order.id, result.order.otpCode).catch((e) => console.error('arrival push failed:', errSummary(e)));
-  }
   return finishChange(result);
 };

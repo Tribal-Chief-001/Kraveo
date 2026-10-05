@@ -13,6 +13,8 @@ import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem 
 import { verifyGoogleIdToken, GoogleAuthError } from '../services/googleAuth';
 import { timingSafeEqual } from 'crypto';
 import { orderRouter } from './orders';
+import { deviceRouter } from './devices';
+import { disableUserTokens } from '../services/push/deviceTokens';
 import { partnerRouter, requireApprovedPartner, validateVendorFields, validateDriverFields, newRunnerCode, writeAudit, DEFAULT_BANNER } from './partners';
 
 export const apiRouter = Router();
@@ -23,6 +25,8 @@ apiRouter.use(rateLimitMiddleware);
 apiRouter.use(partnerRouter);
 // Orders, payments, rider pool, gate OTP and the admin order tools live in ./orders.
 apiRouter.use(orderRouter);
+// Push device tokens (POST/DELETE /api/devices).
+apiRouter.use(deviceRouter);
 
 // Admin passcode: only WRONG passcodes count, per client IP (nginx sets X-Forwarded-For, `trust proxy` = 1).
 const adminLoginFailures = new FailureLimiter({ maxFails: 5, windowMs: 15 * 60 * 1000 });
@@ -427,6 +431,7 @@ apiRouter.delete('/auth/account', requireAuth, requireRole('STUDENT'), async (re
       return res.status(409).json({ success: false, message: 'You have an order in progress. You can delete your account once it is delivered.' });
     }
     invalidateAuthCache(userId);
+    await disableUserTokens(userId, 'ACCOUNT_DELETED'); // no more pushes to this person's phones (never throws)
     return res.json({ success: true, message: 'Your account has been deleted.' });
   } catch (err: any) {
     return fail(res, err, 'Could not delete the account');

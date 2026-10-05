@@ -4,9 +4,11 @@ import { cancelOrder } from './orderFlow';
 import { runRefund, refundExtraPayment } from './refundService';
 import { createBreaker, runPool } from './providerPool';
 import { reconcilePendingPayments } from './paymentReconcile';
+import { retryDuePushes, pruneOldPushData } from './push/pushService';
 
 const SYSTEM = { id: 'system', role: 'SYSTEM' };
 const BATCH = 100;
+let lastPushPrune = 0;
 
 /**
  * One pass of the order housekeeping (contract 1.3). Deterministic for a given `now`, and safe to run
@@ -123,6 +125,16 @@ export const runOrderMaintenance = async (now: Date = new Date()) => {
     } catch (err) {
       console.error('maintenance: reconcile failed:', (err as Error).message);
     }
+  }
+  // Push (FCM): retry transient failures whose backoff has passed, and clean old rows once an hour. Never affects the rest of the tick.
+  try {
+    await retryDuePushes(now);
+    if (now.getTime() - lastPushPrune >= 60 * 60_000) {
+      lastPushPrune = now.getTime();
+      await pruneOldPushData(now);
+    }
+  } catch (err) {
+    console.error('maintenance: push retry/prune failed:', (err as Error)?.name ?? 'error');
   }
   summary.providerPhaseStopped = breaker.open;
   if (breaker.open) console.warn('order maintenance: payment provider phase stopped after repeated provider failures; the next tick tries again.');
