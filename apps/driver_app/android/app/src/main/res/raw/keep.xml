@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The notification sound is looked up by name at runtime (channel "new_deliveries"), so the resource shrinker
+     must not drop it. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/new_delivery,@drawable/ic_stat_kraveo" />

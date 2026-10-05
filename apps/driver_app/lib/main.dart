@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'screens/driver_home.dart';
@@ -7,19 +8,38 @@ import 'screens/application_status_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
 import 'services/driver_api_service.dart';
+import 'services/push/firebase_push_messaging.dart';
+import 'services/push/push_controller.dart';
+import 'services/push/push_device_api.dart';
 import 'services/partner_auth_service.dart';
 import 'session/session_controller.dart';
 import 'state/rider_controller.dart';
 
+/// "1.4.0+7" for the device record on the server. Null when the platform cannot say.
+Future<String?> _readAppVersion() async {
+  try {
+    final info = await PackageInfo.fromPlatform();
+    return info.buildNumber.isEmpty ? info.version : '${info.version}+${info.buildNumber}';
+  } catch (_) {
+    return null;
+  }
+}
+
 void main() {
-  runApp(const KraveoDriverApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  // Push is started after the first frame by the controller; if Firebase cannot start, the app still works.
+  runApp(KraveoDriverApp(
+    push: PushController(messaging: FirebasePushMessaging(), api: HttpPushDeviceApi(), appVersion: _readAppVersion),
+  ));
 }
 
 class KraveoDriverApp extends StatefulWidget {
   /// [auth] is the network layer for login / session checks; tests pass a fake.
   /// [riderServices] builds the order API, socket and GPS for the home screen (null = the real ones).
-  const KraveoDriverApp({super.key, this.auth, this.riderServices});
+  /// [push] is the notification layer (null = none, as in the screen tests). The app takes ownership of it.
+  const KraveoDriverApp({super.key, this.auth, this.riderServices, this.push});
 
+  final PushController? push;
   final PartnerAuthService? auth;
   final RiderServices Function()? riderServices;
 
@@ -31,7 +51,14 @@ class _KraveoDriverAppState extends State<KraveoDriverApp> {
   late final SessionController _session = SessionController(auth: widget.auth);
 
   @override
+  void initState() {
+    super.initState();
+    widget.push?.attach(_session);
+  }
+
+  @override
   void dispose() {
+    widget.push?.dispose();
     _session.dispose();
     super.dispose();
   }
@@ -40,11 +67,14 @@ class _KraveoDriverAppState extends State<KraveoDriverApp> {
   Widget build(BuildContext context) {
     return SessionScope(
       controller: _session,
-      child: MaterialApp(
-        title: 'Kraveo Delivery Partner',
-        debugShowCheckedModeBanner: false,
-        theme: KraveoTheme.driver(),
-        home: AuthGate(session: _session, riderServices: widget.riderServices),
+      child: PushScope(
+        controller: widget.push,
+        child: MaterialApp(
+          title: 'Kraveo Delivery Partner',
+          debugShowCheckedModeBanner: false,
+          theme: KraveoTheme.driver(),
+          home: AuthGate(session: _session, riderServices: widget.riderServices),
+        ),
       ),
     );
   }

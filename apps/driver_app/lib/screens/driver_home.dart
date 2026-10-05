@@ -13,6 +13,9 @@ import '../widgets/ui/icon_action.dart';
 import '../widgets/ui/radar_pulse.dart';
 import '../widgets/ui/screen_header.dart';
 import '../services/driver_api_service.dart';
+import '../services/push/push_controller.dart';
+import '../services/push/push_payload.dart';
+import '../widgets/notifications_banner.dart';
 import '../session/session_controller.dart';
 import '../widgets/account_sheet.dart';
 import '../models/partner_session.dart';
@@ -33,8 +36,10 @@ class DriverHomeScreen extends StatefulWidget {
   State<DriverHomeScreen> createState() => _DriverHomeScreenState();
 }
 
-class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBindingObserver {
+class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBindingObserver implements PushUiHandler {
   late final RiderController _rider;
+  PushController? _push;
+  bool _explaining = false;
   StreamSubscription<String>? _messages;
   int selectedTab = 0;
 
@@ -49,12 +54,66 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
     _messages = _rider.messages.listen(_showMessage);
     WidgetsBinding.instance.addObserver(this);
     _rider.start();
+    // Push is optional: null when the app runs without it (tests, or Firebase unavailable).
+    _push = context.getInheritedWidgetOfExactType<PushScope>()?.notifier;
+    _push?.addListener(_maybeExplainNotifications);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _push?.attachUi(this);
+      _maybeExplainNotifications();
+    });
+  }
+
+  // ---- push (Docs/18) ----
+
+  @override
+  void onPushForeground(PushPayload payload) {
+    if (!mounted) return;
+    // The app is open and already updates over the socket: no banner, just one refresh. An off-duty rider has no pool.
+    if (payload.event == PushEvent.newDelivery && !_rider.onDuty) return;
+    unawaited(_rider.pollNow());
+  }
+
+  @override
+  void onPushTap(PushPayload payload) {
+    if (!mounted) return;
+    // Close pushed pages (runner pass, ...) but leave any open dialog alone.
+    Navigator.of(context).popUntil((route) => route.isFirst || route is! PageRoute);
+    switch (payload.event) {
+      case PushEvent.newDelivery:
+        _goTab(0);
+        if (_rider.onDuty) unawaited(_rider.pollNow());
+      case PushEvent.deliveryAssigned:
+        _goTab(0);
+        _rider.pollNow().then((_) {
+          if (mounted && _rider.active != null) _goTab(1);
+        });
+      case PushEvent.deliveryCancelled:
+        _goTab(0);
+        unawaited(_rider.pollNow());
+    }
+  }
+
+  /// Explain-then-ask, once per phone, right after an approved rider is signed in.
+  Future<void> _maybeExplainNotifications() async {
+    final push = _push;
+    if (push == null || !mounted || _explaining || !push.needsExplanation) return;
+    _explaining = true;
+    try {
+      final agreed = await showNotificationsExplainSheet(context);
+      await push.markExplained();
+      if (agreed) await push.requestPermission();
+    } finally {
+      _explaining = false;
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _messages?.cancel();
+    _push?.removeListener(_maybeExplainNotifications);
+    _push?.detachUi(this);
     _rider.dispose();
     super.dispose();
   }
@@ -63,6 +122,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _rider.resume();
+      unawaited(_push?.onAppResumed());
     } else if (state == AppLifecycleState.paused) {
       _rider.pause();
     }
@@ -123,7 +183,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: _rider,
+      listenable: _push == null ? _rider : Listenable.merge([_rider, _push]),
       builder: (context, _) => Scaffold(
         extendBody: true,
         body: IndexedStack(
@@ -181,8 +241,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
               ],
               const SizedBox(height: 20),
 
+              // Notifications blocked: a rider must not go on duty unaware that a locked phone will stay silent.
+              if (_push?.showBlockedBanner ?? false) ...[
+                NotificationsBlockedBanner(
+                  key: const ValueKey('push-blocked-banner'),
+                  opensSettings: _push!.mustOpenSettings,
+                  onFix: () => unawaited(_push!.fixPermission()),
+                ),
+                const SizedBox(height: 16),
+              ],
+
               // Hero duty control (truthful: ON only after Kraveo confirmed it)
-              DutyToggle(isOnline: r.onDuty, busy: r.dutyBusy, onChanged: (v) => r.setDuty(v)),
+              DutyToggle(isOnline: r.onDuty, busy: r.dutyBusy, alertsOff: _push?.showBlockedBanner ?? false, onChanged: (v) => r.setDuty(v)),
               if (r.onDuty) _LocationLine(state: r.location, postFailed: r.lastLocationPostFailed, onFix: r.fixLocation),
               const SizedBox(height: 16),
 

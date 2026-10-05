@@ -26,6 +26,10 @@ class SessionController extends ChangeNotifier {
 
   final PartnerAuthService auth;
 
+  /// Set by the push layer. Runs at the start of [logout], while the login token still exists, so this phone can be
+  /// removed from the rider's account on the server. Best effort and time-boxed; it never blocks the logout.
+  Future<void> Function()? beforeSignOut;
+
   SessionStatus _status = SessionStatus.checking;
   PartnerSession? _session;
   bool _expiring = false;
@@ -182,6 +186,12 @@ class SessionController extends ChangeNotifier {
   /// the partner in the app; local data is always cleared.
   Future<void> logout({Future<void> Function()? beforeClear}) async {
     final token = await DriverApiService.getSavedToken();
+    final hook = beforeSignOut;
+    if (hook != null) {
+      try {
+        await hook().timeout(const Duration(seconds: 5));
+      } catch (_) {}
+    }
     try {
       await Future.wait<void>([
         if (beforeClear != null) beforeClear(),

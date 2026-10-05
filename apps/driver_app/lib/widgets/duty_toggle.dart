@@ -10,11 +10,15 @@ class DutyToggle extends StatelessWidget {
   /// Waiting for Kraveo to confirm "on duty": the switch stays OFF until the server says yes.
   final bool busy;
 
+  /// Notifications are blocked: say so under the switch so a rider does not go on duty unaware.
+  final bool alertsOff;
+
   const DutyToggle({
     super.key,
     required this.isOnline,
     required this.onChanged,
     this.busy = false,
+    this.alertsOff = false,
   });
 
   static const double _height = 96;
@@ -62,7 +66,7 @@ class DutyToggle extends StatelessWidget {
                         children: [
                           Text(busy ? 'CONNECTING' : (on ? 'ON DUTY' : 'OFF DUTY'),
                               style: KraveoType.displayMd.copyWith(color: on ? k.brand : k.inkMuted, fontSize: 32, letterSpacing: 0.4)),
-                          Text(busy ? 'Asking Kraveo…' : (on ? 'Receiving orders' : 'Tap to go online'),
+                          Text(busy ? 'Asking Kraveo…' : (on ? (alertsOff ? 'Alerts are off - you may miss orders' : 'Receiving orders') : 'Tap to go online'),
                               style: KraveoType.bodySm.copyWith(color: on ? k.inkMuted : k.inkFaint)),
                         ],
                       ),
