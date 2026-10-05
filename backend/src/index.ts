@@ -8,7 +8,7 @@ import { attachRealtime } from './realtime';
 import { startOrderMaintenance } from './services/orderMaintenance';
 import { globalErrorHandler } from './middleware/errorHandler';
 import { assertRuntimeConfig } from './config/runtimeConfig';
-import { initPushProvider } from './services/push/provider';
+import { initPushProvider, getPushProvider } from './services/push/provider';
 
 dotenv.config();
 
@@ -19,7 +19,15 @@ if (process.env.NODE_ENV !== 'test') {
 
 // Push (FCM): reads FIREBASE_KEY_PATH / FIREBASE_SERVICE_ACCOUNT now so a missing key shows ONE warning at boot; never fails the boot.
 if (process.env.NODE_ENV !== 'test') {
-  try { if (initPushProvider()) console.log('push notifications are ON (FCM)'); } catch { console.warn('push notifications are OFF: could not start the push provider.'); }
+  try {
+    if (initPushProvider()) {
+      console.log('push notifications are ON (FCM): checking the credentials with FCM...');
+      // A dry-run send (nothing is delivered) proves FCM accepts the key and project; a revoked or wrong key is visible at boot, not at the first order.
+      getPushProvider().verify?.()
+        .then((r) => (r.ok ? console.log('push credentials verified with FCM') : console.error(`push credentials NOT accepted by FCM (${r.code ?? 'error'}): check FIREBASE_KEY_PATH and the Firebase project`)))
+        .catch(() => console.error('push credential check could not run (network?)'));
+    }
+  } catch { console.warn('push notifications are OFF: could not start the push provider.'); }
 }
 
 // Global Process Crash Protection

@@ -632,6 +632,6 @@ export const resetOtpLock = async (orderId: string) => {
     await tx.order.update({ where: { id: order.id }, data: { otpLocked: false, otpAttempts: 0, otpCode: secureOtp() } });
     return { order: await reload(tx, order.id), before: order, changed: true };
   });
-  await writeAudit('OTP_UNLOCKED', 'ORDER', orderId, `Admin unlocked the gate OTP (was ${result.before.otpLocked ? 'locked' : 'not locked'}, ${result.before.otpAttempts} wrong attempts). A new code was sent to the customer.`);
+  await writeAudit('OTP_UNLOCKED', 'ORDER', orderId, `Admin unlocked the gate OTP (was ${result.before.otpLocked ? 'locked' : 'not locked'}, ${result.before.otpAttempts} wrong attempts). The customer sees the new code in the app.`);
   return finishChange(result);
 };

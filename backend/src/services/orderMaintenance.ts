@@ -4,7 +4,7 @@ import { cancelOrder } from './orderFlow';
 import { runRefund, refundExtraPayment } from './refundService';
 import { createBreaker, runPool } from './providerPool';
 import { reconcilePendingPayments } from './paymentReconcile';
-import { retryDuePushes, pruneOldPushData } from './push/pushService';
+import { runPushMaintenance, pruneOldPushData } from './push/pushService';
 
 const SYSTEM = { id: 'system', role: 'SYSTEM' };
 const BATCH = 100;
@@ -128,7 +128,7 @@ export const runOrderMaintenance = async (now: Date = new Date()) => {
   }
   // Push (FCM): retry transient failures whose backoff has passed, and clean old rows once an hour. Never affects the rest of the tick.
   try {
-    await retryDuePushes(now);
+    await runPushMaintenance(now);
     if (now.getTime() - lastPushPrune >= 60 * 60_000) {
       lastPushPrune = now.getTime();
       await pruneOldPushData(now);

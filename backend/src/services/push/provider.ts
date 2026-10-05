@@ -32,7 +32,8 @@ const readServiceAccount = (): { json: Record<string, unknown> } | { problem: st
     try {
       raw = fs.readFileSync(keyPath, 'utf8');
     } catch {
-      if (!inline) return { problem: 'FIREBASE_KEY_PATH is set but the file cannot be read' };
+      // No silent fallback to an inline key: a configured path that cannot be read is a deployment mistake to surface.
+      return { problem: 'FIREBASE_KEY_PATH is set but the file cannot be read' };
     }
   }
   if (raw === null) raw = inline || null;
@@ -65,6 +66,16 @@ const createFcmProvider = (): PushProvider | null => {
     const messaging = getMessaging(app);
     return {
       enabled: true,
+      async verify() {
+        try {
+          await messaging.send({ token: 'x'.repeat(152) }, true);
+          return { ok: true };
+        } catch (err) {
+          const kind = classifyPushError(err);
+          // A well-formed rejection of the fake token means FCM accepted our credentials and project.
+          return { ok: kind.code === 'INVALID_TOKEN' || kind.code === 'UNREGISTERED', code: kind.code };
+        }
+      },
       async send(m: PushMessage) {
         await messaging.send({
           token: m.token,
@@ -73,7 +84,8 @@ const createFcmProvider = (): PushProvider | null => {
           android: {
             priority: m.priority,
             ttl: m.ttlSeconds * 1000,
-            collapseKey: m.collapseKey,
+            // No FCM collapse key: FCM allows only a few active collapse keys per device, so a phone that was offline for a
+            // while would silently lose pushes. Duplicates are already prevented server-side (PushLog.key).
             // Lock screen shows the real text (it never holds a code or phone); urgent events ask for max heads-up priority.
             notification: { channelId: m.channelId, visibility: 'public', priority: m.priority === 'high' ? 'max' : 'default' },
           },
@@ -108,7 +120,8 @@ export const __resetPushProvider = () => {
 // ----------------------------------------------------------------------------
 export type PushErrorKind = { code: string; transient: boolean; deadToken: boolean };
 
-const DEAD = new Set(['UNREGISTERED', 'INVALID_TOKEN', 'SENDER_ID_MISMATCH']);
+// SENDER_ID_MISMATCH is deliberately NOT dead: it means OUR credentials/project are wrong, and it must not disable every device.
+const DEAD = new Set(['UNREGISTERED', 'INVALID_TOKEN']);
 const TRANSIENT = new Set(['UNAVAILABLE', 'INTERNAL', 'QUOTA_EXCEEDED', 'TIMEOUT', 'NETWORK']);
 const ALIASES: Record<string, string> = {
   REGISTRATION_TOKEN_NOT_REGISTERED: 'UNREGISTERED',
@@ -130,7 +143,7 @@ const ALIASES: Record<string, string> = {
 };
 
 /**
- * dead token  : UNREGISTERED / INVALID_TOKEN (INVALID_ARGUMENT whose message says registration token) / SENDER_ID_MISMATCH -> disable the token, no retry.
+ * dead token  : UNREGISTERED / INVALID_TOKEN (INVALID_ARGUMENT whose message says registration token) -> disable the token, no retry.
  * INVALID_PAYLOAD (INVALID_ARGUMENT about the message itself) is permanent for that push but keeps the token.
  * transient   : UNAVAILABLE / INTERNAL / QUOTA_EXCEEDED / network / our own timeout -> retry with backoff.
  * anything else (an unrecognised FCM code) is a permanent failure of this message; an error without any code is treated as a network problem.

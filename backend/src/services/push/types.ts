@@ -40,6 +40,8 @@ export interface PushMessage {
 export interface PushProvider {
   readonly enabled: boolean;
   send(message: PushMessage): Promise<void>;
+  /** Optional boot-time self test: a dry-run send that proves FCM accepts our credentials. Never delivers anything. */
+  verify?(): Promise<{ ok: boolean; code?: string }>;
 }
 
 export interface PushOptions {

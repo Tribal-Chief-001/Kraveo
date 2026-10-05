@@ -124,7 +124,14 @@ export const resolveRecipients = async (event: PushEvent, o: OrderWithRelations,
 export const stillUseful = (event: PushEvent, o: OrderWithRelations): boolean => {
   if (event === 'NEW_ORDER') return o.status === 'PLACED' && o.paymentStatus === 'PAID';
   if (event === 'NEW_DELIVERY') return isPoolEligible(o);
-  return true;
+  // A late retry must not announce a step the order has already moved past ("accepted" after "delivered").
+  switch (event) {
+    case 'ORDER_ACCEPTED': return o.status === 'ACCEPTED' || o.status === 'PREPARING';
+    case 'ORDER_READY': return o.status === 'READY_FOR_PICKUP';
+    case 'ORDER_PICKED_UP': return o.status === 'PICKED_UP';
+    case 'RIDER_AT_GATE': return o.status === 'ARRIVED_AT_GATE';
+    default: return true;
+  }
 };
 
 // ----------------------------------------------------------------------------

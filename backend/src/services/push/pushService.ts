@@ -15,7 +15,7 @@ import { PUSH_EVENTS, PushEvent, PushMessage, PushOptions, PushProvider } from '
  *  - If no provider is configured (or NODE_ENV=test without an injected fake) this does no work at all.
  */
 const LEASE_MS = 2 * 60_000; // a PENDING row is owned by its sender for this long; after that the job may take it over
-const CONCURRENCY = 10;
+const CONCURRENCY = 4; // small on purpose: the DB pool is shared with order transactions on a 1 GB box
 const backoffMs = (attempts: number) => Math.min(8 * 60_000, 30_000 * 2 ** Math.max(0, attempts - 1));
 const sendTimeoutMs = () => {
   const n = Number(process.env.PUSH_SEND_TIMEOUT_MS);
@@ -25,6 +25,15 @@ const sendTimeoutMs = () => {
 const logError = (what: string, event: string, orderId: string, err: unknown) => {
   const e = err as { code?: unknown; name?: unknown } | null | undefined;
   console.error(`push ${what} failed (${event}, order ${orderId}): ${String(e?.code ?? e?.name ?? 'error').slice(0, 60)}`);
+};
+
+// One line per failure code per minute: a failing provider must be visible in the logs without flooding them (never tokens/text).
+const lastFailureLog = new Map<string, number>();
+const noteFailure = (code: string, event: string) => {
+  const now = Date.now();
+  if (now - (lastFailureLog.get(code) ?? 0) < 60_000) return;
+  lastFailureLog.set(code, now);
+  console.error(`push send failed: ${code} (first seen on ${event}; repeats are not logged for 1 min)`);
 };
 
 const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
@@ -82,6 +91,7 @@ const deliver = async (provider: PushProvider, row: LogRow, order: OrderWithRela
     return;
   }
   const failures = results.filter((r): r is Exclude<typeof r, { ok: true }> => !r.ok);
+  for (const f of failures) noteFailure(f.code, row.event);
   const transient = failures.find((f) => f.transient);
   if (!transient) {
     await finish({ status: 'FAILED', attempts, lastError: failures[0]?.code ?? 'FAILED', nextAttemptAt: null });
@@ -156,7 +166,7 @@ export const retryDuePushes = async (now: Date = new Date()): Promise<number> =>
   const due = await prisma.pushLog.findMany({
     where: { status: 'PENDING', nextAttemptAt: { lte: now } },
     orderBy: { nextAttemptAt: 'asc' },
-    take: 100,
+    take: 20,
     select: { id: true, orderId: true, userId: true, event: true, attempts: true, createdAt: true },
   });
   let tried = 0;
@@ -188,6 +198,77 @@ export const retryDuePushes = async (now: Date = new Date()): Promise<number> =>
     }
   });
   return tried;
+};
+
+/**
+ * Safety net for pushes that never got a PushLog row (process killed or DB pool timeout between the order commit and the first insert),
+ * and for riders who became idle after an order went to the pool. Everything here is idempotent: notifyOrderEvent claims one row per
+ * (order, event, user), so calling it for something already sent does nothing. Returns how many orders it looked at.
+ */
+export const sweepMissedPushes = async (now: Date = new Date()): Promise<number> => {
+  const provider = getPushProvider();
+  if (!provider.enabled) return 0;
+  let looked = 0;
+  // 1) NEW_ORDER: paid in the last 10 min (the useful window), still waiting for the restaurant, no PushLog row for the owner yet.
+  const paid = await prisma.order.findMany({
+    where: { status: 'PLACED', paymentStatus: 'PAID', paidAt: { gte: new Date(now.getTime() - 10 * 60_000), lte: new Date(now.getTime() - 20_000) } },
+    select: { id: true, vendor: { select: { userId: true } } },
+    orderBy: { paidAt: 'asc' },
+    take: 30,
+  });
+  for (const o of paid) {
+    const ownerId = o.vendor.userId;
+    if (!ownerId) continue;
+    const seen = await prisma.pushLog.findUnique({ where: { key: `${o.id}:NEW_ORDER:${ownerId}` }, select: { id: true } });
+    if (seen) continue;
+    looked += 1;
+    await notifyOrderEvent(o.id, 'NEW_ORDER');
+  }
+  // 2) NEW_DELIVERY: food waiting for a rider (ready, unclaimed, last 30 min): riders who are idle now and never heard about it are told.
+  const waiting = await prisma.order.findMany({
+    where: { status: 'READY_FOR_PICKUP', driverId: null, paymentStatus: 'PAID', updatedAt: { gte: new Date(now.getTime() - 30 * 60_000) } },
+    select: { id: true },
+    orderBy: { updatedAt: 'asc' },
+    take: 10,
+  });
+  for (const o of waiting) {
+    looked += 1;
+    await notifyOrderEvent(o.id, 'NEW_DELIVERY');
+  }
+  return looked;
+};
+
+let pushMaintenanceRunning = false;
+const maintenanceDeadlineMs = () => {
+  const n = Number(process.env.PUSH_MAINTENANCE_DEADLINE_MS);
+  return Number.isFinite(n) && n > 0 ? n : 15_000;
+};
+
+/**
+ * What the 60 s order job calls for push: retry due sends, then the sweep. It returns after at most ~15 s no matter how slow FCM is,
+ * so the money paths of the same tick (refunds, expiry, reconciliation) are never held up; unfinished work simply continues in the
+ * background and the next tick skips this part while it is still running.
+ */
+export const runPushMaintenance = async (now: Date = new Date()): Promise<void> => {
+  if (pushMaintenanceRunning) return;
+  pushMaintenanceRunning = true;
+  const done = (async () => {
+    await retryDuePushes(now);
+    await sweepMissedPushes(now);
+  })().then(
+    () => undefined,
+    (err) => logError('maintenance', 'MAINTENANCE', '-', err),
+  ).finally(() => { pushMaintenanceRunning = false; });
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => { console.warn('push maintenance is slow: continuing the tick without waiting for it'); resolve(); }, maintenanceDeadlineMs());
+    timer.unref?.();
+  });
+  try {
+    await Promise.race([done, deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 };
 
 /** PushLog older than 14 days and device tokens disabled for more than 60 days are deleted. Returns the row counts. */

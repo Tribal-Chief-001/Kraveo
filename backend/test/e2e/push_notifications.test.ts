@@ -14,7 +14,8 @@ import { runOrderMaintenance } from '../../src/services/orderMaintenance';
 import { __waitForBackgroundWork } from '../../src/services/refundService';
 import { __resetRateLimits } from '../../src/middleware/rateLimit';
 import { setPushProvider, getPushProvider, __resetPushProvider, classifyPushError } from '../../src/services/push/provider';
-import { notifyOrderEvent, retryDuePushes, pruneOldPushData, __waitForPushWork } from '../../src/services/push/pushService';
+import { notifyOrderEvent, retryDuePushes, pruneOldPushData, sweepMissedPushes, runPushMaintenance, __waitForPushWork } from '../../src/services/push/pushService';
+import { stillUseful } from '../../src/services/push/events';
 import { PUSH_EVENTS, PushMessage, PushProvider } from '../../src/services/push/types';
 
 jest.setTimeout(30_000);
@@ -608,7 +609,7 @@ describe('Push notifications', () => {
     });
 
     test('a dead token is disabled at once and never retried; the other device still gets the push', async () => {
-      for (const code of ['messaging/registration-token-not-registered', 'messaging/invalid-registration-token', 'messaging/invalid-argument:token', 'SENDER_ID_MISMATCH']) {
+      for (const code of ['messaging/registration-token-not-registered', 'messaging/invalid-registration-token', 'messaging/invalid-argument:token']) {
         await prisma.pushLog.deleteMany({});
         await prisma.deviceToken.deleteMany({});
         await registerAll();
@@ -620,7 +621,7 @@ describe('Push notifications', () => {
         await flush();
         const dead = await prisma.deviceToken.findUniqueOrThrow({ where: { token: TOK.cust } });
         expect(dead.disabledAt).not.toBeNull();
-        expect(dead.disabledReason).toMatch(/^(UNREGISTERED|INVALID_TOKEN|SENDER_ID_MISMATCH)$/);
+        expect(dead.disabledReason).toMatch(/^(UNREGISTERED|INVALID_TOKEN)$/);
         expect((await prisma.deviceToken.findUniqueOrThrow({ where: { token: TOK.custB } })).disabledAt).toBeNull();
         expect(fake.to(id, 'ORDER_ACCEPTED').map((m) => m.token)).toEqual([TOK.custB]);
         expect((await logOf(id, 'ORDER_ACCEPTED'))[0].status).toBe('SENT');
@@ -933,4 +934,91 @@ describe('Push notifications', () => {
       expect(JSON.stringify(rows)).not.toContain('tok_');
     });
   });
+
+  // =========================================================================
+  // Fixes from the adversarial review (5 Oct 2026)
+  // =========================================================================
+  describe('review fixes', () => {
+    test('SENDER_ID_MISMATCH (our own credentials are wrong) fails that push but never disables the device', async () => {
+      await registerAll();
+      fake.behaviour = (m) => { if (m.token === TOK.cust) throw fcmError('messaging/mismatched-credential'); };
+      const id = await placePaid();
+      expect((await setStatus(id, 'ACCEPTED', tVendor)).status).toBe(200);
+      await flush();
+      expect((await prisma.deviceToken.findUniqueOrThrow({ where: { token: TOK.cust } })).disabledAt).toBeNull();
+      expect(await logOf(id, 'ORDER_ACCEPTED')).toEqual([expect.objectContaining({ status: 'FAILED', lastError: 'SENDER_ID_MISMATCH' })]);
+    });
+
+    test('stillUseful: a late retry never announces a step the order has already left', () => {
+      const o = (status: string) => ({ status, paymentStatus: 'PAID' }) as never;
+      expect(stillUseful('ORDER_ACCEPTED', o('ACCEPTED'))).toBe(true);
+      expect(stillUseful('ORDER_ACCEPTED', o('PREPARING'))).toBe(true);
+      expect(stillUseful('ORDER_ACCEPTED', o('DELIVERED'))).toBe(false);
+      expect(stillUseful('ORDER_READY', o('PICKED_UP'))).toBe(false);
+      expect(stillUseful('ORDER_PICKED_UP', o('PICKED_UP'))).toBe(true);
+      expect(stillUseful('ORDER_PICKED_UP', o('DELIVERED'))).toBe(false);
+      expect(stillUseful('RIDER_AT_GATE', o('ARRIVED_AT_GATE'))).toBe(true);
+      expect(stillUseful('RIDER_AT_GATE', o('DELIVERED'))).toBe(false);
+      expect(stillUseful('ORDER_DELIVERED', o('DELIVERED'))).toBe(true);
+      expect(stillUseful('ORDER_CANCELLED', o('CANCELLED'))).toBe(true);
+      expect(stillUseful('REFUND_PROCESSED', o('CANCELLED'))).toBe(true);
+    });
+
+    test('sweep: a NEW_ORDER whose PushLog row was never written (crash between commit and insert) is sent once, and only once', async () => {
+      await registerAll();
+      const id = await placePaid();
+      expect(fake.to(id, 'NEW_ORDER')).toHaveLength(1);
+      // Simulate the loss: no PushLog row, paid a minute ago, nothing delivered.
+      await prisma.pushLog.deleteMany({ where: { orderId: id } });
+      await prisma.order.update({ where: { id }, data: { paidAt: new Date(Date.now() - 60_000) } });
+      fake.sent.length = 0;
+      expect(await sweepMissedPushes(new Date())).toBeGreaterThanOrEqual(1);
+      expect(fake.to(id, 'NEW_ORDER').map((m) => m.token)).toEqual([TOK.vendor]);
+      fake.sent.length = 0;
+      await sweepMissedPushes(new Date());
+      expect(fake.to(id, 'NEW_ORDER')).toHaveLength(0);
+      // Too old (outside the 10 min useful window) or already handled by the restaurant: not swept.
+      await prisma.pushLog.deleteMany({ where: { orderId: id } });
+      await prisma.order.update({ where: { id }, data: { paidAt: new Date(Date.now() - 11 * 60_000) } });
+      await sweepMissedPushes(new Date());
+      expect(fake.to(id, 'NEW_ORDER')).toHaveLength(0);
+    });
+
+    test('sweep: a rider who became idle after the order reached the pool is told once; riders already told are not told again', async () => {
+      await registerAll();
+      const id = await placePaid();
+      for (const s of ['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP']) expect((await setStatus(id, s, tVendor)).status).toBe(200);
+      await flush();
+      expect(fake.to(id, 'NEW_DELIVERY').map((m) => OWNER_OF[m.token]).sort()).toEqual(['RIDER', 'RIDER2']);
+      await prisma.pushLog.deleteMany({ where: { orderId: id, event: 'NEW_DELIVERY', userId: RIDER2.id } }); // RIDER2 was busy back then
+      fake.sent.length = 0;
+      await sweepMissedPushes(new Date());
+      await flush();
+      expect(fake.to(id, 'NEW_DELIVERY').map((m) => OWNER_OF[m.token])).toEqual(['RIDER2']);
+      fake.sent.length = 0;
+      await sweepMissedPushes(new Date());
+      await flush();
+      expect(fake.to(id, 'NEW_DELIVERY')).toHaveLength(0);
+    });
+
+    test('push maintenance is bounded: a hung provider cannot hold the 60 s tick longer than the deadline', async () => {
+      process.env.PUSH_SEND_TIMEOUT_MS = '700';
+      process.env.PUSH_MAINTENANCE_DEADLINE_MS = '120';
+      await registerAll();
+      let calls = 0;
+      fake.behaviour = () => { calls += 1; if (calls === 1) throw fcmError('messaging/internal-error'); return new Promise<void>(() => undefined); };
+      const id = await placePaid();
+      expect((await logOf(id, 'NEW_ORDER'))[0].status).toBe('PENDING'); // first send failed transiently
+      const t0 = Date.now();
+      await runPushMaintenance(new Date(Date.now() + 61_000)); // retry hangs inside the provider
+      expect(Date.now() - t0).toBeLessThan(600);
+      // It is still running in the background, so a second call returns at once without starting more work.
+      const t1 = Date.now();
+      await runPushMaintenance(new Date(Date.now() + 61_000));
+      expect(Date.now() - t1).toBeLessThan(100);
+      await sleep(900); // let the hung send time out so no work leaks into the next test
+      delete process.env.PUSH_MAINTENANCE_DEADLINE_MS;
+    });
+  });
+
 });
