@@ -55,6 +55,10 @@ abstract class LocalNotifier {
 /// Opens this app's notification settings in Android (used when notifications are blocked).
 abstract class SystemSettings {
   Future<bool> openNotificationSettings();
+
+  /// True on Android 13+, where the system shows a notification permission dialog. Below that there is none: the only switch is in the
+  /// app's notification settings.
+  Future<bool> hasPermissionDialog() async => true;
 }
 
 /// Result of a call to `/devices`.

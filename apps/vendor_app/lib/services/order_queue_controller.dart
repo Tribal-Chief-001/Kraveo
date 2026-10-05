@@ -491,8 +491,18 @@ class OrderQueueController extends ChangeNotifier {
   /// Restarts the alarm if an order is still waiting (e.g. after the "test alarm" button stopped it).
   void resyncAlarm() => _syncAlarm(force: true);
 
+  /// False while the app is not on screen. The in-app alarm then stays silent: the system notification (and the server's
+  /// once-a-minute reminders while the order is unanswered) already ring on the "new orders" channel, and ringing both at once
+  /// would double the sound. Defaults to true so a controller used without a screen (tests) behaves as before.
+  bool _appInForeground = true;
+  void setAppInForeground(bool value) {
+    if (_appInForeground == value) return;
+    _appInForeground = value;
+    _syncAlarm(force: value);
+  }
+
   void _syncAlarm({bool force = false}) {
-    final should = !_disposed && _orders.values.any((o) => o.isIncoming && !_busy.containsKey(o.id));
+    final should = !_disposed && _appInForeground && _orders.values.any((o) => o.isIncoming && !_busy.containsKey(o.id));
     if (should) {
       _ringing = true;
       if (force || !alarm.isRinging) alarm.start();

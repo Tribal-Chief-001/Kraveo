@@ -122,13 +122,14 @@ void main() {
       for (final needle in [
         'android.permission.POST_NOTIFICATIONS',
         'android.permission.USE_FULL_SCREEN_INTENT',
-        'android:showWhenLocked="true"',
-        'android:turnScreenOn="true"',
         'default_notification_channel_id',
         '@drawable/ic_stat_kraveo',
       ]) {
         expect(manifest, contains(needle));
       }
+      // A locked kitchen phone must not show the dashboard over the keyguard.
+      expect(manifest, isNot(contains('showWhenLocked')));
+      expect(manifest, isNot(contains('turnScreenOn')));
     });
   });
 }

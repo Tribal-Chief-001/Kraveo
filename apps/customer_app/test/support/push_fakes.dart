@@ -123,6 +123,12 @@ class FakeDeviceApi implements DeviceApi {
 }
 
 class FakeSystemSettings implements SystemSettings {
+  /// False models Android 7-12 (no permission dialog exists).
+  bool dialogAvailable = true;
+
+  @override
+  Future<bool> hasPermissionDialog() async => dialogAvailable;
+
   int opened = 0;
   @override
   Future<bool> openNotificationSettings() async {

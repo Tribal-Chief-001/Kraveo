@@ -105,6 +105,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Back from the background (or the phone woke up): reload at once, never wait for the next tick.
+    // The in-app alarm only rings while the app is on screen; in the background the system notification rings instead.
+    _orders?.setAppInForeground(state == AppLifecycleState.resumed);
     if (state == AppLifecycleState.resumed) {
       _orders?.onResumed();
       _syncStoreStatus();

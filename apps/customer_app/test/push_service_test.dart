@@ -256,9 +256,20 @@ void main() {
       expect(await granted.shouldShowRationale(), isFalse);
     });
 
-    test('the Turn on button asks the system first and opens settings afterwards', () async {
-      fcm.permissionValue = PushPermission.denied;
+    test('Android 7-12 (no permission dialog, notifications off): the first Turn on press opens the notification settings', () async {
+      fcm.permissionValue = PushPermission.denied; // what the plugin reports below Android 13 when notifications are off
       fcm.requestResult = PushPermission.denied;
+      settings.dialogAvailable = false;
+      final push = make();
+      await push.onSessionStarted('u1');
+      await push.enableNotifications();
+      expect(fcm.requestCalls, 1);
+      expect(settings.opened, 1, reason: 'a dead button is the bug: nothing visible happened before');
+    });
+
+    test('the Turn on button asks the system first and opens settings afterwards', () async {
+      fcm.permissionValue = PushPermission.denied; // Android 13+: the dialog is shown and the customer says "Don't allow"
+
       final push = make();
       await push.onSessionStarted('u1');
       await push.enableNotifications();

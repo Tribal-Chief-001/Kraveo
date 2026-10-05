@@ -243,9 +243,13 @@ class PushController extends ChangeNotifier {
       await _safe(messaging.openSettings);
       return;
     }
+    final before = _permission;
     final result = await requestPermission();
-    // The system showed nothing (it will not ask again): go to the settings instead.
-    if (result == PushPermission.notDetermined || result == PushPermission.deniedPermanently) {
+    if (result.isGranted) return;
+    // The system showed nothing (it will not ask again), or - Android 7-12 - there is no permission dialog at all and the switch
+    // lives in the app's notification settings: go there instead of leaving the button dead. A refusal of a dialog that was just
+    // shown (before == notDetermined, now denied) is respected: no second screen right after "Don't allow".
+    if (result == PushPermission.notDetermined || result == PushPermission.deniedPermanently || before == PushPermission.denied) {
       await _safe(messaging.openSettings);
     }
   }

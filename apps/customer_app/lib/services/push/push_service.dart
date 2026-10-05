@@ -254,7 +254,13 @@ class PushService extends ChangeNotifier {
   /// page afterwards (Android no longer shows the dialog once it was refused).
   Future<void> enableNotifications() async {
     if (!await _readFlag(_kSystemAsked)) {
-      await requestPermission();
+      final result = await requestPermission();
+      // Android 7-12 has no permission dialog: the request answers "denied" at once while notifications are off. Take the
+      // customer to the app's notification settings instead of leaving the button dead. (On Android 13+ a refusal of the dialog
+      // that was really shown is respected: no second screen right after "Don't allow".)
+      if (result != PushPermission.granted && !(await (_settings?.hasPermissionDialog() ?? Future.value(true)))) {
+        await _settings?.openNotificationSettings();
+      }
       return;
     }
     await _settings?.openNotificationSettings();

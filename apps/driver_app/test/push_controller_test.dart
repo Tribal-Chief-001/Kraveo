@@ -191,6 +191,23 @@ void main() {
       r.push.dispose();
     });
 
+    test('Android 7-12: no dialog exists, so the banner button opens the notification settings at once', () async {
+      final r = await _rig(permission: PushPermission.denied);
+      r.msg.promptAnswer = PushPermission.denied; // the plugin just answers "denied" without showing anything
+      await r.push.fixPermission();
+      expect(r.msg.settingsOpened, 1);
+      r.push.dispose();
+    });
+
+    test('Android 13+: a refusal of the dialog that was just shown does not open settings right away', () async {
+      final r = await _rig(permission: PushPermission.notDetermined);
+      r.msg.promptAnswer = PushPermission.denied;
+      await r.push.fixPermission();
+      expect(r.msg.promptCalls, 1);
+      expect(r.msg.settingsOpened, 0);
+      r.push.dispose();
+    });
+
     test('granting from the banner clears it; coming back from settings clears it too', () async {
       final r = await _rig(permission: PushPermission.denied);
       r.msg.promptAnswer = PushPermission.granted;

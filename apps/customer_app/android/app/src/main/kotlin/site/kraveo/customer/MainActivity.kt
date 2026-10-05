@@ -25,6 +25,8 @@ class MainActivity : FlutterActivity() {
                             result.success(false)
                         }
                     }
+                    // Android 13+ (API 33) shows a notification permission dialog; older versions have none.
+                    "hasPermissionDialog" -> result.success(android.os.Build.VERSION.SDK_INT >= 33)
                     else -> result.notImplemented()
                 }
             }

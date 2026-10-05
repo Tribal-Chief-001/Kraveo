@@ -53,6 +53,22 @@ void main() {
       expect(alarm.ringing, isFalse); // never leave a ringing alarm behind
     });
 
+    test('the in-app alarm stays silent while the app is in the background and rings again when it returns', () async {
+      backend.put(order(id: 'o1'));
+      final c = make();
+      await c.start();
+      expect(alarm.ringing, isTrue);
+      c.setAppInForeground(false); // the system notification rings instead; never both
+      expect(alarm.ringing, isFalse);
+      socket.emit('new_order_alert', orderJson(id: 'o2'));
+      await Future<void>.delayed(Duration.zero);
+      expect(alarm.ringing, isFalse, reason: 'a new order while backgrounded must not start the in-app alarm');
+      expect(c.incoming.map((o) => o.id), containsAll(['o1', 'o2']));
+      c.setAppInForeground(true); // back on screen with orders still waiting
+      expect(alarm.ringing, isTrue);
+      c.dispose();
+    });
+
     test('new_order_alert over the socket rings at once; the same order from the poll is not duplicated', () async {
       final c = make();
       await c.start();

@@ -152,6 +152,15 @@ class MethodChannelSystemSettings implements SystemSettings {
   static const MethodChannel _channel = MethodChannel('site.kraveo.customer/system');
 
   @override
+  Future<bool> hasPermissionDialog() async {
+    try {
+      return await _channel.invokeMethod<bool>('hasPermissionDialog') ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  @override
   Future<bool> openNotificationSettings() async {
     try {
       return await _channel.invokeMethod<bool>('openNotificationSettings') ?? false;
