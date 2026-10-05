@@ -27,7 +27,7 @@
     <div class="legal__hero">
       <p class="eyebrow eyebrow--light">Legal</p>
       <h1>Privacy Policy</h1>
-      <p class="legal__meta">Last updated 1 October 2026</p>
+      <p class="legal__meta">Last updated 5 October 2026</p>
     </div>
     <article class="legal__body">
 
@@ -40,13 +40,14 @@
         <li><b>Profile details you enter:</b> your name, your phone number, whether you are a student, your hostel block (if you are), and which of the built-in avatars you picked (we store only the avatar number).</li>
         <li><b>Orders:</b> what you ordered, from which kitchen, the amount, the drop point, the order status history, timestamps, and the one-time gate code for the order.</li>
         <li><b>Payments:</b> payments are processed by Razorpay. We receive and store identifiers, amount and status for each payment. We never see or store your card number, UPI PIN or bank login.</li>
-        <li><b>Device:</b> if you turn on notifications, a device token so we can send them. The customer app does not track your location.</li>
+        <li><b>Notifications:</b> if you allow notifications, we store a device token (an identifier made by Google Firebase for your phone) so we can tell you when your order is accepted, picked up, at your gate or cancelled. We remove it when you log out or delete your account, and we delete tokens that stopped working. A notification never contains your gate code or phone number. The customer app does not read your location; it only shows a map of your drop point, the restaurant and your rider.</li>
       </ul>
       <h3>Restaurant and delivery partners</h3>
       <ul>
         <li>Accounts are created by us. We store the partner’s name, phone number and a salted hash of their password (we cannot read the password).</li>
-        <li><b>Delivery partners:</b> while a delivery is in progress, the Delivery Partner app shares the rider’s live location so the customer can follow the order. The app asks for location permission for this purpose.</li>
-        <li>Restaurants: restaurant name, menu items, prices and the orders they receive.</li>
+        <li><b>Delivery partners:</b> while a rider is <b>on duty</b> (switched ON in the Delivery Partner app), the app shares the rider’s live location with Kraveo, even when the screen is off; Android shows a notification while this is happening. Kraveo uses it to dispatch and support deliveries and to keep riders and customers safe. The customer sees the rider’s position only for an order that rider is carrying. We keep only the latest position of each rider, not a history. Switching off duty or logging out stops the sharing. The app asks for location permission for this purpose.</li>
+        <li>Delivery and restaurant partners also get notifications about new orders and deliveries, which need the same device token described above.</li>
+        <li>Restaurants: restaurant name, the restaurant’s location on the campus map, menu items, prices and the orders they receive.</li>
       </ul>
 
       <h2>2. Why we use it</h2>
@@ -61,7 +62,7 @@
       <h2>3. Who can see it</h2>
       <ul>
         <li><b>The restaurant</b> you order from sees your name and what you ordered.</li>
-        <li><b>The delivery partner</b> sees your name, phone number and drop point for that order, and the gate code is only checked when you share it.</li>
+        <li><b>The delivery partner</b> sees your name, phone number and drop point (for example BH2 or GH1) for that order, and the gate code is only checked when you share it.</li>
         <li><b>Service providers</b> that run Kraveo: Google (sign-in), Razorpay (payments), Amazon Web Services (our servers, in the Mumbai region) and Google Firebase (app services). They process data on our behalf.</li>
         <li>We may share information if the law requires it.</li>
       </ul>
