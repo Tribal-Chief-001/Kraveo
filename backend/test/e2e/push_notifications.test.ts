@@ -320,7 +320,7 @@ describe('Push notifications', () => {
       }]);
       const deliveries = fake.to(id, 'NEW_DELIVERY');
       expect(deliveries.map((m) => m.token).sort()).toEqual([TOK.rider, TOK.rider2].sort());
-      expect(deliveries[0]).toMatchObject({ title: 'New delivery', body: 'Sharma Highway Dhaba to Block 2. Tap to accept.', channelId: 'new_deliveries', priority: 'high', ttlSeconds: 120, collapseKey: `NEW_DELIVERY:${id}`, data: { event: 'NEW_DELIVERY', orderId: id, v: '1' } });
+      expect(deliveries[0]).toMatchObject({ title: 'New delivery', body: 'Sharma Highway Dhaba to BH2. Tap to accept.', channelId: 'new_deliveries', priority: 'high', ttlSeconds: 120, collapseKey: `NEW_DELIVERY:${id}`, data: { event: 'NEW_DELIVERY', orderId: id, v: '1' } });
 
       expect((await claim(id)).status).toBe(200);
       await flush();
@@ -478,7 +478,7 @@ describe('Push notifications', () => {
       expect(re.status).toBe(200);
       await flush();
       expect(fake.to(id, 'DELIVERY_ASSIGNED')).toEqual([{
-        token: TOK.rider2, title: 'Delivery assigned', body: 'Sharma Highway Dhaba to Block 2.', channelId: 'new_deliveries', priority: 'high', ttlSeconds: 3600,
+        token: TOK.rider2, title: 'Delivery assigned', body: 'Sharma Highway Dhaba to BH2.', channelId: 'new_deliveries', priority: 'high', ttlSeconds: 3600,
         collapseKey: `DELIVERY_ASSIGNED:${id}`, data: { event: 'DELIVERY_ASSIGNED', orderId: id, v: '1' },
       }]);
       // moving it to the other rider assigns again (a different recipient = a different key)
@@ -912,7 +912,7 @@ describe('Push notifications', () => {
         for (const p of phones) expect(all.replace(/\D/g, '')).not.toContain(p);
         expect(all).not.toMatch(/9876501234|Room 214|Ashta-Kothri|Highway, 1\.2km|otp|OTP|password/);
         // The only digits allowed in a title/body: counts, rupee amounts, "5-7 working days" and the "#REF" of an order.
-        const text = `${m.title} ${m.body}`.replace(/#[A-Z0-9]{6}\b/g, '').replace(/Rs \d+(\.\d{2})?/g, '').replace(/\b\d+ items?\b/g, '').replace(/5-7/g, '').replace(/\b(Block|Gate) \d\b/g, '');
+        const text = `${m.title} ${m.body}`.replace(/#[A-Z0-9]{6}\b/g, '').replace(/Rs \d+(\.\d{2})?/g, '').replace(/\b\d+ items?\b/g, '').replace(/5-7/g, '').replace(/\b(Block|Gate) \d\b/g, '').replace(/\b(BH|GH)\d\b/g, '');
         expect(text).not.toMatch(/\d/);
         expect(m.token).toMatch(/^tok_/);
         expect(`${m.title} ${m.body}`).not.toContain(m.token);

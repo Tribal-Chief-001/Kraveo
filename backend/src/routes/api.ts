@@ -6,6 +6,7 @@ import { canonicalPhone, last10 } from '../utils/phone';
 import { hashPassword, verifyPassword, getDummyHash, passwordProblem } from '../services/password';
 import { isLocked, recordFailure, recordSuccess, ipLockedFor, recordIpFailure } from '../services/loginLimiter';
 import { rateLimitMiddleware, FailureLimiter, clientIp } from '../middleware/rateLimit';
+import { DROP_POINTS, CAMPUS_CENTER, normalizeDropPoint, checkVendorLocation, vendorHasLocation } from '../config/campus';
 import { fail, validParams, ID_RE } from '../utils/http';
 import { errSummary } from '../utils/log';
 import { dropFromPartnerRooms } from '../realtime';
@@ -71,10 +72,33 @@ apiRouter.get('/drivers/locations', requireAuth, async (req: AuthenticatedReques
     const dbLocs = await prisma.driverLocation.findMany({
       where: req.user?.role === Role.ADMIN ? undefined : { driverId: req.user?.id }
     });
-    return res.json({ success: true, data: dbLocs });
+    // Docs/19: duty and approval status ride along so the dashboard can colour offline riders without a second call.
+    const profiles = dbLocs.length === 0 ? [] : await prisma.driverPartner.findMany({
+      where: { userId: { in: dbLocs.map((l) => l.driverId) } },
+      select: { userId: true, dutyStatus: true, approvalStatus: true },
+    });
+    const byUser = new Map(profiles.map((p) => [p.userId, p] as const));
+    const data = dbLocs.map((l) => ({
+      ...l,
+      dutyStatus: byUser.get(l.driverId)?.dutyStatus ?? 'OFFLINE',
+      approvalStatus: byUser.get(l.driverId)?.approvalStatus ?? null,
+    }));
+    return res.json({ success: true, data });
   } catch (err: any) {
     return fail(res, err, 'Error fetching driver locations');
   }
+});
+
+// Campus drop points and map centre (Docs/19). Static, so clients may cache it for a few minutes.
+apiRouter.get('/campus', requireAuth, (_req: AuthenticatedRequest, res: Response) => {
+  res.set('Cache-Control', 'private, max-age=300');
+  return res.json({
+    success: true,
+    data: {
+      center: { lat: CAMPUS_CENTER.lat, lng: CAMPUS_CENTER.lng },
+      dropPoints: DROP_POINTS.map((p) => ({ id: p.id, name: p.name, group: p.group, lat: p.lat, lng: p.lng })),
+    },
+  });
 });
 
 // ADMIN: the full row (phone, UPI, emergency contact, plate). A DRIVER: only their own, approved profile, and only
@@ -111,7 +135,6 @@ apiRouter.get('/drivers/:id', requireAuth, requireRole('DRIVER', 'ADMIN'), valid
 // ----------------------------------------------------
 const PLACEHOLDER_NAMES = new Set(['VIT Student', 'Dhaba Owner', 'Delivery Partner']);
 const NAME_RE = /^[\p{L}][\p{L}\s.'\-]{1,59}$/u;
-const HOSTEL_RE = /^(Block [1-6]|Girls Gate [12]|VIT Main Gate|Boys Hostel Block [1-6]|Girls Hostel Gate [12])$/;
 const UPI_RE = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/;
 const AVATAR_COUNT = 15;
 
@@ -367,9 +390,10 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthenticatedRequest, re
       if (hostelBlock !== undefined) {
         const finalIsStudent = updateData.isStudent ?? current.isStudent;
         if (finalIsStudent !== true) return bad('hostelBlock', 'A hostel block is only needed for students.');
-        const cleaned = String(hostelBlock).trim();
-        if (!HOSTEL_RE.test(cleaned)) return bad('hostelBlock', 'Choose one of the campus drop points.');
-        updateData.hostelBlock = cleaned;
+        // Legacy spellings (Block 2, Girls Hostel Gate 1 ...) are accepted and stored as the canonical name (BH2, GH1).
+        const canonical = normalizeDropPoint(hostelBlock);
+        if (!canonical) return bad('hostelBlock', 'Choose one of the campus drop points.');
+        updateData.hostelBlock = canonical;
       }
     }
     if (upiId !== undefined && upiId !== '') {
@@ -460,6 +484,7 @@ apiRouter.post('/admin/partners', requireAuth, requireRole('ADMIN'), async (req:
 
     // Vendor: either link an existing restaurant (vendorId) or create the restaurant together with its owner.
     let vendorData: { name: string; category: string; address: string; fssaiNumber: string | null } | null = null;
+    let pin: { lat: number; lng: number } | null = null;
     if (role === 'VENDOR') {
       if (vendorId) {
         const vendor = await prisma.vendor.findUnique({ where: { id: String(vendorId) } });
@@ -469,6 +494,11 @@ apiRouter.post('/admin/partners', requireAuth, requireRole('ADMIN'), async (req:
         const v = validateVendorFields(b);
         if (!v.ok) return bad(v.error.field, v.error.message);
         vendorData = v.data;
+        if (b.lat !== undefined || b.lng !== undefined) {
+          const check = checkVendorLocation(b.lat, b.lng);
+          if (!check.ok) return bad(check.field, check.message);
+          pin = { lat: check.lat, lng: check.lng };
+        }
       }
     }
     let driverData: { vehicleType: string; vehicleRegNo: string | null; emergencyPhone: string | null; upiId: string | null } | null = null;
@@ -487,8 +517,8 @@ apiRouter.post('/admin/partners', requireAuth, requireRole('ADMIN'), async (req:
         await tx.vendor.update({ where: { id: String(vendorId) }, data: { userId: created.id } });
         profileId = String(vendorId);
       } else if (role === 'VENDOR' && vendorData) {
-        const lat = typeof b.lat === 'number' ? b.lat : undefined;
-        const lng = typeof b.lng === 'number' ? b.lng : undefined;
+        const lat = pin ? pin.lat : undefined;
+        const lng = pin ? pin.lng : undefined;
         const v = await tx.vendor.create({ data: { ...vendorData, userId: created.id, bannerImage: DEFAULT_BANNER, isAcceptingOrders: true, approvalStatus: 'APPROVED', ...(lat !== undefined ? { lat } : {}), ...(lng !== undefined ? { lng } : {}) } });
         profileId = v.id;
       }
@@ -545,7 +575,7 @@ apiRouter.post('/notifications/register-token', requireAuth, async (req: Authent
 // Customers get the public shape (no owner id, FSSAI number, review state, timestamps). Admins and the owning
 // restaurant keep the full row.
 const fullVendorView = (v: any, viewer: { id: string; role: Role } | null) =>
-  viewer?.role === Role.ADMIN || (viewer?.role === Role.VENDOR && !!v.userId && v.userId === viewer.id) ? v : null;
+  viewer?.role === Role.ADMIN || (viewer?.role === Role.VENDOR && !!v.userId && v.userId === viewer.id) ? { ...v, hasLocation: vendorHasLocation(v.lat, v.lng) } : null;
 
 apiRouter.get('/vendors', async (req: Request, res: Response) => {
   try {
@@ -585,13 +615,20 @@ apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: Authen
       }
     }
 
+    let pin: { lat: number; lng: number } | null = null;
+    if (lat !== undefined || lng !== undefined) {
+      const check = checkVendorLocation(lat, lng);
+      if (!check.ok) return res.status(400).json({ success: false, field: check.field, message: check.message });
+      pin = { lat: check.lat, lng: check.lng };
+    }
+
     const createdVendor = await prisma.vendor.create({
       data: {
         name: name.trim(),
         category: category || 'North Indian • Campus Dhaba',
         address: address || 'Ashta Highway, near VIT Bhopal',
-        lat: typeof lat === 'number' ? lat : 23.0768,
-        lng: typeof lng === 'number' ? lng : 76.8524,
+        lat: pin ? pin.lat : 23.0768,
+        lng: pin ? pin.lng : 76.8524,
         bannerImage: bannerImage || 'https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=600',
         isAcceptingOrders: true,
       },
@@ -601,6 +638,22 @@ apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: Authen
     return res.status(201).json({ success: true, message: 'Vendor onboarded successfully', data: createdVendor });
   } catch (err: any) {
     return fail(res, err, 'Error onboarding vendor');
+  }
+});
+
+// ADMIN: set a restaurant's map pin (Docs/19). Numbers only, real ranges, within 3 km of the campus centre; audit-logged.
+apiRouter.patch('/admin/vendors/:id/location', requireAuth, requireRole('ADMIN'), validParams('id'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const check = checkVendorLocation(body.lat, body.lng);
+    if (!check.ok) return res.status(400).json({ success: false, field: check.field, message: check.message });
+    const existing = await prisma.vendor.findUnique({ where: { id: req.params.id }, select: { id: true, name: true } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Vendor not found' });
+    const updated = await prisma.vendor.update({ where: { id: existing.id }, data: { lat: check.lat, lng: check.lng }, select: { id: true, name: true, lat: true, lng: true } });
+    await writeAudit('VENDOR_LOCATION_SET', 'VENDOR', updated.id, `Admin set the map location of ${updated.name} to ${check.lat.toFixed(6)}, ${check.lng.toFixed(6)}`);
+    return res.json({ success: true, data: { ...updated, hasLocation: vendorHasLocation(updated.lat, updated.lng) } });
+  } catch (err: any) {
+    return fail(res, err, 'Error setting the vendor location');
   }
 });
 

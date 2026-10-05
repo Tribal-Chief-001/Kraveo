@@ -57,7 +57,7 @@ model User {
   isStudent    Boolean?
   name         String
   role         Role     @default(STUDENT)
-  hostelBlock  String?  @default("Boys Hostel Block 1")
+  hostelBlock  String?
   kraveoCoins  Int      @default(0)
   upiId        String?
   fcmToken     String?

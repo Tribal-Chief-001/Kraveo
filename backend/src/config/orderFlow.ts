@@ -51,11 +51,4 @@ export const DELIVERY_STUCK_ALERT_MIN = 60;
 export const RIDER_PICKUP_ALERT_MIN = 15;
 export const REFUND_PENDING_ALERT_MIN = 5;
 
-/**
- * Campus drop points. The customer app shows `Block 1`..`Block 6`, `Girls Gate 1/2`, `VIT Main Gate`
- * (apps/customer_app/lib/widgets/ui/hostel_pill.dart); older app builds and profiles used the long
- * `Boys Hostel Block N` / `Girls Hostel Gate N` names. The server accepts the union (same as the
- * profile HOSTEL_RE in routes/api.ts).
- */
-export const DROP_POINTS = ['Block 1', 'Block 2', 'Block 3', 'Block 4', 'Block 5', 'Block 6', 'Girls Gate 1', 'Girls Gate 2', 'VIT Main Gate'];
-export const DROP_POINT_RE = /^(Block [1-6]|Girls Gate [12]|VIT Main Gate|Boys Hostel Block [1-6]|Girls Hostel Gate [12])$/;
+// Campus drop points moved to ./campus.ts (Docs/19_campus_maps_contract.md): normalizeDropPoint() replaces the old regexes.

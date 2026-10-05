@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { dropoffView, vendorHasLocation } from '../config/campus';
 import { paymentWindowMin, vendorAcceptWindowMin } from '../config/orderFlow';
 
 /**
@@ -57,6 +58,8 @@ const buildView = (o: OrderWithRelations) => ({
   taxAndPackaging: o.taxAndPackaging,
   discount: o.discount,
   dropoffHostel: o.dropoffHostel,
+  // Docs/19: the canonical drop point with its pin; null for stored text that is not a drop point (very old data). Same visibility as dropoffHostel.
+  dropoff: dropoffView(o.dropoffHostel),
   dropoffNotes: (o.dropoffNotes ?? null) as string | null,
   createdAt: o.createdAt.toISOString(),
   updatedAt: o.updatedAt.toISOString(),
@@ -69,7 +72,7 @@ const buildView = (o: OrderWithRelations) => ({
   cancelReason: (o.cancelReason ?? null) as string | null,
   items: o.items.map((i) => ({ id: i.id, menuItemId: i.menuItemId ?? null, name: i.name, quantity: i.quantity, price: i.price })),
   vendorId: o.vendorId,
-  vendor: { id: o.vendor.id, name: o.vendor.name, address: o.vendor.address, lat: o.vendor.lat, lng: o.vendor.lng },
+  vendor: { id: o.vendor.id, name: o.vendor.name, address: o.vendor.address, lat: o.vendor.lat, lng: o.vendor.lng, hasLocation: vendorHasLocation(o.vendor.lat, o.vendor.lng) },
   customer: null as null | { id: string; name: string | null; phone: string | null; hostelBlock: string | null },
   driver: null as null | { id: string; name: string; phone: string | null },
   otpCode: null as string | null,
@@ -89,7 +92,7 @@ export function orderView(o: OrderWithRelations, viewerRole: ViewerRole | string
     case 'ADMIN': {
       return {
         ...buildView(o),
-        vendor: { id: o.vendor.id, name: o.vendor.name, address: o.vendor.address, lat: o.vendor.lat, lng: o.vendor.lng, phone: o.vendor.user?.phone ?? null },
+        vendor: { id: o.vendor.id, name: o.vendor.name, address: o.vendor.address, lat: o.vendor.lat, lng: o.vendor.lng, hasLocation: vendorHasLocation(o.vendor.lat, o.vendor.lng), phone: o.vendor.user?.phone ?? null },
         customer: { id: o.customer.id, name: o.customer.name, phone: o.customer.phone ?? null, hostelBlock: o.customer.hostelBlock ?? null },
         driver: driverOf(o),
         otpCode: realOtp(o.otpCode),

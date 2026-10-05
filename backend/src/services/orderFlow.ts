@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { createHmac, randomInt, timingSafeEqual } from 'crypto';
 import { prisma } from '../db';
 import { MAX_ACTIVE_ORDERS_PER_RIDER, MAX_UNPAID_OPEN_ORDERS, OTP_MAX_ATTEMPTS, paymentWindowMin } from '../config/orderFlow';
+import { normalizeDropPoint } from '../config/campus';
 import { ORDER_VIEW_INCLUDE, OrderWithRelations, ACTIVE_RIDER_STATUSES, isPoolEligible, isVendorVisible } from './orderView';
 import { publishOrderChange, getIo } from '../realtime';
 import { executeRefund, refundExtraPayment, runInBackground, ExtraRefundInput } from './refundService';
@@ -133,7 +134,9 @@ export type PlaceOrderInput = {
 
 /** Same checkout attempt = same request: vendor, items (by id and quantity), drop point, notes and coupon must all match. */
 const sameRequest = (o: OrderWithRelations, input: PlaceOrderInput): boolean => {
-  if (o.vendorId !== input.vendorId || o.dropoffHostel !== input.dropoffHostel) return false;
+  if (o.vendorId !== input.vendorId) return false;
+  // Compare canonical names: an order stored before the campus migration may still say `Block 2` for what is now `BH2`.
+  if ((normalizeDropPoint(o.dropoffHostel) ?? o.dropoffHostel) !== (normalizeDropPoint(input.dropoffHostel) ?? input.dropoffHostel)) return false;
   if ((o.dropoffNotes ?? '') !== (input.dropoffNotes ?? '')) return false;
   if ((o.couponCode ?? null) !== normaliseCoupon(input.couponCode)) return false;
   const want = new Map<string, number>();

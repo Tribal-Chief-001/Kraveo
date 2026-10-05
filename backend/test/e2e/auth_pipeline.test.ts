@@ -148,7 +148,7 @@ describe('Auth v2 (Google students, password partners)', () => {
       const c = await put({ hostelBlock: 'Block 3', avatarId: 7 });
       expect(c.status).toBe(200);
       expect(c.body.needsProfile).toBe(false);
-      expect(c.body.user).toMatchObject({ isStudent: true, hostelBlock: 'Block 3', avatarId: 7 });
+      expect(c.body.user).toMatchObject({ isStudent: true, hostelBlock: 'BH3', avatarId: 7 });
     });
 
     test('non-student path: hostel is cleared and not required', async () => {

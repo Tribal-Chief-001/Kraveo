@@ -4,9 +4,10 @@ import { prisma } from '../db';
 import { requireAuth, requireRole, AuthenticatedRequest } from '../middleware/auth';
 import { requireApprovedPartner } from './partners';
 import {
-  DROP_POINT_RE, POOL_LIMIT, RECENTLY_FINISHED_MIN, vendorAcceptWindowMin, READY_NO_RIDER_ALERT_MIN, DELIVERY_STUCK_ALERT_MIN, MAX_REFUND_ATTEMPTS,
+  POOL_LIMIT, RECENTLY_FINISHED_MIN, vendorAcceptWindowMin, READY_NO_RIDER_ALERT_MIN, DELIVERY_STUCK_ALERT_MIN, MAX_REFUND_ATTEMPTS,
   RIDER_PICKUP_ALERT_MIN, REFUND_PENDING_ALERT_MIN,
 } from '../config/orderFlow';
+import { normalizeDropPoint } from '../config/campus';
 import { orderView, ORDER_VIEW_INCLUDE, OrderWithRelations } from '../services/orderView';
 import {
   OrderFlowError, placeOrder, cancelOrder, advanceStatus, claimOrder, releaseOrder, reassignOrder, verifyGateOtp, resetOtpLock,
@@ -63,7 +64,9 @@ orderRouter.post('/orders', requireAuth, requireRole('STUDENT'), async (req: Aut
       const me = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { hostelBlock: true } });
       dropoffHostel = me?.hostelBlock ?? '';
     }
-    if (!DROP_POINT_RE.test(dropoffHostel)) return bad(res, 'Choose one of the campus drop points.', 'dropoffHostel');
+    const canonicalDropoff = normalizeDropPoint(dropoffHostel);
+    if (!canonicalDropoff) return bad(res, 'Choose one of the campus drop points.', 'dropoffHostel');
+    dropoffHostel = canonicalDropoff;
 
     const dropoffNotes = optionalReason(b.dropoffNotes, 300);
     if (dropoffNotes === false) return bad(res, 'Delivery notes can be at most 300 characters.', 'dropoffNotes');

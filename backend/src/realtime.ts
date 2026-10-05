@@ -194,7 +194,7 @@ export const publishOrderChange = async (order: OrderWithRelations, opts: { wasP
 };
 
 /**
- * Save a rider's position and forward it: `driver_location_update` to admins (dashboard map) and
+ * Save a rider's position and forward it: `driver_location_update` to admins (dashboard map, only while on duty) and
  * `rider_location` to the room of each order the rider is actively carrying, but only to the owning
  * customer's sockets and admin sockets in that room.
  * Throws { status, code, message } for the REST endpoint.
@@ -217,7 +217,11 @@ export const recordRiderLocation = async (riderUserId: string, lat: unknown, lng
   const io = ioRef;
   if (io) {
     try {
-      io.to('admins').emit('driver_location_update', loc);
+      // Docs/19: admins only see a rider's position while the rider is on duty (ONLINE, or IN_TRANSIT with an order).
+      // A fix that arrives after going OFFLINE is stored (above) but not broadcast to the dashboard.
+      if (driver.dutyStatus !== 'OFFLINE') {
+        io.to('admins').emit('driver_location_update', { ...loc, id: riderUserId, dutyStatus: driver.dutyStatus, approvalStatus: driver.approvalStatus });
+      }
       const active = await prisma.order.findMany({
         where: { driverId: riderUserId, status: { in: [...ACTIVE_RIDER_STATUSES] } },
         select: { id: true, customerId: true },
