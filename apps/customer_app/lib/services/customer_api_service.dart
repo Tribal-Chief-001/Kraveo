@@ -35,9 +35,9 @@ class CustomerApiService {
     return (c == null ? http.put(url, headers: headers, body: body) : c.put(url, headers: headers, body: body)).timeout(timeout);
   }
 
-  static Future<http.Response> _delete(Uri url, {Map<String, String>? headers, required Duration timeout}) {
+  static Future<http.Response> _delete(Uri url, {Map<String, String>? headers, Object? body, required Duration timeout}) {
     final c = httpClientOverride;
-    return (c == null ? http.delete(url, headers: headers) : c.delete(url, headers: headers)).timeout(timeout);
+    return (c == null ? http.delete(url, headers: headers, body: body) : c.delete(url, headers: headers, body: body)).timeout(timeout);
   }
 
   static Map<String, dynamic> _json(http.Response response) {
@@ -270,12 +270,15 @@ class CustomerApiService {
   /// Authenticated JSON request for the order/payment/review API (see `OrderApi`). Applies the
   /// Bearer token, the test client seam, a hard [timeout] and the central 401 handling (token
   /// cleared, [onUnauthorized] fired). Network failures and timeouts are thrown to the caller.
+  /// With [handleUnauthorized] false a 401 is returned as is (used by best-effort calls such as
+  /// removing the push token during sign-out, which must not start a second sign-out).
   static Future<http.Response> authorizedRequest(
     String method,
     String path, {
     Map<String, dynamic>? query,
     Object? body,
     Duration timeout = const Duration(seconds: 15),
+    bool handleUnauthorized = true,
   }) async {
     var uri = Uri.parse('${ApiConfig.baseUrl}$path');
     if (query != null && query.isNotEmpty) {
@@ -289,10 +292,12 @@ class CustomerApiService {
         response = await _get(uri, headers: headers, timeout: timeout);
       case 'POST':
         response = await _post(uri, headers: headers, body: encoded, timeout: timeout);
+      case 'DELETE':
+        response = await _delete(uri, headers: headers, body: encoded, timeout: timeout);
       default:
         throw ArgumentError.value(method, 'method');
     }
-    await _rejectIfUnauthorized(response);
+    if (handleUnauthorized) await _rejectIfUnauthorized(response);
     return response;
   }
 }

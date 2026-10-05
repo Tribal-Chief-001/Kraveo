@@ -20,6 +20,7 @@ import 'package:customer_app/widgets/ui/hostel_pill.dart';
 import 'package:customer_app/widgets/ui/phone_input.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:customer_app/config/app_info.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -996,8 +997,8 @@ void main() {
       expect(find.text('120'), findsOneWidget);
       expect(find.text('I\'m a student'), findsOneWidget);
       expect(find.text('Block 2'), findsOneWidget);
-      await tester.scrollUntilVisible(find.text('Kraveo v1.1.0'), 200, scrollable: find.byType(Scrollable).first);
-      expect(find.text('Kraveo v1.1.0'), findsOneWidget);
+      await tester.scrollUntilVisible(find.text('Kraveo v$kAppVersion'), 200, scrollable: find.byType(Scrollable).first);
+      expect(find.text('Kraveo v$kAppVersion'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 

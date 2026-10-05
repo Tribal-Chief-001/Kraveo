@@ -654,6 +654,9 @@ class OrderProvider with ChangeNotifier {
 
   bool get isPolling => _pollTimer != null;
 
+  /// Whether a tracking screen is currently showing [orderId] (used to avoid a duplicate push banner).
+  bool isWatching(String orderId) => _watchers.containsKey(orderId);
+
   Iterable<String> get _pollIds => _watchers.keys.where((id) => _orders[id]?.isTerminal != true);
 
   void _ensurePolling() {

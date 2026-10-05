@@ -87,6 +87,12 @@ class SessionProvider with ChangeNotifier {
   /// Called when the session ends for any reason (logout, deletion, expiry).
   VoidCallback? onSignedOut;
 
+  /// Awaited (for at most [beforeSignOutTimeout]) by [logout] while the saved token is still
+  /// valid, so the app can tell the backend to forget this phone's push token. Best effort:
+  /// failures and timeouts never block signing out.
+  Future<void> Function()? beforeSignOut;
+  static const Duration beforeSignOutTimeout = Duration(seconds: 5);
+
   /// Validates the saved token at app start.
   Future<void> restore() async {
     if (_status != SessionStatus.checking) {
@@ -214,6 +220,14 @@ class SessionProvider with ChangeNotifier {
   /// Ends the session now and tells the backend in the background.
   Future<void> logout() async {
     final token = await CustomerApiService.getSavedToken();
+    final before = beforeSignOut;
+    if (before != null) {
+      try {
+        await before().timeout(beforeSignOutTimeout);
+      } catch (e) {
+        debugPrint('[Session] before-sign-out hook failed (ignored): $e');
+      }
+    }
     unawaited(CustomerApiService.logout(token: token));
     await CustomerApiService.clearToken();
     _endSession();

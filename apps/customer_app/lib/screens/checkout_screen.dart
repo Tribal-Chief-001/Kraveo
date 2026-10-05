@@ -9,6 +9,7 @@ import '../providers/order_provider.dart';
 import '../providers/session_provider.dart';
 import '../services/order_api.dart';
 import '../widgets/coupon_box.dart';
+import '../widgets/push_permission.dart';
 import '../widgets/ui/bill_breakdown.dart';
 import '../widgets/ui/coins_toggle.dart';
 import '../widgets/ui/format.dart';
@@ -79,6 +80,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         _notice = 'You already placed this order. Complete the payment, or cancel it to change something.';
       }
     }
+    // Ask once (with a reason) whether to send order updates; no-op without push support.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) askForNotificationsOnce(context);
+    });
   }
 
   @override

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -8,22 +10,36 @@ import 'providers/order_provider.dart';
 import 'providers/session_provider.dart';
 import 'services/customer_api_service.dart';
 import 'services/google_auth_service.dart';
+import 'services/push/firebase_push.dart';
+import 'services/push/push_service.dart';
+import 'screens/live_tracking_screen.dart';
 import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/profile_setup_screen.dart';
 import 'widgets/ui/snack.dart';
 
 void main() {
-  runApp(const KraveoCustomerApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  // Push is an addition: the real Firebase layer starts after the first frame (AuthGate) and
+  // can fail without affecting anything else.
+  final push = PushService(
+    messaging: FirebasePushMessaging(),
+    local: PlatformLocalNotifier(),
+    settings: MethodChannelSystemSettings(),
+  );
+  runApp(KraveoCustomerApp(push: push));
 }
 
 class KraveoCustomerApp extends StatelessWidget {
   /// [googleAuth] and [createOrders] are test seams; the real Google layer and the real order
   /// backend are used when they are null.
-  const KraveoCustomerApp({super.key, this.googleAuth, this.createOrders});
+  const KraveoCustomerApp({super.key, this.googleAuth, this.createOrders, this.push});
 
   final GoogleAuthService? googleAuth;
   final OrderProvider Function()? createOrders;
+
+  /// Push notifications (Docs/18). Null (the default, used by tests) means no push at all.
+  final PushService? push;
 
   @override
   Widget build(BuildContext context) {
@@ -33,6 +49,7 @@ class KraveoCustomerApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => DhabaProvider()),
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => createOrders?.call() ?? OrderProvider()),
+        if (push != null) ChangeNotifierProvider<PushService>.value(value: push!),
       ],
       child: MaterialApp(
         title: 'Kraveo',
@@ -56,6 +73,11 @@ class AuthGate extends StatefulWidget {
 class _AuthGateState extends State<AuthGate> {
   late final SessionProvider _session = context.read<SessionProvider>();
 
+  /// Null when the app runs without push (tests, or no Firebase wiring).
+  late final PushService? _push = Provider.of<PushService?>(context, listen: false);
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () => unawaited(_push?.onAppResumed()));
+  bool _routingTap = false;
+
   @override
   void initState() {
     super.initState();
@@ -64,21 +86,86 @@ class _AuthGateState extends State<AuthGate> {
       // Restore this student's active order(s) and history from the server. A different
       // student than before wipes the previous one's orders first.
       context.read<OrderProvider>().beginSession(user.id);
+      unawaited(_push?.onSessionStarted(user.id));
     };
     _session.onSignedOut = _resetUserState;
+    _session.beforeSignOut = _push?.onSessionEnding;
     CustomerApiService.onUnauthorized = _handleUnauthorized;
+    _setUpPush();
     _session.restore();
+  }
+
+  void _setUpPush() {
+    final push = _push;
+    if (push == null) return;
+    _lifecycle; // start listening
+    final orders = context.read<OrderProvider>();
+    push.onOrderEvent = (p) {
+      // A push arrived while the app is open: refresh that order once through the normal path.
+      if (orders.userId != null) unawaited(orders.refreshOrder(p.orderId));
+    };
+    push.isOrderVisible = orders.isWatching;
+    push.addListener(_drainPendingTap);
+    // After the first frame, so Firebase start-up never delays the first paint.
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(push.start()));
+  }
+
+  /// Routes a tapped notification to its order once the student is signed in. A tap that
+  /// arrives signed out is dropped (the login screen is the right place to land).
+  void _drainPendingTap() {
+    final push = _push;
+    if (push == null || push.pendingTap == null || _routingTap) return;
+    switch (_session.status) {
+      case SessionStatus.checking:
+      case SessionStatus.unreachable:
+        return; // keep it; tried again when the session settles
+      case SessionStatus.signedOut:
+      case SessionStatus.needsProfile:
+        push.clearPendingTap();
+        return;
+      case SessionStatus.signedIn:
+        break;
+    }
+    final tap = push.takePendingTap();
+    if (tap == null) return;
+    _routingTap = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _routingTap = false;
+      if (!mounted || _session.status != SessionStatus.signedIn) return;
+      final navigator = Navigator.of(context);
+      final routeName = 'track:${tap.orderId}';
+      String? topName;
+      navigator.popUntil((route) {
+        topName = route.settings.name;
+        return true;
+      });
+      if (topName == routeName) return; // already showing it
+      navigator.popUntil((route) => route.isFirst);
+      navigator.push(MaterialPageRoute<void>(
+        settings: RouteSettings(name: routeName),
+        builder: (_) => LiveTrackingScreen(orderId: tap.orderId),
+      ));
+    });
   }
 
   @override
   void dispose() {
+    final push = _push;
+    if (push != null) {
+      push.removeListener(_drainPendingTap);
+      push.onOrderEvent = null;
+      push.isOrderVisible = null;
+      _lifecycle.dispose();
+    }
     _session.onUserLoaded = null;
     _session.onSignedOut = null;
+    _session.beforeSignOut = null;
     if (CustomerApiService.onUnauthorized == _handleUnauthorized) CustomerApiService.onUnauthorized = null;
     super.dispose();
   }
 
   void _resetUserState() {
+    _push?.onSignedOut();
     // Orders are dropped immediately (and in-flight answers ignored) so nothing of the previous
     // student can show up on the next account.
     context.read<OrderProvider>().resetForLogout(notify: false);
@@ -106,6 +193,7 @@ class _AuthGateState extends State<AuthGate> {
   @override
   Widget build(BuildContext context) {
     final session = context.watch<SessionProvider>();
+    if (_push?.pendingTap != null) WidgetsBinding.instance.addPostFrameCallback((_) => _drainPendingTap());
     switch (session.status) {
       case SessionStatus.checking:
         return const _SplashScreen();

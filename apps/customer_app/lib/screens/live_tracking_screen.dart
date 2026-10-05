@@ -10,6 +10,7 @@ import '../providers/order_provider.dart';
 import '../providers/session_provider.dart';
 import '../services/order_api.dart';
 import '../widgets/animated_rider_map.dart';
+import '../widgets/push_permission.dart';
 import '../widgets/review_modal.dart';
 import '../widgets/split_bill_modal.dart';
 import '../widgets/ui/format.dart';
@@ -222,6 +223,7 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
               ),
               const SizedBox(height: 10),
             ],
+            const NotificationsOffHint(),
             KReveal(child: _StatusHero(order: order, confirming: confirming)),
             const SizedBox(height: 14),
             if (order.awaitsPayment) ...[
