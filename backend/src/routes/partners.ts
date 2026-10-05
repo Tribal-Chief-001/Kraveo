@@ -8,6 +8,8 @@ import { recordSuccess } from '../services/loginLimiter';
 import { writeAudit as writeAuditLog } from '../services/audit';
 import { dropFromPartnerRooms, addToPartnerRooms } from '../realtime';
 import { errSummary } from '../utils/log';
+import { clientIp } from '../middleware/rateLimit';
+import { NAME_RE } from '../utils/names';
 import { validParams } from '../utils/http';
 import { disableUserTokens } from '../services/push/deviceTokens';
 import { checkVendorLocation } from '../config/campus';
@@ -20,7 +22,6 @@ import { vendorLocationView, checkAccuracy, devicePinData, describePin } from '.
  */
 export const partnerRouter = Router();
 
-const NAME_RE = /^[\p{L}][\p{L}\s.'\-]{1,59}$/u;
 const UPI_RE = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/;
 const FSSAI_RE = /^\d{14}$/;
 const VEHICLE_TYPES = ['Bike', 'Scooter', 'Cycle', 'On foot'];
@@ -63,19 +64,38 @@ const notApprovedMessage = (status: ApprovalStatus): string => {
   }
 };
 
-// In-memory sign-up throttle (single PM2 instance, like the login limiter): 3 tries per phone per hour, 80 per hour overall.
-const signupHits = new Map<string, number[]>();
-let globalHits: number[] = [];
+/**
+ * Sign-up throttle (in memory, single PM2 instance like the login limiter). RULE: only a sign-up that is actually
+ * being created counts. Validation failures never reach it (they are answered before), and a 409 "already registered"
+ * or a failed insert gives its slot back, so a presenter who rehearses the demo sign-up several times, or who tries a
+ * number that already exists, is never locked out. Limits on slots in use per hour:
+ *   - 3 per phone number   (a number that keeps being re-created, e.g. delete-and-sign-up loops),
+ *   - 10 per client IP     (one campus NAT may legitimately onboard a few partners; a script cannot spam from one address),
+ *   - 80 overall           (a backstop against a distributed flood filling the approval queue).
+ * Request VOLUME per IP (including the cheap 400/409 answers) is capped separately by AUTH_IP in middleware/rateLimit.ts.
+ */
+const signupByPhone = new Map<string, number[]>();
+const signupByIp = new Map<string, number[]>();
+let signupAll: number[] = [];
 const HOUR = 60 * 60 * 1000;
-export const __resetSignupLimiter = () => { signupHits.clear(); globalHits = []; };
-const allowSignup = (key: string, now = Date.now()): boolean => {
-  globalHits = globalHits.filter((t) => now - t < HOUR);
-  const mine = (signupHits.get(key) ?? []).filter((t) => now - t < HOUR);
-  if (globalHits.length >= 80 || mine.length >= 3) return false;
-  mine.push(now);
-  globalHits.push(now);
-  signupHits.set(key, mine);
-  return true;
+const SIGNUP_LIMITS = { phone: 3, ip: 10, all: 80 };
+export const __resetSignupLimiter = () => { signupByPhone.clear(); signupByIp.clear(); signupAll = []; };
+const recent = (list: number[] | undefined, now: number) => (list ?? []).filter((t) => now - t < HOUR);
+/** Takes a slot (returns a function that gives it back), or null when a limit is reached. */
+const reserveSignup = (phoneKey: string, ip: string, now = Date.now()): (() => void) | null => {
+  signupAll = recent(signupAll, now);
+  const byPhone = recent(signupByPhone.get(phoneKey), now);
+  const byIp = recent(signupByIp.get(ip), now);
+  if (signupAll.length >= SIGNUP_LIMITS.all || byPhone.length >= SIGNUP_LIMITS.phone || byIp.length >= SIGNUP_LIMITS.ip) return null;
+  signupAll.push(now); byPhone.push(now); byIp.push(now);
+  signupByPhone.set(phoneKey, byPhone); signupByIp.set(ip, byIp);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const drop = (list: number[] | undefined) => { const i = list ? list.indexOf(now) : -1; if (list && i >= 0) list.splice(i, 1); };
+    drop(signupAll); drop(signupByPhone.get(phoneKey)); drop(signupByIp.get(ip));
+  };
 };
 
 const newRunnerCode = async (): Promise<string> => {
@@ -175,6 +195,7 @@ const driverView = (d: any) => d && ({
 
 // Create a partner account. It starts PENDING; the app signs the person in so it can show the waiting screen.
 partnerRouter.post('/auth/partner-signup', async (req: Request, res: Response) => {
+  let releaseSlot: (() => void) | null = null; // gives the throttle slot back when no account ends up being created
   try {
     const b = req.body ?? {};
     const role = String(b.role || '').toUpperCase();
@@ -193,10 +214,12 @@ partnerRouter.post('/auth/partner-signup', async (req: Request, res: Response) =
     const location = role === 'VENDOR' ? signupLocation(b) : ({ ok: true, pin: null } as const);
     if (!location.ok) return bad(location.error);
 
-    if (!allowSignup(last10(phone))) {
+    releaseSlot = reserveSignup(last10(phone), clientIp(req));
+    if (!releaseSlot) {
       return res.status(429).json({ success: false, message: 'Too many sign-up attempts. Please try again in an hour.' });
     }
     if (await prisma.user.findFirst({ where: { phone: { endsWith: last10(phone) } }, select: { id: true } })) {
+      releaseSlot(); // an "already registered" answer is not a sign-up: it must not count against the visitor
       return res.status(409).json({ success: false, field: 'phone', message: 'This phone number already has an account. Try logging in.' });
     }
 
@@ -219,6 +242,7 @@ partnerRouter.post('/auth/partner-signup', async (req: Request, res: Response) =
       return { user, vendor: null, driver };
     });
 
+    releaseSlot = null; // the account exists: the slot stays used
     notifyAdmins(req, 'partner_application', {
       kind: role, id: (created.vendor ?? created.driver)!.id, name: created.user.name, phone: created.user.phone, appliedAt: now.toISOString(),
     });
@@ -233,6 +257,11 @@ partnerRouter.post('/auth/partner-signup', async (req: Request, res: Response) =
       ...(created.driver ? { driver: driverView(created.driver) } : {}),
     });
   } catch (err) {
+    releaseSlot?.(); // a failed insert (for example a lost race on the unique phone) is not a sign-up either
+    if ((err as any)?.code === 'P2002') {
+      // Two sign-ups with the same phone at the same moment: the other one won. Same answer as the duplicate check above.
+      return res.status(409).json({ success: false, field: 'phone', message: 'This phone number already has an account. Try logging in.' });
+    }
     console.error('partner-signup failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }

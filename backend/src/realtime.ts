@@ -1,4 +1,5 @@
 import { errSummary } from './utils/log';
+import { SlidingWindow } from './middleware/rateLimit';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { prisma } from './db';
 import { verifyTokenForAccount } from './middleware/auth';
@@ -21,6 +22,32 @@ let ioRef: SocketIOServer | null = null;
 export const getIo = () => ioRef;
 
 type SocketUser = { id: string; role: string };
+
+/**
+ * join_room limits, per socket. Every order_<id> join runs a database query with all relations, so a loop of joins is a
+ * cheap way to load the server. Sized from the three apps (the socket services of the customer, restaurant and rider apps):
+ * they join ONE room per active order, again after every reconnect (a NEW socket, so a fresh budget), and retry a refused
+ * join on their next poll/sync (every ~15 s). A customer or rider has a handful of active orders, so
+ * 30 joins per minute is several times what a legitimate client emits, while a flood is cut off quickly.
+ * The apps never emit leave_room, so a long-lived rider socket would keep every finished order room: instead of refusing
+ * a join at the cap, the OLDEST order room is dropped (finished orders are the oldest), keeping at most 10 order rooms.
+ */
+export const JOIN_LIMIT = { max: 30, windowMs: 60_000 };
+export const MAX_ORDER_ROOMS_PER_SOCKET = 10;
+const joinWindows = new SlidingWindow();
+
+/** Registers a successful order_<id> join on the socket and drops the oldest order room when over the cap. */
+const trackOrderRoom = (socket: Socket, room: string) => {
+  const rooms: string[] = (socket.data.orderRooms as string[] | undefined) ?? [];
+  const at = rooms.indexOf(room);
+  if (at >= 0) rooms.splice(at, 1);
+  rooms.push(room);
+  while (rooms.length > MAX_ORDER_ROOMS_PER_SOCKET) {
+    const oldest = rooms.shift()!;
+    socket.leave(oldest);
+  }
+  socket.data.orderRooms = rooms;
+};
 const ORDER_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 const isApprovedRider = async (userId: string) => {
@@ -92,13 +119,23 @@ export const attachRealtime = (io: SocketIOServer) => {
   io.on('connection', (socket: Socket) => {
     const user = socket.data.user as SocketUser;
     socket.join(socket.data.autoRooms as string[]);
+    socket.on('disconnect', () => joinWindows.delete(socket.id));
 
     // join_room(room, ack?) -> ack({ ok }) so a client knows when it is actually subscribed.
     socket.on('join_room', async (room: unknown, ack?: unknown) => {
       let ok = false;
+      const allowed = joinWindows.hit(socket.id, JOIN_LIMIT.max, JOIN_LIMIT.windowMs);
+      if (!allowed.ok) {
+        // Polite refusal, no database work. The apps treat {ok:false} as "not joined" and keep polling over REST.
+        if (typeof ack === 'function') ack({ ok: false, code: 'RATE_LIMITED', message: 'Too many room requests. Please wait a minute.', retryAfterSeconds: allowed.retryAfterSeconds });
+        return;
+      }
       try {
         if (typeof room === 'string' && room.length <= 100) ok = await canJoin(room, user);
-        if (ok) socket.join(room as string);
+        if (ok) {
+          socket.join(room as string);
+          if ((room as string).startsWith('order_')) trackOrderRoom(socket, room as string);
+        }
       } catch (err) {
         console.error('join_room failed:', errSummary(err));
         ok = false;

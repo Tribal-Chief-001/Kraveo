@@ -369,9 +369,18 @@ describe('Lifecycle journeys', () => {
       expect(wc.last('order_updated', id)).toMatchObject({ paymentStatus: 'FAILED' });
       expect((await api.get(v1, id)).status).toBe(404);
       expect(wv.count('order_updated', id) + wv.count('new_order_alert', id) + wr.count('order_available', id)).toBe(0);
-      // A FAILED order still counts towards the 3 unpaid limit.
-      await api.place(c1, v1); await api.place(c1, v1);
-      expect((await api.place(c1, v1)).status).toBe(429);
+      // A FAILED order still counts towards the 3 unpaid limit. (Bug hunt BE1-01: a new checkout at the SAME restaurant replaces an
+      // abandoned or failed order, so the two other open orders are at the other restaurant, each with a payment just opened.)
+      const v2 = W.vendors[1];
+      for (let i = 0; i < 2; i++) {
+        await prisma.order.create({
+          data: {
+            customerId: c1.id, vendorId: v2.vendorId, subtotal: 90, deliveryFee: 25, taxAndPackaging: 15, discount: 0, totalAmount: 130, dropoffHostel: 'BH2', status: 'PLACED', paymentStatus: 'PENDING',
+            payments: { create: { razorpayOrderId: `rzp_filler_${randomUUID()}`, amount: 130, status: 'PENDING' } },
+          },
+        });
+      }
+      expect((await api.place(c1, v2)).status).toBe(429);
       // Retry: same Razorpay order, second attempt succeeds.
       const again = await api.createPayment(c1, id);
       expect(again.body.razorpayOrderId).toBe(rzp);

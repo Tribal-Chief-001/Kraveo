@@ -282,8 +282,11 @@ describe('Backend hardening', () => {
       expect([u.kraveoCoins, u.kraveo20Redeemed]).toEqual([0, 2]);
       expect((await request.post('/api/coupons/redeem-coins').set(bearer(W.riders[0].token)).send({})).status).toBe(403);
       expect((await request.post('/api/coupons/redeem-coins').send({})).status).toBe(401);
+      // (Bug hunt BE1-01: an abandoned checkout is replaced by the next one, so each order gets a payment in flight to stay "live".)
       const a = await api.place(c1, v1, { couponCode: 'KRAVEO20' });
+      expect((await api.createPayment(c1, a.body.data.id)).status).toBe(200);
       const b = await api.place(c1, v1, { couponCode: 'KRAVEO20' });
+      expect((await api.createPayment(c1, b.body.data.id)).status).toBe(200);
       const c = await api.place(c1, v1, { couponCode: 'KRAVEO20' });
       expect([a.status, b.status, c.status]).toEqual([201, 201, 400]);
       expect(c.body.code).toBe('COUPON_NOT_APPLICABLE');

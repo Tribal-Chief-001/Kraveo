@@ -9,6 +9,8 @@ import { rateLimitMiddleware, FailureLimiter, clientIp } from '../middleware/rat
 import { DROP_POINTS, CAMPUS_CENTER, normalizeDropPoint, checkVendorLocation, vendorHasLocation } from '../config/campus';
 import { fail, validParams, ID_RE } from '../utils/http';
 import { errSummary } from '../utils/log';
+import { NAME_RE } from '../utils/names';
+import { startOfIstDay, istHour } from '../utils/time';
 import { dropFromPartnerRooms } from '../realtime';
 import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem } from '../utils/catalog';
 import { verifyGoogleIdToken, GoogleAuthError } from '../services/googleAuth';
@@ -135,7 +137,6 @@ apiRouter.get('/drivers/:id', requireAuth, requireRole('DRIVER', 'ADMIN'), valid
 // AUTH: students sign in with Google, partners with phone + password (contract: Docs/15_auth_v2_contract.md)
 // ----------------------------------------------------
 const PLACEHOLDER_NAMES = new Set(['VIT Student', 'Dhaba Owner', 'Delivery Partner']);
-const NAME_RE = /^[\p{L}][\p{L}\s.'\-]{1,59}$/u;
 const UPI_RE = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/;
 const AVATAR_COUNT = 15;
 
@@ -371,7 +372,7 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthenticatedRequest, re
 
     if (name !== undefined) {
       const cleaned = String(name).trim().replace(/\s+/g, ' ');
-      if (!NAME_RE.test(cleaned) || PLACEHOLDER_NAMES.has(cleaned)) return bad('name', 'Enter your full name (2-60 letters).');
+      if (!NAME_RE.test(cleaned) || PLACEHOLDER_NAMES.has(cleaned)) return bad('name', 'Enter your full name (2 to 60 characters, no symbols).');
       updateData.name = cleaned;
     }
     if (avatarId !== undefined) {
@@ -759,13 +760,12 @@ apiRouter.get('/analytics', requireAuth, requireRole('ADMIN'), async (req: Authe
   try {
     const range = req.query.range === 'today' || req.query.range === '30d' ? req.query.range : '7d';
     const now = new Date();
-    const from = new Date(now);
-    if (range === 'today') from.setHours(0, 0, 0, 0);
-    else from.setDate(from.getDate() - (range === '30d' ? 30 : 7));
+    // "Today" starts at midnight Asia/Kolkata, whatever time zone the server runs in (utils/time.ts).
+    const from = range === 'today' ? startOfIstDay(now) : new Date(now.getTime() - (range === '30d' ? 30 : 7) * 24 * 60 * 60 * 1000);
 
     const orders = await prisma.order.findMany({
       where: { createdAt: { gte: from, lte: now } },
-      select: { totalAmount: true, paymentStatus: true, status: true, customerId: true, dropoffHostel: true, createdAt: true, updatedAt: true, vendor: { select: { name: true } } }
+      select: { totalAmount: true, paymentStatus: true, status: true, customerId: true, dropoffHostel: true, createdAt: true, deliveredAt: true, vendor: { select: { name: true } } }
     });
     const completed = orders.filter((order) => order.status === 'DELIVERED');
     const paid = orders.filter((order) => order.paymentStatus === 'PAID');
@@ -775,14 +775,16 @@ apiRouter.get('/analytics', requireAuth, requireRole('ADMIN'), async (req: Authe
     for (const order of orders) {
       if (order.status !== 'CANCELLED') {
         hostelTotals.set(order.dropoffHostel, (hostelTotals.get(order.dropoffHostel) || 0) + 1);
-        const hour = order.createdAt.getHours();
+        const hour = istHour(order.createdAt); // Asia/Kolkata clock hour, not the server's
         hourlyTotals.set(hour, (hourlyTotals.get(hour) || 0) + 1);
       }
       if (order.status === 'DELIVERED') vendorTotals.set(order.vendor.name, (vendorTotals.get(order.vendor.name) || 0) + 1);
     }
     const topVendor = [...vendorTotals.entries()].sort((a, b) => b[1] - a[1])[0];
-    const averageDeliveryMinutes = completed.length
-      ? completed.reduce((sum, order) => sum + Math.max(0, order.updatedAt.getTime() - order.createdAt.getTime()) / 60000, 0) / completed.length
+    // Order-to-door time: deliveredAt - createdAt. (updatedAt moves whenever the row is touched, e.g. by a later review.)
+    const timedDeliveries = completed.filter((order) => order.deliveredAt);
+    const averageDeliveryMinutes = timedDeliveries.length
+      ? timedDeliveries.reduce((sum, order) => sum + Math.max(0, order.deliveredAt!.getTime() - order.createdAt.getTime()) / 60000, 0) / timedDeliveries.length
       : 0;
     return res.json({
       success: true,
@@ -933,24 +935,12 @@ apiRouter.post('/reviews', requireAuth, requireRole('STUDENT'), async (req: Auth
         }
       }
 
-      // 4. Update Vendor Rating using Bayesian Aggregation Algorithm
-      let updatedVendor = null;
-      const vendor = await tx.vendor.findUnique({ where: { id: order.vendorId } });
-      if (vendor) {
-        const C = 10; // Prior weight constant
-        const m = 4.5; // Campus baseline rating
-        const currentTotalCount = vendor.totalRatingsCount || 50;
-        const newTotalCount = currentTotalCount + 1;
-        const ratingToUse = typeof driverRating === 'number' ? driverRating : 4.5;
-        const newRatingSum = (vendor.rating * currentTotalCount) + ratingToUse;
-        
-        // Bayesian Weighted Average Formula
-        const bayesianRating = parseFloat((((C * m) + newRatingSum) / (C + newTotalCount)).toFixed(2));
-        updatedVendor = await tx.vendor.update({
-          where: { id: vendor.id },
-          data: { rating: bayesianRating, totalRatingsCount: newTotalCount }
-        });
-      }
+      // 4. The restaurant's rating is NOT changed here. The single star value of this request (`driverRating`) is the RIDER's
+      // rating (the app shows it under "Your rider" with rider tags); the food is rated per dish (step 3). Feeding the rider's
+      // stars into the restaurant average made a good meal with a slow rider lower the restaurant, and the old Bayesian
+      // formula re-added its prior on every review so even all-5-star reviews pulled a 4.8 restaurant down. A restaurant
+      // rating needs its own input from the app; until then the stored value stays as it is.
+      const updatedVendor = await tx.vendor.findUnique({ where: { id: order.vendorId }, select: { rating: true } });
 
       // 5. Update Driver Partner Rating if driver is assigned
       if (order.driverId && typeof driverRating === 'number') {

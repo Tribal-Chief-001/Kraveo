@@ -6,8 +6,10 @@ import dotenv from 'dotenv';
 import { apiRouter } from './routes/api';
 import { attachRealtime } from './realtime';
 import { startOrderMaintenance } from './services/orderMaintenance';
+import { securityHeaders } from './middleware/securityHeaders';
 import { globalErrorHandler } from './middleware/errorHandler';
 import { assertRuntimeConfig } from './config/runtimeConfig';
+import { installProcessGuards } from './processGuards';
 import { initPushProvider, getPushProvider } from './services/push/provider';
 
 dotenv.config();
@@ -30,14 +32,8 @@ if (process.env.NODE_ENV !== 'test') {
   } catch { console.warn('push notifications are OFF: could not start the push provider.'); }
 }
 
-// Global Process Crash Protection
-process.on('uncaughtException', (err) => {
-  console.error('🔥 [Fatal Error Guarded] Uncaught Exception:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('⚠️ [Unhandled Promise Rejection Guarded]:', reason);
-});
+// Global process guards (src/processGuards.ts): uncaught exception -> log and exit(1) so PM2 restarts; unhandled rejection -> log and continue.
+const guards = installProcessGuards();
 
 const app = express();
 app.disable('x-powered-by');
@@ -74,6 +70,7 @@ const io = new SocketIOServer(server, {
 
 const PORT = process.env.PORT || 5000;
 
+app.use(securityHeaders);
 app.use(cors(corsOptions));
 app.use(express.json({
   verify: (req: any, res, buf) => {
@@ -110,10 +107,14 @@ app.use(globalErrorHandler);
 // Socket.io: token auth, server-checked rooms, per-viewer order events (src/realtime.ts).
 attachRealtime(io);
 
-// Order housekeeping every 60 s: expire unpaid orders, auto-cancel unaccepted paid orders, retry refunds.
-if (process.env.NODE_ENV !== 'test') startOrderMaintenance();
+// A failed listen (EADDRINUSE: a second instance, a restart before the old process freed the port) must not leave a
+// half-dead process that still runs the maintenance job: log and exit non-zero so PM2 retries.
+server.on('error', guards.onListenError);
 
 server.listen(PORT, () => {
   console.log(`🚀 Kraveo Backend Engine running on http://localhost:${PORT}`);
   console.log(`📡 WebSockets listening for real-time driver tracking & order alerts`);
+  // Order housekeeping every 60 s: expire unpaid orders, auto-cancel unaccepted paid orders, retry refunds.
+  // Started only once the port is really ours.
+  if (process.env.NODE_ENV !== 'test') startOrderMaintenance();
 });

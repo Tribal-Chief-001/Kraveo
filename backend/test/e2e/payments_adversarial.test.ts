@@ -678,6 +678,8 @@ describe('Payments adversarial audit', () => {
       const first = await place(tStudent, { couponCode: ' kraveo20 ' });
       expect([first.status, first.body.data.discount, first.body.data.totalAmount]).toEqual([201, 20, 200]);
       expect((await db(first.body.data.id)).couponCode).toBe('KRAVEO20');
+      // (Bug hunt BE1-01: an abandoned unpaid checkout is replaced by the next one; an order whose payment was just opened is "live" and keeps its code.)
+      expect((await createPayment(first.body.data.id)).status).toBe(200);
       const second = await place(tStudent, { couponCode: 'KRAVEO20' });
       expect([second.status, second.body.code]).toEqual([400, 'COUPON_NOT_APPLICABLE']);
       // Cancelling the order releases the redemption again.
@@ -688,6 +690,7 @@ describe('Payments adversarial audit', () => {
       // KRAVEO50: once per customer; below the minimum cart and unknown codes are refused (not silently ignored).
       const k50 = await place(tStudent, { couponCode: 'KRAVEO50' });
       expect([k50.status, k50.body.data.discount]).toEqual([201, 50]);
+      expect((await createPayment(k50.body.data.id)).status).toBe(200);
       const k50b = await place(tStudent, { couponCode: 'KRAVEO50' });
       expect([k50b.status, k50b.body.code]).toEqual([400, 'COUPON_NOT_APPLICABLE']);
       const small = await place(tStudent, { couponCode: 'KRAVEO50', items: [{ itemId: 'item-2', quantity: 1 }] });
@@ -708,6 +711,7 @@ describe('Payments adversarial audit', () => {
       const t1 = await mk(1);
       const a1 = await place(t1, { couponCode: 'VITFIRST' });
       expect([a1.status, a1.body.data.discount]).toEqual([201, 36]); // 20% of 180
+      expect((await createPayment(a1.body.data.id, t1)).status).toBe(200); // payment opened: the order is live (an abandoned one would be replaced, BE1-01)
       const a2 = await place(t1, { couponCode: 'VITFIRST' });
       expect([a2.status, a2.body.code]).toEqual([400, 'COUPON_NOT_APPLICABLE']);
       expect((await request.post(`/api/orders/${a1.body.data.id}/cancel`).set(H(t1)).send({})).status).toBe(200);
@@ -715,16 +719,19 @@ describe('Payments adversarial audit', () => {
       expect([a3.status, a3.body.data.discount]).toEqual([201, 36]);
       // b) a customer who already has an order (no coupon) is not a first-time customer
       const t2 = await mk(2);
-      expect((await place(t2)).status).toBe(201);
+      const first2 = await place(t2);
+      expect(first2.status).toBe(201);
+      expect((await createPayment(first2.body.data.id, t2)).status).toBe(200);
       const b = await place(t2, { couponCode: 'VITFIRST' });
       expect([b.status, b.body.code]).toEqual([400, 'COUPON_NOT_APPLICABLE']);
       expect(b.body.message).toMatch(/first order/);
       // c) concurrent checkouts with the same single-use code: exactly one wins
       const t3 = await mk(3);
       const race = await Promise.all(Array.from({ length: 6 }, () => place(t3, { couponCode: 'VITFIRST' })));
-      expect(race.filter((r) => r.status === 201)).toHaveLength(1);
-      expect(race.filter((r) => r.status !== 201).every((r) => r.status === 400 && r.body.code === 'COUPON_NOT_APPLICABLE')).toBe(true);
-      expect(await prisma.order.count({ where: { customerId: 'usr-adv-vit3', couponCode: 'VITFIRST' } })).toBe(1);
+      // Since BE1-01 each checkout replaces the previous abandoned one: all 6 are accepted, but only ONE order can hold the code at the end.
+      expect(race.every((r) => r.status === 201)).toBe(true);
+      expect(await prisma.order.count({ where: { customerId: 'usr-adv-vit3', couponCode: 'VITFIRST', status: { not: 'CANCELLED' } } })).toBe(1);
+      expect(await prisma.order.count({ where: { customerId: 'usr-adv-vit3', couponCode: 'VITFIRST', status: 'CANCELLED', cancelledBy: 'SYSTEM' } })).toBe(5);
     });
 
     test('PROVE: vendor menu prices are validated (negative, non-numeric, sub-paise, huge are 400) so an item cannot make an order cost less than its food', async () => {

@@ -87,11 +87,9 @@ describe('Partner approval pipeline', () => {
       expect(d.studentRegNo).toBeNull();
     });
 
-    test('same phone twice -> 409; the 4th attempt in an hour -> 429', async () => {
+    test('same phone twice -> 409, and 409 answers never use up the allowance (bug hunt BE2-04: only real sign-ups are throttled)', async () => {
       expect((await signup(vendorBody('9000000304'))).status).toBe(201);
-      expect((await signup(vendorBody('9000000304'))).status).toBe(409);
-      expect((await signup(vendorBody('9000000304'))).status).toBe(409);
-      expect((await signup(vendorBody('9000000304'))).status).toBe(429);
+      for (let i = 0; i < 5; i++) expect((await signup(vendorBody('9000000304'))).status).toBe(409);
     });
   });
 

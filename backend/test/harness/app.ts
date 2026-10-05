@@ -5,6 +5,7 @@ import cors from 'cors';
 import supertest from 'supertest';
 import { apiRouter } from '../../src/routes/api';
 import { attachRealtime } from '../../src/realtime';
+import { securityHeaders } from '../../src/middleware/securityHeaders';
 import { globalErrorHandler } from '../../src/middleware/errorHandler';
 
 export interface TestServerInstance {
@@ -28,6 +29,7 @@ export const createTestApp = (): { app: Express; server: http.Server; io: Socket
     },
   });
 
+  app.use(securityHeaders);
   app.use(cors());
   app.use(express.json({
     verify: (req: any, res, buf) => {

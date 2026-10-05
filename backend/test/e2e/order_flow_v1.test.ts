@@ -580,8 +580,14 @@ describe('Order flow v1', () => {
       const retry = await place(tStudent, { clientRequestId: key });
       expect(retry.status).toBe(200);
       expect(retry.body.data.id).toBe(first.body.data.id);
-      await place();
-      await place();
+      // Bug hunt BE1-01: an abandoned checkout (no payment on its way) is replaced by the next one, so the cap of 3 is
+      // exercised with orders that each have a Razorpay payment opened a moment ago (in flight).
+      expect((await createPayment(first.body.data.id)).status).toBe(200);
+      for (let i = 0; i < 2; i++) {
+        const next = await place();
+        expect(next.status).toBe(201);
+        expect((await createPayment(next.body.data.id)).status).toBe(200);
+      }
       const fourth = await place();
       expect(fourth.status).toBe(429);
       expect(fourth.body.code).toBe('TOO_MANY_UNPAID_ORDERS');

@@ -2,7 +2,7 @@ import { errSummary } from '../utils/log';
 import { Prisma } from '@prisma/client';
 import { createHmac, randomInt, timingSafeEqual } from 'crypto';
 import { prisma } from '../db';
-import { MAX_ACTIVE_ORDERS_PER_RIDER, MAX_UNPAID_OPEN_ORDERS, OTP_MAX_ATTEMPTS, paymentWindowMin } from '../config/orderFlow';
+import { MAX_ACTIVE_ORDERS_PER_RIDER, MAX_UNPAID_OPEN_ORDERS, OTP_MAX_ATTEMPTS, RECONCILE_MIN_AGE_MS, paymentWindowMin } from '../config/orderFlow';
 import { normalizeDropPoint } from '../config/campus';
 import { ORDER_VIEW_INCLUDE, OrderWithRelations, ACTIVE_RIDER_STATUSES, isPoolEligible, isVendorVisible } from './orderView';
 import { publishOrderChange, getIo } from '../realtime';
@@ -154,6 +154,20 @@ const sameRequest = (o: OrderWithRelations, input: PlaceOrderInput): boolean => 
 
 const mismatch = () => new OrderFlowError(409, 'CLIENT_REQUEST_MISMATCH', 'This checkout id was already used for a different order. Start a new checkout.');
 
+const REPLACED_REASON = 'Replaced by a newer order';
+
+/**
+ * An earlier checkout that was never paid and has no payment on its way: safe to cancel when the same customer starts a new
+ * checkout at the same restaurant. NEVER true for a PAID order, for any payment row that is PAID / REFUNDED or has a captured
+ * amount recorded (money may be at Razorpay), or for a Razorpay order opened less than RECONCILE_MIN_AGE_MS ago that has not
+ * failed (the customer may be in the UPI / card screen right now). A late capture on a superseded order is refunded by markOrderPaid.
+ */
+const isAbandonedCheckout = (o: OrderWithRelations, now = Date.now()): boolean =>
+  o.status === 'PLACED' &&
+  (o.paymentStatus === 'PENDING' || o.paymentStatus === 'FAILED') &&
+  !o.paidAt &&
+  o.payments.every((p) => p.status !== 'PAID' && p.status !== 'REFUNDED' && p.capturedAmountPaise == null && !(p.status === 'PENDING' && now - p.createdAt.getTime() < RECONCILE_MIN_AGE_MS));
+
 export const placeOrder = async (customerId: string, input: PlaceOrderInput): Promise<{ order: OrderWithRelations; replay: boolean }> => {
   const findReplay = () =>
     input.clientRequestId
@@ -181,12 +195,41 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
   // A coupon that was sent but gives nothing is an error the customer must see, not a silently ignored field.
   if (priced.couponProblem) throw new OrderFlowError(400, 'COUPON_NOT_APPLICABLE', priced.couponProblem, { field: 'couponCode' });
 
+  const replaced: ChangeResult[] = [];
   try {
-    const created = await prisma.$transaction(
-      async (tx) => {
+    const outcome = await prisma.$transaction(
+      async (tx): Promise<{ order: OrderWithRelations; replay: boolean }> => {
         // One checkout at a time per customer, so the unpaid-orders limit and single-use coupons cannot be raced.
         const locked = await tx.$queryRaw<{ deletedAt: Date | null }[]>`SELECT "deletedAt" FROM "User" WHERE "id" = ${customerId} FOR UPDATE`;
         if (locked.length === 0 || locked[0].deletedAt) throw new OrderFlowError(401, 'ACCOUNT_UNAVAILABLE', 'This account is no longer available. Please sign in again.');
+
+        // The same checkout again that overlapped the first request: that request has committed by now (we waited for the lock),
+        // so answer with its order instead of failing the coupon / unpaid-limit checks below against our own twin.
+        if (input.clientRequestId) {
+          const twin = await tx.order.findUnique({ where: { customerId_clientRequestId: { customerId, clientRequestId: input.clientRequestId } }, include: ORDER_VIEW_INCLUDE });
+          if (twin) {
+            if (!sameRequest(twin, input)) throw mismatch();
+            return { order: twin, replay: true };
+          }
+        }
+
+        // A new checkout replaces this customer's own abandoned, never-paid orders at the same restaurant, so their coupon and
+        // the unpaid-orders limit are free again (they used to stay locked until the 15-minute expiry). Only this customer's orders
+        // are looked at (customerId), each is re-checked under its row lock, and it goes through the normal cancel code.
+        const stale = await tx.order.findMany({
+          where: { customerId, vendorId: input.vendorId, status: 'PLACED', paymentStatus: { in: ['PENDING', 'FAILED'] }, paidAt: null },
+          select: { id: true },
+          orderBy: { createdAt: 'asc' },
+          take: 10,
+        });
+        for (const { id } of stale) {
+          await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE`;
+          const fresh = await tx.order.findUnique({ where: { id }, include: ORDER_VIEW_INCLUDE });
+          if (!fresh || fresh.customerId !== customerId) continue;
+          const r = await cancelInTx(tx, fresh, { id: 'system', role: 'SYSTEM' }, 'SYSTEM', REPLACED_REASON, { guard: (o) => isAbandonedCheckout(o) });
+          if (r.changed) replaced.push(r);
+        }
+
         if (priced.appliedCoupon) {
           const problem = await couponEligibilityProblem(tx, customerId, priced.appliedCoupon);
           if (problem) throw new OrderFlowError(400, 'COUPON_NOT_APPLICABLE', problem, { field: 'couponCode' });
@@ -197,7 +240,7 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
         if (unpaid >= MAX_UNPAID_OPEN_ORDERS) {
           throw new OrderFlowError(429, 'TOO_MANY_UNPAID_ORDERS', `You already have ${unpaid} unpaid orders. Pay for one or cancel it before placing another.`);
         }
-        return tx.order.create({
+        const created = await tx.order.create({
           data: {
             customerId,
             vendorId: input.vendorId,
@@ -216,12 +259,19 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
           },
           include: ORDER_VIEW_INCLUDE,
         });
+        return { order: created, replay: false };
       },
       { maxWait: 15_000, timeout: 30_000 },
     );
+    if (outcome.replay) return outcome;
+    // The replaced orders are cancelled for good only now that the new order is committed (a failed checkout rolled them back).
+    for (const r of replaced) {
+      await writeAudit('ORDER_CANCELLED', 'ORDER', r.order.id, `SYSTEM cancelled the order (PLACED, payment ${r.before.paymentStatus}): ${REPLACED_REASON}`);
+      await finishChange(r, { awaitRefund: false });
+    }
     // Unpaid: admins see it; the restaurant and riders do not (orderView filters them out anyway).
-    await publishOrderChange(created);
-    return { order: created, replay: false };
+    await publishOrderChange(outcome.order);
+    return outcome;
   } catch (err: any) {
     if (err?.code === 'P2002') {
       // Two identical requests raced: the other one created the order.
@@ -408,6 +458,49 @@ export const advanceStatus = async (orderId: string, actor: Actor, target: strin
 // ----------------------------------------------------------------------------
 // Cancellation (customer, restaurant reject, admin, system job)
 // ----------------------------------------------------------------------------
+/** The cancel decision and write, for an order whose row is already locked (shared by cancelOrder and the checkout "replace" step). */
+const cancelInTx = async (
+  tx: Tx,
+  order: OrderWithRelations,
+  actor: Actor,
+  by: CancelledBy,
+  reason: string,
+  opts: { guard?: (o: OrderWithRelations) => boolean },
+): Promise<ChangeResult & { skipped?: boolean }> => {
+  if (by === 'CUSTOMER') {
+    if (actor.role !== 'STUDENT' || order.customerId !== actor.id) throw notFound();
+    if (order.status === 'CANCELLED') return { order, before: order, changed: false };
+    if (order.status !== 'PLACED') throw new OrderFlowError(409, 'CANNOT_CANCEL', 'The restaurant has already accepted this order, so it can no longer be cancelled in the app. Please contact Kraveo support.');
+  } else if (by === 'VENDOR') {
+    if (order.vendor.userId !== actor.id || !isVendorVisible(order)) throw notFound();
+    if (order.status === 'CANCELLED') return { order, before: order, changed: false };
+    if (order.status !== 'PLACED') throw new OrderFlowError(409, 'CANNOT_REJECT', 'An accepted order cannot be rejected. Ask Kraveo support to cancel it.');
+    if (order.paymentStatus !== 'PAID') throw new OrderFlowError(409, 'PAYMENT_NOT_CONFIRMED', 'This order is not paid yet.');
+  } else if (by === 'ADMIN') {
+    if (order.status === 'CANCELLED') return { order, before: order, changed: false };
+    if (order.status === 'DELIVERED') throw new OrderFlowError(409, 'ORDER_CLOSED', 'A delivered order cannot be cancelled.');
+  } else {
+    // SYSTEM (maintenance job, checkout replacing an abandoned order): re-check the condition under the lock; anything else changed it first.
+    if (isTerminal(order.status) || (opts.guard && !opts.guard(order))) {
+      return { order, before: order, changed: false, skipped: true };
+    }
+  }
+
+  const paid = order.paymentStatus === 'PAID';
+  await tx.order.update({
+    where: { id: order.id },
+    data: {
+      status: 'CANCELLED',
+      cancelledAt: new Date(),
+      cancelledBy: by,
+      cancelReason: reason.slice(0, 200),
+      otpCode: null,
+      ...(paid ? { refundStatus: 'PENDING', refundError: null } : {}),
+    },
+  });
+  return { order: await reload(tx, order.id), before: order, changed: true, refundNeeded: paid };
+};
+
 export const cancelOrder = async (
   orderId: string,
   actor: Actor,
@@ -415,43 +508,8 @@ export const cancelOrder = async (
   reason: string,
   opts: { guard?: (o: OrderWithRelations) => boolean; awaitRefund?: boolean; deferRefund?: boolean } = {},
 ): Promise<{ order: OrderWithRelations; idempotent: boolean } | null> => {
-  let skipped = false;
-  const result = await withOrderLock(orderId, async (tx, order): Promise<ChangeResult> => {
-    if (by === 'CUSTOMER') {
-      if (actor.role !== 'STUDENT' || order.customerId !== actor.id) throw notFound();
-      if (order.status === 'CANCELLED') return { order, before: order, changed: false };
-      if (order.status !== 'PLACED') throw new OrderFlowError(409, 'CANNOT_CANCEL', 'The restaurant has already accepted this order, so it can no longer be cancelled in the app. Please contact Kraveo support.');
-    } else if (by === 'VENDOR') {
-      if (order.vendor.userId !== actor.id || !isVendorVisible(order)) throw notFound();
-      if (order.status === 'CANCELLED') return { order, before: order, changed: false };
-      if (order.status !== 'PLACED') throw new OrderFlowError(409, 'CANNOT_REJECT', 'An accepted order cannot be rejected. Ask Kraveo support to cancel it.');
-      if (order.paymentStatus !== 'PAID') throw new OrderFlowError(409, 'PAYMENT_NOT_CONFIRMED', 'This order is not paid yet.');
-    } else if (by === 'ADMIN') {
-      if (order.status === 'CANCELLED') return { order, before: order, changed: false };
-      if (order.status === 'DELIVERED') throw new OrderFlowError(409, 'ORDER_CLOSED', 'A delivered order cannot be cancelled.');
-    } else {
-      // SYSTEM (maintenance job): re-check the condition under the lock; anything else changed it first.
-      if (isTerminal(order.status) || (opts.guard && !opts.guard(order))) {
-        skipped = true;
-        return { order, before: order, changed: false };
-      }
-    }
-
-    const paid = order.paymentStatus === 'PAID';
-    await tx.order.update({
-      where: { id: order.id },
-      data: {
-        status: 'CANCELLED',
-        cancelledAt: new Date(),
-        cancelledBy: by,
-        cancelReason: reason.slice(0, 200),
-        otpCode: null,
-        ...(paid ? { refundStatus: 'PENDING', refundError: null } : {}),
-      },
-    });
-    return { order: await reload(tx, order.id), before: order, changed: true, refundNeeded: paid };
-  });
-  if (skipped) return null;
+  const result = await withOrderLock(orderId, (tx, order) => cancelInTx(tx, order, actor, by, reason, opts));
+  if (result.skipped) return null;
 
   if (result.changed && by !== 'CUSTOMER') {
     await writeAudit('ORDER_CANCELLED', 'ORDER', orderId, `${by} cancelled the order (${result.before.status}, payment ${result.before.paymentStatus})${reason ? `: ${reason}` : ''}`);

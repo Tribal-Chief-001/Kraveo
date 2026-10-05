@@ -43,6 +43,7 @@ export class SlidingWindow {
     for (const [k, v] of this.hits) if (!v.times.some((t) => now - t < v.windowMs)) this.hits.delete(k);
   }
   get size() { return this.hits.size; }
+  delete(key: string) { this.hits.delete(key); }
   reset() { this.hits.clear(); }
 }
 
@@ -79,26 +80,34 @@ type Rule = {
   scope: 'user' | 'ip';
   max: number;
   windowMs: number;
-  applies: (req: Request) => boolean;
+  /** `p` is the NORMALISED path (see normalizedPath): lower case, no duplicate or trailing slashes. */
+  applies: (req: Request, p: string) => boolean;
   message: string;
 };
 
+/**
+ * Express routes are case-insensitive and ignore a trailing slash, so `/orders/`, `/ORDERS` and `/orders//` reach the
+ * same handler as `/orders`. Every rule below therefore matches on this normalised form, never on `req.path` directly,
+ * otherwise a client could skip a limit just by changing the spelling of the URL.
+ */
+export const normalizedPath = (rawPath: string): string => (rawPath || '/').toLowerCase().replace(/\/{2,}/g, '/').replace(/\/+$/, '') || '/';
+
 const MIN = 60_000;
 const RULES: Rule[] = [
-  { name: 'ORDER_CREATE', scope: 'user', max: 8, windowMs: 10 * MIN, applies: (r) => r.method === 'POST' && r.path === '/orders', message: 'You are placing orders too fast. Please wait a few minutes.' },
+  { name: 'ORDER_CREATE', scope: 'user', max: 8, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/orders', message: 'You are placing orders too fast. Please wait a few minutes.' },
   {
     name: 'ORDER_CANCEL', scope: 'user', max: 5, windowMs: 10 * MIN,
-    applies: (r) => (r.method === 'POST' && /^\/orders\/[^/]+\/cancel\/?$/.test(r.path)) || (r.method === 'PATCH' && /^\/orders\/[^/]+\/status\/?$/.test(r.path) && r.body?.status === 'CANCELLED'),
+    applies: (r, p) => (r.method === 'POST' && /^\/orders\/[^/]+\/cancel$/.test(p)) || (r.method === 'PATCH' && /^\/orders\/[^/]+\/status$/.test(p) && r.body?.status === 'CANCELLED'),
     message: 'Too many cancellations. Please wait a few minutes.',
   },
-  { name: 'PAYMENT_CREATE', scope: 'user', max: 10, windowMs: 10 * MIN, applies: (r) => r.method === 'POST' && r.path === '/payments/create-order', message: 'Too many payment attempts. Please wait a few minutes.' },
+  { name: 'PAYMENT_CREATE', scope: 'user', max: 10, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/payments/create-order', message: 'Too many payment attempts. Please wait a few minutes.' },
   // Push device registration happens at app start / token refresh / logout: generous, but a loop cannot hammer the database.
-  { name: 'DEVICE_WRITE', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r) => (r.method === 'POST' || r.method === 'DELETE') && /^\/devices\/?$/.test(r.path), message: 'Too many device updates. Please wait a few minutes.' },
+  { name: 'DEVICE_WRITE', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => (r.method === 'POST' || r.method === 'DELETE') && /^\/devices$/.test(p), message: 'Too many device updates. Please wait a few minutes.' },
   // A restaurant re-detecting its pin: a few tries (GPS retries, a correction) per hour, not a loop.
-  { name: 'VENDOR_LOCATION', scope: 'user', max: 10, windowMs: 60 * MIN, applies: (r) => r.method === 'PUT' && /^\/partner\/vendor\/location\/?$/.test(r.path), message: 'You changed the location too many times. Please try again in an hour.' },
+  { name: 'VENDOR_LOCATION', scope: 'user', max: 10, windowMs: 60 * MIN, applies: (r, p) => r.method === 'PUT' && /^\/partner\/vendor\/location$/.test(p), message: 'You changed the location too many times. Please try again in an hour.' },
   {
     name: 'AUTH_IP', scope: 'ip', max: 60, windowMs: MIN,
-    applies: (r) => r.method === 'POST' && ['/auth/google', '/auth/partner-login', '/auth/admin-login', '/auth/partner-signup'].includes(r.path),
+    applies: (r, p) => r.method === 'POST' && ['/auth/google', '/auth/partner-login', '/auth/admin-login', '/auth/partner-signup'].includes(p),
     message: 'Too many requests from this network. Please try again in a minute.',
   },
 ];
@@ -133,8 +142,9 @@ const userKey = (req: Request): string | null => {
 };
 
 export const rateLimitMiddleware = (req: Request, res: Response, next: NextFunction) => {
+  const p = normalizedPath(req.path);
   for (const rule of RULES) {
-    if (!rule.applies(req)) continue;
+    if (!rule.applies(req, p)) continue;
     const limits = limitsOf(rule);
     if (!limits) continue;
     const who = rule.scope === 'user' ? userKey(req) : clientIp(req);
