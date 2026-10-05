@@ -29,6 +29,8 @@ Map<String, dynamic> orderJson({
   List<Map<String, dynamic>>? items,
   String refundStatus = 'NONE',
   bool isReviewed = false,
+  Map<String, dynamic>? dropoff,
+  bool? vendorHasLocation,
 }) {
   final created = createdAt ?? DateTime.now().toUtc().subtract(const Duration(minutes: 2));
   return {
@@ -57,7 +59,8 @@ Map<String, dynamic> orderJson({
           {'id': 'oi-2', 'menuItemId': 'm-paratha', 'name': 'Aloo Paratha', 'quantity': 1, 'price': 90.0},
         ],
     'vendorId': vendorId,
-    'vendor': {'id': vendorId, 'name': vendorName, 'address': 'Kothri', 'lat': 23.07, 'lng': 76.85},
+    'vendor': {'id': vendorId, 'name': vendorName, 'address': 'Kothri', 'lat': 23.07, 'lng': 76.85, if (vendorHasLocation != null) 'hasLocation': vendorHasLocation},
+    if (dropoff != null) 'dropoff': dropoff,
     'customer': {'id': 'u1', 'name': 'Aarav Sharma', 'phone': '+91 9876543210', 'hostelBlock': 'Block 2'},
     'driver': driver,
     if (otpCode != null) 'otpCode': otpCode,

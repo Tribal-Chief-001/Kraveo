@@ -5,6 +5,8 @@
 /// neutral values) but never fabricates data that would mislead the student.
 library;
 
+import 'drop_point.dart';
+
 /// Order status, one value per server status (contract 1.1).
 enum OrderProgressStatus {
   placed,
@@ -185,6 +187,25 @@ class RiderLocation {
   }
 }
 
+/// A point on the campus map: the drop point (`OrderView.dropoff`) or the restaurant pin.
+class OrderPlace {
+  const OrderPlace({required this.name, required this.lat, required this.lng});
+
+  final String name;
+  final double lat;
+  final double lng;
+
+  /// `{name, lat, lng}`; null when the server sent nothing usable (old backend, legacy value).
+  static OrderPlace? fromJson(Object? raw) {
+    final json = _map(raw);
+    if (json == null) return null;
+    final lat = _numOrNull(json['lat']);
+    final lng = _numOrNull(json['lng']);
+    if (lat == null || lng == null || lat.abs() > 90 || lng.abs() > 180) return null;
+    return OrderPlace(name: _str(json['name']) ?? '', lat: lat, lng: lng);
+  }
+}
+
 /// A server `OrderView`. Immutable: a newer server copy replaces it (see [isNewerThan]).
 class OrderModel {
   const OrderModel({
@@ -204,6 +225,10 @@ class OrderModel {
     required this.vendorId,
     required this.vendorName,
     this.vendorAddress,
+    this.vendorLat,
+    this.vendorLng,
+    this.vendorHasLocation = false,
+    this.dropoff,
     this.paidAt,
     this.acceptedAt,
     this.pickedUpAt,
@@ -245,6 +270,16 @@ class OrderModel {
   final String vendorId;
   final String vendorName;
   final String? vendorAddress;
+
+  /// The restaurant's pin. Only meaningful (and only drawn on the map) when [vendorHasLocation]:
+  /// an old server never sends the flag, and a placeholder pin is not a real location.
+  final double? vendorLat;
+  final double? vendorLng;
+  final bool vendorHasLocation;
+
+  /// `OrderView.dropoff`: the drop point with coordinates. Null from an old server or for a
+  /// stored value that cannot be normalised; use [dropoffPlace] to also try the local table.
+  final OrderPlace? dropoff;
   final OrderRider? rider;
 
   /// The gate OTP. Only ever non-null while [status] is `ARRIVED_AT_GATE` and the server sent it.
@@ -298,6 +333,10 @@ class OrderModel {
       vendorId: _str(json['vendorId']) ?? _str(vendor?['id']) ?? '',
       vendorName: _str(vendor?['name']) ?? 'Restaurant',
       vendorAddress: _str(vendor?['address']),
+      vendorLat: _numOrNull(vendor?['lat']),
+      vendorLng: _numOrNull(vendor?['lng']),
+      vendorHasLocation: vendor?['hasLocation'] == true && _numOrNull(vendor?['lat']) != null && _numOrNull(vendor?['lng']) != null,
+      dropoff: OrderPlace.fromJson(json['dropoff']),
       rider: OrderRider.fromJson(json['driver']),
       // Defence in depth: an OTP is only meaningful (and only shown) at the gate, and only if it
       // looks like the server's 4-digit code.
@@ -308,6 +347,18 @@ class OrderModel {
       isReviewed: json['isReviewed'] == true,
     );
   }
+
+  /// Where the order goes: the server's `dropoff` when present, else the app's own table of
+  /// drop points looked up by [dropoffHostel] (legacy spellings included). Null when unknown.
+  OrderPlace? get dropoffPlace {
+    final d = dropoff;
+    if (d != null) return d;
+    final p = dropPointByName(dropoffHostel);
+    return p == null ? null : OrderPlace(name: p.name, lat: p.lat, lng: p.lng);
+  }
+
+  /// The restaurant pin, only when the server says it is a real one.
+  OrderPlace? get vendorPlace => vendorHasLocation && vendorLat != null && vendorLng != null ? OrderPlace(name: vendorName, lat: vendorLat!, lng: vendorLng!) : null;
 
   bool get isTerminal => status.isTerminal;
   bool get isLive => !isTerminal;

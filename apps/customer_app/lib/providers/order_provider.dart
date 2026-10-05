@@ -50,9 +50,13 @@ class CheckoutDraft {
 }
 
 class _CheckoutAttempt {
-  _CheckoutAttempt(this.cartKey, this.clientRequestId);
+  _CheckoutAttempt(this.cartKey, this.clientRequestId, this.dropoffHostel);
   final String cartKey;
   final String clientRequestId;
+
+  /// The drop point this attempt was sent with. A request that has not produced an order yet
+  /// must not be retried with the same idempotency key for a different point.
+  final String dropoffHostel;
   String? orderId;
 }
 
@@ -134,6 +138,10 @@ class OrderProvider with ChangeNotifier {
   List<String> _historyIds = const [];
   final Map<String, DateTime> _locallyAddedAt = {};
   final Map<String, RiderLocation> _riderLocations = {};
+
+  /// One notifier per order so a rider fix repaints only the map that listens to it, not every
+  /// screen that listens to this provider (fixes arrive every few seconds).
+  final Map<String, ValueNotifier<RiderLocation?>> _riderNotifiers = {};
   final Set<String> _reviewed = {};
   final Map<String, DateTime> _paymentSubmittedAt = {};
 
@@ -218,6 +226,19 @@ class OrderProvider with ChangeNotifier {
   bool hasReviewed(String orderId) => _reviewed.contains(orderId) || (_orders[orderId]?.isReviewed ?? false);
   RiderLocation? riderLocation(String orderId) => _riderLocations[orderId];
 
+  /// The latest rider fix for [orderId] as a listenable. Changes do NOT notify this provider's
+  /// listeners (see [riderLocation] for a plain read).
+  ValueListenable<RiderLocation?> riderLocationListenable(String orderId) => _riderNotifiers.putIfAbsent(orderId, () => ValueNotifier<RiderLocation?>(_riderLocations[orderId]));
+
+  void _setRider(String orderId, RiderLocation? loc) {
+    if (loc == null) {
+      _riderLocations.remove(orderId);
+    } else {
+      _riderLocations[orderId] = loc;
+    }
+    _riderNotifiers[orderId]?.value = loc;
+  }
+
   /// Razorpay said "paid" recently and the server has not confirmed yet.
   bool isConfirmingPayment(String orderId) {
     final at = _paymentSubmittedAt[orderId];
@@ -280,6 +301,7 @@ class OrderProvider with ChangeNotifier {
     _historyIds = const [];
     _locallyAddedAt.clear();
     _riderLocations.clear();
+    _riderNotifiers.clear(); // (not reset in place: this may run mid-build)
     _reviewed.clear();
     _paymentSubmittedAt.clear();
     _activeLoading = false;
@@ -406,7 +428,7 @@ class OrderProvider with ChangeNotifier {
     if (current != null && !o.isNewerThan(current)) return current;
     _orders[o.id] = o;
     if (o.isPaid || o.isTerminal) _paymentSubmittedAt.remove(o.id);
-    if (o.isTerminal) _riderLocations.remove(o.id);
+    if (o.isTerminal) _setRider(o.id, null);
     return o;
   }
 
@@ -452,8 +474,11 @@ class OrderProvider with ChangeNotifier {
       if (existing != null && existing.isLive) return OrderResult.ok(existing);
       attempt = null; // that order is finished (expired / cancelled): a new order needs a new key
     }
+    if (attempt != null && attempt.orderId == null && attempt.dropoffHostel != draft.dropoffHostel) {
+      attempt = null; // no order exists yet and the drop point changed: a new key for the new point
+    }
     if (attempt == null || attempt.cartKey != draft.cartKey) {
-      attempt = _CheckoutAttempt(draft.cartKey, newClientRequestId());
+      attempt = _CheckoutAttempt(draft.cartKey, newClientRequestId(), draft.dropoffHostel);
     }
     _attempt = attempt;
     final gen = _generation;
@@ -775,8 +800,7 @@ class OrderProvider with ChangeNotifier {
     if (order == null || order.isTerminal || order.rider == null) return;
     // Only the rider assigned to this order (the server already filters; defence in depth).
     if (loc.driverId != null && loc.driverId != order.rider!.id) return;
-    _riderLocations[loc.orderId] = loc;
-    _notify();
+    _setRider(loc.orderId, loc);
   }
 
   // ---- plumbing ------------------------------------------------------------------------------

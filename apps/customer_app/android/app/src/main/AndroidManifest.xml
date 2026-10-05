@@ -1,7 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -9,13 +7,14 @@
     <application
         android:label="Kraveo"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true">
+        android:icon="@mipmap/ic_launcher">
 
-        <!-- Google Maps Platform API Key -->
+        <!-- Google Maps key, injected at build time from Gradle property MAPS_API_KEY or env
+             KRAVEO_MAPS_API_KEY (see app/build.gradle.kts). Never put a literal key here. Empty
+             when the build has no key: the app then shows its plain tracking map. -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyC_C0frKYl-mDTsCU-Wr-wW3uF3YDpeseQ"/>
+            android:value="${MAPS_API_KEY}"/>
 
         <activity
             android:name=".MainActivity"

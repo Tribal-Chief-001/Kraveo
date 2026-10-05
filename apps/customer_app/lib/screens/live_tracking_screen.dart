@@ -9,7 +9,8 @@ import '../providers/dhaba_provider.dart';
 import '../providers/order_provider.dart';
 import '../providers/session_provider.dart';
 import '../services/order_api.dart';
-import '../widgets/animated_rider_map.dart';
+import '../widgets/map/map_view.dart';
+import '../widgets/map/tracking_map.dart';
 import '../widgets/push_permission.dart';
 import '../widgets/review_modal.dart';
 import '../widgets/split_bill_modal.dart';
@@ -35,7 +36,11 @@ class LiveTrackingScreen extends StatefulWidget {
   /// Called from the empty state's button when this screen is a tab (so it can switch to Home).
   final VoidCallback? onExplore;
 
-  const LiveTrackingScreen({super.key, this.orderId, this.visible = true, this.onExplore});
+  /// Test seam: builds the real map. Null uses the production Google map (which stays out of the
+  /// way, showing the stylised map, whenever it is unavailable).
+  final MapViewFactory? mapFactory;
+
+  const LiveTrackingScreen({super.key, this.orderId, this.visible = true, this.onExplore, this.mapFactory});
 
   @override
   State<LiveTrackingScreen> createState() => _LiveTrackingScreenState();
@@ -250,11 +255,11 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
             else if (!order.awaitsPayment) ...[
               KReveal(
                 index: 2,
-                child: AnimatedRiderMap(
-                  status: status,
-                  hostel: order.dropoffHostel.isEmpty ? 'Campus gate' : order.dropoffHostel,
-                  dhabaName: order.vendorName,
-                  liveLocation: orders.riderLocation(order.id),
+                child: TrackingMap(
+                  key: ValueKey('tracking-map-${order.id}'),
+                  order: order,
+                  rider: orders.riderLocationListenable(order.id),
+                  factory: widget.mapFactory,
                 ),
               ),
               const SizedBox(height: 14),

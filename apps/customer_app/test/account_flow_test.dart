@@ -258,11 +258,12 @@ void main() {
     });
 
     test('legacy hostel names map onto the drop-off list', () {
-      expect(normalizeHostelBlock('Boys Hostel Block 3', kHostelBlocks), 'Block 3');
-      expect(normalizeHostelBlock('block 6', kHostelBlocks), 'Block 6');
-      expect(normalizeHostelBlock('Block 2', kHostelBlocks), 'Block 2');
-      expect(normalizeHostelBlock('girls hostel gate 2', kHostelBlocks), 'Girls Gate 2');
-      expect(normalizeHostelBlock('VIT Main Gate', kHostelBlocks), 'VIT Main Gate');
+      // Drop points are now BH1..BH8 / Special Block / GH1, GH2; the old spellings migrate.
+      expect(normalizeHostelBlock('Boys Hostel Block 3', kHostelBlocks), 'BH3');
+      expect(normalizeHostelBlock('block 6', kHostelBlocks), 'BH6');
+      expect(normalizeHostelBlock('Block 2', kHostelBlocks), 'BH2');
+      expect(normalizeHostelBlock('girls hostel gate 2', kHostelBlocks), 'GH2');
+      expect(normalizeHostelBlock('VIT Main Gate', kHostelBlocks), isNull, reason: 'removed: the student is asked to choose again');
       expect(normalizeHostelBlock('Block 42', kHostelBlocks), isNull);
       expect(normalizeHostelBlock('Somewhere else', kHostelBlocks), isNull);
       expect(normalizeHostelBlock(null, kHostelBlocks), isNull);
@@ -581,15 +582,15 @@ void main() {
       final s = newSession();
       await s.signInWithGoogle();
       expect(s.deliveryPoint, isNull);
-      final r = await s.changeHostel('Block 5');
+      final r = await s.changeHostel('BH5');
       expect(r.success, isTrue);
-      expect(s.deliveryPoint, 'Block 5');
+      expect(s.deliveryPoint, 'BH5');
       expect(backend.to('PUT /auth/profile'), isEmpty, reason: 'the server keeps no hostel for non-students');
       await s.logout();
       expect(s.deliveryPoint, isNull, reason: 'cleared with the session');
 
       final student = newSession()..beginForTest(userJson());
-      expect(student.deliveryPoint, 'Block 2');
+      expect(student.deliveryPoint, 'BH2');
     });
   });
 
@@ -751,18 +752,18 @@ void main() {
       expect(find.text('Pick your block to continue.'), findsOneWidget);
       expect(isDisabled(tester, 'Continue'), isTrue, reason: 'Yes needs a hostel block');
 
-      await chooseHostel(tester, 'Block 3');
-      expect(find.text('Block 3'), findsOneWidget);
+      await chooseHostel(tester, 'BH3');
+      expect(find.text('BH3'), findsOneWidget);
       expect(isDisabled(tester, 'Continue'), isFalse);
 
       await tester.tap(find.byKey(const ValueKey('student-no')));
       await settle(tester);
-      expect(find.text('Block 3'), findsNothing, reason: 'hostel field hides for No');
+      expect(find.text('BH3'), findsNothing, reason: 'hostel field hides for No');
       expect(isDisabled(tester, 'Continue'), isFalse, reason: 'No skips the hostel');
 
       await tester.tap(find.byKey(const ValueKey('student-yes')));
       await settle(tester);
-      expect(find.text('Block 3'), findsOneWidget, reason: 'the earlier hostel pick is remembered');
+      expect(find.text('BH3'), findsOneWidget, reason: 'the earlier hostel pick is remembered');
       expect(tester.takeException(), isNull);
     });
 
@@ -791,7 +792,7 @@ void main() {
       await fillStep1(tester, name: 'Riya Kapoor', phone: '9123456780');
       await tester.tap(find.byKey(const ValueKey('student-yes')));
       await settle(tester);
-      await chooseHostel(tester, 'Girls Gate 2');
+      await chooseHostel(tester, 'GH2');
       await tester.tap(find.text('Continue'));
       await settle(tester);
       await pickAvatar(tester, 11);
@@ -799,7 +800,7 @@ void main() {
       // Step 3 -> 2 (button) -> 1 (system back).
       await tester.tap(find.byIcon(LucideIcons.arrowLeft));
       await settle(tester);
-      expect(find.text('Girls Gate 2'), findsOneWidget);
+      expect(find.text('GH2'), findsOneWidget);
       expect(tester.widget<KButton>(find.widgetWithText(KButton, 'Continue')).onPressed, isNotNull);
       await tester.binding.handlePopRoute();
       await settle(tester);
@@ -810,7 +811,7 @@ void main() {
       // Forward again: everything is still selected.
       await tester.tap(find.text('Continue'));
       await settle(tester);
-      expect(find.text('Girls Gate 2'), findsOneWidget);
+      expect(find.text('GH2'), findsOneWidget);
       await tester.tap(find.text('Continue'));
       await settle(tester);
       expect(tester.widget<KAvatarPicker>(find.byType(KAvatarPicker)).selectedId, 11);
@@ -834,7 +835,7 @@ void main() {
       await fillStep1(tester, name: '  Aarav   Sharma ', phone: '+91 98765 43210');
       await tester.tap(find.byKey(const ValueKey('student-yes')));
       await settle(tester);
-      await chooseHostel(tester, 'Block 3');
+      await chooseHostel(tester, 'BH3');
       await tester.tap(find.text('Continue'));
       await settle(tester);
       expect(backend.to('PUT /auth/profile'), isEmpty, reason: 'nothing is saved until Finish');
@@ -843,13 +844,13 @@ void main() {
       await settle(tester);
 
       final put = backend.to('PUT /auth/profile').single;
-      expect(backend.bodyOf(put), {'name': 'Aarav Sharma', 'phone': '9876543210', 'isStudent': true, 'hostelBlock': 'Block 3', 'avatarId': 9});
+      expect(backend.bodyOf(put), {'name': 'Aarav Sharma', 'phone': '9876543210', 'isStudent': true, 'hostelBlock': 'BH3', 'avatarId': 9});
       expect(put.headers['Authorization'], 'Bearer jwt-setup');
       expect(server.putBodies, hasLength(1));
       expect(session.status, SessionStatus.signedIn);
       expect(session.user?.avatarId, 9);
       expect(session.user?.isStudent, isTrue);
-      expect(session.deliveryPoint, 'Block 3');
+      expect(session.deliveryPoint, 'BH3');
     });
 
     testWidgets('non-student path: hostel is skipped and not sent', (tester) async {
@@ -861,7 +862,7 @@ void main() {
       await fillStep1(tester);
       await tester.tap(find.byKey(const ValueKey('student-yes')));
       await settle(tester);
-      await chooseHostel(tester, 'Block 1'); // picked, then changed their mind
+      await chooseHostel(tester, 'BH1'); // picked, then changed their mind
       await tester.tap(find.byKey(const ValueKey('student-no')));
       await settle(tester);
       await tester.tap(find.text('Continue'));
@@ -938,7 +939,7 @@ void main() {
       expect(tester.widget<TextField>(find.byKey(const ValueKey('phone-field'))).controller!.text, '9123456780');
       await tester.tap(find.text('Continue'));
       await settle(tester);
-      expect(find.text('Block 4'), findsOneWidget);
+      expect(find.text('BH4'), findsOneWidget);
       await tester.tap(find.text('Continue'));
       await settle(tester);
       expect(tester.widget<KAvatarPicker>(find.byType(KAvatarPicker)).selectedId, isNull);
@@ -966,7 +967,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('student-yes')));
       await settle(tester);
       expect(tester.takeException(), isNull);
-      await chooseHostel(tester, 'VIT Main Gate');
+      await chooseHostel(tester, 'GH2');
       await tester.tap(find.text('Continue'));
       await settle(tester);
       expect(tester.takeException(), isNull);
@@ -996,7 +997,7 @@ void main() {
       expect(find.text('9876543210'), findsNothing);
       expect(find.text('120'), findsOneWidget);
       expect(find.text('I\'m a student'), findsOneWidget);
-      expect(find.text('Block 2'), findsOneWidget);
+      expect(find.text('BH2'), findsOneWidget);
       await tester.scrollUntilVisible(find.text('Kraveo v$kAppVersion'), 200, scrollable: find.byType(Scrollable).first);
       expect(find.text('Kraveo v$kAppVersion'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -1121,11 +1122,11 @@ void main() {
 
       await tapScrolled(tester, find.text('I\'m a student'));
       expect(find.text('Where should we deliver?'), findsOneWidget);
-      await tester.tap(find.text('Block 4'));
+      await tester.tap(find.text('BH4'));
       await settle(tester);
-      expect(server.putBodies.single, {'isStudent': true, 'hostelBlock': 'Block 4'});
+      expect(server.putBodies.single, {'isStudent': true, 'hostelBlock': 'BH4'});
       expect(session.user?.isStudent, isTrue);
-      expect(session.hostel, 'Block 4');
+      expect(session.hostel, 'BH4');
       expect(find.text('Hostel block'), findsOneWidget);
     });
 
@@ -1145,23 +1146,23 @@ void main() {
       final session = signedIn();
       await pumpWithProviders(tester, const ProfileScreen(), session: session);
 
-      await tapScrolled(tester, find.text('Block 2'));
-      await tester.tap(find.text('Block 5'));
+      await tapScrolled(tester, find.text('BH2'));
+      await tester.tap(find.text('BH5'));
       await settle(tester);
 
-      expect(server.putBodies.single, {'hostelBlock': 'Block 5'});
-      expect(session.selectedHostel, 'Block 5');
-      expect(find.text('Drop-off point set to Block 5'), findsOneWidget);
+      expect(server.putBodies.single, {'hostelBlock': 'BH5'});
+      expect(session.selectedHostel, 'BH5');
+      expect(find.text('Drop-off point set to BH5'), findsOneWidget);
     });
 
     testWidgets('a failed save reverts the hostel and says so', (tester) async {
       backend.on('PUT /auth/profile', (_) => reply(400, {'success': false, 'message': 'Pick a valid drop-off', 'field': 'hostelBlock'}));
       final session = signedIn();
       await pumpWithProviders(tester, const ProfileScreen(), session: session);
-      await tapScrolled(tester, find.text('Block 2'));
-      await tester.tap(find.text('Block 5'));
+      await tapScrolled(tester, find.text('BH2'));
+      await tester.tap(find.text('BH5'));
       await settle(tester);
-      expect(session.selectedHostel, 'Block 2');
+      expect(session.selectedHostel, 'BH2');
       expect(find.text('Pick a valid drop-off'), findsOneWidget);
     });
 
@@ -1293,12 +1294,12 @@ void main() {
       expect(find.text('Where should we deliver?'), findsOneWidget);
       expect(backend.requests, isEmpty);
 
-      await tester.tap(find.text('Block 6'));
+      await tester.tap(find.text('BH6'));
       await settle(tester);
       expect(find.text('Choose drop-off point'), findsNothing);
-      expect(find.text('Block 6'), findsOneWidget);
+      expect(find.text('BH6'), findsOneWidget);
       expect(find.textContaining('Pay ₹'), findsOneWidget);
-      expect(session.deliveryPoint, 'Block 6', reason: 'remembered for the next checkout this session');
+      expect(session.deliveryPoint, 'BH6', reason: 'remembered for the next checkout this session');
       expect(backend.requests, isEmpty, reason: 'a non-student\'s choice is never sent to the server');
       expect(tester.takeException(), isNull);
     });
@@ -1307,7 +1308,7 @@ void main() {
       final session = SessionProvider(initial: SessionStatus.checking, googleAuth: FakeGoogleAuth())..beginForTest(userJson());
       await pumpWithProviders(tester, const CheckoutScreen(selectedHostel: 'Block 2'), session: session, cart: cartWithItem());
       expect(find.text('Choose drop-off point'), findsNothing);
-      expect(find.text('Block 2'), findsOneWidget);
+      expect(find.text('BH2'), findsOneWidget);
       expect(find.textContaining('Pay ₹'), findsOneWidget);
     });
   });
@@ -1344,7 +1345,7 @@ void main() {
       await tester.pump();
       await tester.tap(find.text('Choose your hostel block'));
       await settle(tester);
-      await tester.tap(find.text('Block 3'));
+      await tester.tap(find.text('BH3'));
       await settle(tester);
       await tester.tap(find.text('Continue'));
       await settle(tester);
@@ -1357,7 +1358,7 @@ void main() {
 
       expect(server.putBodies, hasLength(1));
       expect(find.text('DELIVERING TO'), findsOneWidget);
-      expect(find.text('Block 3'), findsWidgets);
+      expect(find.text('BH3'), findsWidgets);
       expect(kAvatarWithId(5), findsWidgets, reason: 'greeting shows the chosen avatar');
       expect(google.signInCalls, 1);
     });
@@ -1371,7 +1372,7 @@ void main() {
       await tester.pump(const Duration(seconds: 5));
 
       expect(find.text('DELIVERING TO'), findsOneWidget);
-      expect(find.text('Block 3'), findsWidgets);
+      expect(find.text('BH3'), findsWidgets);
       expect(find.textContaining(', AARAV'), findsOneWidget);
       final ctx = tester.element(find.byType(Scaffold).first);
       expect(ctx.read<CartProvider>().userKraveoCoins, 120, reason: 'seeded from the backend');

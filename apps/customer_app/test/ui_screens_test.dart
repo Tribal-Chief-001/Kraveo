@@ -133,7 +133,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 800));
 
     expect(find.text('DELIVERING TO'), findsOneWidget);
-    expect(find.text('Block 1'), findsWidgets);
+    expect(find.text('BH1'), findsWidgets);
     expect(find.text('VITFIRST'), findsOneWidget);
     expect(find.text('Kitchens near campus'), findsOneWidget);
     expect(find.text('Home'), findsOneWidget);

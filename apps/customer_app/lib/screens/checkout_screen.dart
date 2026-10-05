@@ -8,7 +8,9 @@ import '../providers/dhaba_provider.dart';
 import '../providers/order_provider.dart';
 import '../providers/session_provider.dart';
 import '../services/order_api.dart';
+import '../models/drop_point.dart';
 import '../widgets/coupon_box.dart';
+import '../widgets/delivery_confirm_sheet.dart';
 import '../widgets/push_permission.dart';
 import '../widgets/ui/bill_breakdown.dart';
 import '../widgets/ui/coins_toggle.dart';
@@ -69,7 +71,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   @override
   void initState() {
     super.initState();
-    _currentHostel = widget.selectedHostel ?? context.read<SessionProvider>().deliveryPoint;
+    // Legacy spellings ("Block 2") become the canonical name; an unknown value (the removed
+    // "VIT Main Gate") means the student has to choose again.
+    _currentHostel = normalizeDropPoint(widget.selectedHostel ?? context.read<SessionProvider>().deliveryPoint);
     _deliveryNoteController.text = 'Call when reaching hostel gate';
     // Back in checkout with the same cart: show the unpaid order it already created.
     final cart = context.read<CartProvider>();
@@ -114,6 +118,19 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       return;
     }
     if (_orderId == null) {
+      // Once per payment attempt, before anything is created: confirm where the food goes.
+      // An order that already exists is just paid again (no sheet, no second order).
+      final current = _currentHostel;
+      if (current == null) {
+        _chooseDropoff();
+        return;
+      }
+      if (cart.dhabaId != null && cart.items.isNotEmpty) {
+        final confirmed = await showConfirmDeliveryPoint(context, current: current);
+        if (confirmed == null || !mounted) return; // cancelled: nothing placed, nothing charged
+        // Applies to this order only; the saved profile point is never changed here.
+        if (confirmed != _currentHostel) setState(() => _currentHostel = confirmed);
+      }
       final placed = await _placeOrder(cart, orders);
       if (placed == null) return;
     }
@@ -512,12 +529,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ),
         )
       else
-        HostelPill(
-          caption: 'DELIVER TO',
-          selectedHostel: chosen,
-          hostelBlocks: kHostelBlocks,
-          onChanged: _setDropoff,
-        ),
+        _DeliveringToRow(name: chosen, onChange: _chooseDropoff),
       const SizedBox(height: 12),
       Text(
         'Your runner meets you at the gate. After you pay you get a 4-digit OTP: share it only when they arrive.',
@@ -599,6 +611,46 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           );
         }),
     ]);
+  }
+}
+
+/// "Delivering to BH2 · Change": the point the order will go to.
+class _DeliveringToRow extends StatelessWidget {
+  const _DeliveringToRow({required this.name, required this.onChange});
+
+  final String name;
+  final VoidCallback onChange;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return KPressable(
+      onTap: onChange,
+      semanticLabel: 'Delivering to $name. Change delivery point',
+      child: ExcludeSemantics(
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 14, 10),
+          decoration: BoxDecoration(color: k.surfaceAlt, borderRadius: BorderRadius.circular(KRadius.lg)),
+          child: Row(children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(color: k.brandSoft, shape: BoxShape.circle),
+              child: Icon(LucideIcons.mapPin, size: 18, color: k.brand),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Delivering to', style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 0.4)),
+                Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink)),
+              ]),
+            ),
+            const SizedBox(width: 8),
+            Text('Change', style: KraveoType.label.copyWith(color: k.brand, fontSize: 14)),
+          ]),
+        ),
+      ),
+    );
   }
 }
 

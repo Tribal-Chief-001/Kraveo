@@ -96,6 +96,13 @@ Future<void> tapButton(WidgetTester tester, String label) async {
   await tester.pump();
   await tester.tap(f.first);
   await settle(tester);
+  // Pay on a not-yet-placed order first asks "Confirm your delivery point"; these tests are about
+  // what happens after that (the sheet itself is covered in campus_drop_points_test.dart).
+  final confirm = button('Confirm and pay');
+  if (confirm.evaluate().isNotEmpty) {
+    await tester.tap(confirm.first);
+    await settle(tester);
+  }
 }
 
 Future<void> scrollTo(WidgetTester tester, Finder f) async {

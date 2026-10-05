@@ -1,5 +1,7 @@
 import 'package:kraveo_ui/kraveo_ui.dart' show kAvatarCount;
 
+import 'drop_point.dart';
+
 /// The signed-in student, as returned by /auth/google and /auth/profile.
 class CustomerUser {
   const CustomerUser({
@@ -105,28 +107,9 @@ String maskIndianPhone(String raw) {
 }
 
 /// Maps whatever the backend has stored (including legacy free-text such as
-/// "Boys Hostel Block 3") onto one of [blocks]. Returns null when nothing sensible matches.
+/// "Boys Hostel Block 3" or "Block 3", which become `BH3`) onto one of [blocks]. Returns null
+/// when nothing sensible matches (for example the removed "VIT Main Gate").
 String? normalizeHostelBlock(String? raw, List<String> blocks) {
-  final value = raw?.trim() ?? '';
-  if (value.isEmpty) return null;
-  for (final b in blocks) {
-    if (b.toLowerCase() == value.toLowerCase()) return b;
-  }
-  final lower = value.toLowerCase();
-  final block = RegExp(r'block\s*[-#]?\s*(\d+)').firstMatch(lower);
-  if (block != null) {
-    final candidate = 'Block ${block.group(1)}';
-    if (blocks.contains(candidate)) return candidate;
-  }
-  final gate = RegExp(r'gate\s*[-#]?\s*(\d+)').firstMatch(lower);
-  if (gate != null && lower.contains('girl')) {
-    final candidate = 'Girls Gate ${gate.group(1)}';
-    if (blocks.contains(candidate)) return candidate;
-  }
-  if (lower.contains('main gate')) {
-    for (final b in blocks) {
-      if (b.toLowerCase().contains('main gate')) return b;
-    }
-  }
-  return null;
+  final canonical = normalizeDropPoint(raw);
+  return canonical != null && blocks.contains(canonical) ? canonical : null;
 }
