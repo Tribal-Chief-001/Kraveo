@@ -108,12 +108,11 @@ export const __resetPushProvider = () => {
 // ----------------------------------------------------------------------------
 export type PushErrorKind = { code: string; transient: boolean; deadToken: boolean };
 
-const DEAD = new Set(['UNREGISTERED', 'INVALID_ARGUMENT', 'SENDER_ID_MISMATCH']);
+const DEAD = new Set(['UNREGISTERED', 'INVALID_TOKEN', 'SENDER_ID_MISMATCH']);
 const TRANSIENT = new Set(['UNAVAILABLE', 'INTERNAL', 'QUOTA_EXCEEDED', 'TIMEOUT', 'NETWORK']);
 const ALIASES: Record<string, string> = {
   REGISTRATION_TOKEN_NOT_REGISTERED: 'UNREGISTERED',
-  INVALID_REGISTRATION_TOKEN: 'INVALID_ARGUMENT',
-  INVALID_PAYLOAD: 'INVALID_ARGUMENT',
+  INVALID_REGISTRATION_TOKEN: 'INVALID_TOKEN',
   MISMATCHED_CREDENTIAL: 'SENDER_ID_MISMATCH',
   SERVER_UNAVAILABLE: 'UNAVAILABLE',
   INTERNAL_ERROR: 'INTERNAL',
@@ -131,7 +130,8 @@ const ALIASES: Record<string, string> = {
 };
 
 /**
- * dead token  : UNREGISTERED / INVALID_ARGUMENT (invalid registration token) / SENDER_ID_MISMATCH -> disable the token, no retry.
+ * dead token  : UNREGISTERED / INVALID_TOKEN (INVALID_ARGUMENT whose message says registration token) / SENDER_ID_MISMATCH -> disable the token, no retry.
+ * INVALID_PAYLOAD (INVALID_ARGUMENT about the message itself) is permanent for that push but keeps the token.
  * transient   : UNAVAILABLE / INTERNAL / QUOTA_EXCEEDED / network / our own timeout -> retry with backoff.
  * anything else (an unrecognised FCM code) is a permanent failure of this message; an error without any code is treated as a network problem.
  */
@@ -140,6 +140,12 @@ export const classifyPushError = (err: unknown): PushErrorKind => {
   const rawCode = typeof e?.code === 'string' ? e.code : typeof e?.errorInfo?.code === 'string' ? e.errorInfo.code : '';
   if (!rawCode) return { code: 'NETWORK', transient: true, deadToken: false };
   const norm = rawCode.replace(/^(messaging|app)\//i, '').replace(/[-\s]/g, '_').toUpperCase();
-  const code = ALIASES[norm] ?? norm;
+  let code = ALIASES[norm] ?? norm;
+  // FCM answers INVALID_ARGUMENT both for a malformed device token ("not a valid FCM registration token") and for a malformed MESSAGE.
+  // Only the first means the device is gone; a message bug must never disable every device, so it is a permanent failure of this push only.
+  if (code === 'INVALID_ARGUMENT') {
+    const msg = String((err as { message?: unknown } | null | undefined)?.message ?? '');
+    code = /registration token/i.test(msg) ? 'INVALID_TOKEN' : 'INVALID_PAYLOAD';
+  }
   return { code: code.slice(0, 60), transient: TRANSIENT.has(code), deadToken: DEAD.has(code) };
 };

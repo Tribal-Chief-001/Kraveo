@@ -65,7 +65,7 @@ class FakeProvider implements PushProvider {
     return this.sent.filter((m) => m.data.orderId === orderId).map((m) => `${m.data.event}>${OWNER_OF[m.token]}`);
   }
 }
-const fcmError = (code: string) => Object.assign(new Error('fcm'), { code });
+const fcmError = (code: string, message = 'fcm') => Object.assign(new Error(message), { code });
 
 describe('Push notifications', () => {
   let server: TestServerInstance;
@@ -608,23 +608,34 @@ describe('Push notifications', () => {
     });
 
     test('a dead token is disabled at once and never retried; the other device still gets the push', async () => {
-      for (const code of ['messaging/registration-token-not-registered', 'messaging/invalid-registration-token', 'messaging/invalid-argument', 'SENDER_ID_MISMATCH']) {
+      for (const code of ['messaging/registration-token-not-registered', 'messaging/invalid-registration-token', 'messaging/invalid-argument:token', 'SENDER_ID_MISMATCH']) {
         await prisma.pushLog.deleteMany({});
         await prisma.deviceToken.deleteMany({});
         await registerAll();
         await prisma.deviceToken.create({ data: { userId: STUDENT.id, token: TOK.custB, app: 'CUSTOMER' } });
         fake.sent.length = 0;
-        fake.behaviour = (m) => { if (m.token === TOK.cust) throw fcmError(code); };
+        fake.behaviour = (m) => { if (m.token === TOK.cust) throw (code.endsWith(':token') ? fcmError('messaging/invalid-argument', 'The registration token is not a valid FCM registration token') : fcmError(code)); };
         const id = await placePaid();
         expect((await setStatus(id, 'ACCEPTED', tVendor)).status).toBe(200);
         await flush();
         const dead = await prisma.deviceToken.findUniqueOrThrow({ where: { token: TOK.cust } });
         expect(dead.disabledAt).not.toBeNull();
-        expect(dead.disabledReason).toMatch(/^(UNREGISTERED|INVALID_ARGUMENT|SENDER_ID_MISMATCH)$/);
+        expect(dead.disabledReason).toMatch(/^(UNREGISTERED|INVALID_TOKEN|SENDER_ID_MISMATCH)$/);
         expect((await prisma.deviceToken.findUniqueOrThrow({ where: { token: TOK.custB } })).disabledAt).toBeNull();
         expect(fake.to(id, 'ORDER_ACCEPTED').map((m) => m.token)).toEqual([TOK.custB]);
         expect((await logOf(id, 'ORDER_ACCEPTED'))[0].status).toBe('SENT');
       }
+    });
+
+    test('a MESSAGE problem (INVALID_ARGUMENT that is not about the token) fails that push only: the token stays enabled and nothing is retried', async () => {
+      await registerAll();
+      fake.behaviour = (m) => { if (m.token === TOK.cust) throw fcmError('messaging/invalid-argument', 'Invalid JSON payload received. Unknown name "foo"'); };
+      const id = await placePaid();
+      expect((await setStatus(id, 'ACCEPTED', tVendor)).status).toBe(200);
+      await flush();
+      expect(await logOf(id, 'ORDER_ACCEPTED')).toEqual([expect.objectContaining({ status: 'FAILED', lastError: 'INVALID_PAYLOAD', nextAttemptAt: null })]);
+      expect((await prisma.deviceToken.findUniqueOrThrow({ where: { token: TOK.cust } })).disabledAt).toBeNull();
+      expect(await retryDuePushes(new Date(Date.now() + 3600_000))).toBe(0);
     });
 
     test('only dead tokens: FAILED, nothing pending, and the next event skips the dead device', async () => {
