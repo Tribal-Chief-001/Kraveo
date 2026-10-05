@@ -4,4 +4,7 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Debug builds only: lets ApiConfig's local server (http://10.0.2.2:5000) work. Release
+         and profile traffic is https and the main manifest has no cleartext flag. -->
+    <application android:usesCleartextTraffic="true"/>
 </manifest>

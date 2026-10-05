@@ -5,6 +5,9 @@
 /// misconfigured server ever sent `otpCode` to a rider, the app would drop it while parsing.
 library;
 
+import 'drop_point.dart';
+import 'geo.dart';
+
 enum OrderStatus {
   placed,
   accepted,
@@ -79,11 +82,33 @@ class OrderItemView {
 }
 
 class VendorView {
-  const VendorView({this.id, required this.name, this.address, this.lat, this.lng});
+  const VendorView({this.id, required this.name, this.address, this.lat, this.lng, this.hasLocation = false});
   final String? id;
   final String name;
   final String? address;
   final double? lat, lng;
+
+  /// The server's word that [lat]/[lng] are a REAL pin (Docs/19). False while the vendor still
+  /// has the placeholder pin, and false when an older server does not send the flag at all: the
+  /// app never navigates to a coordinate the server did not vouch for.
+  final bool hasLocation;
+
+  /// The restaurant pin, only when [hasLocation] and the numbers are a valid coordinate.
+  GeoPoint? get point {
+    final la = lat, ln = lng;
+    if (!hasLocation || la == null || ln == null) return null;
+    final p = GeoPoint(la, ln);
+    return p.isValid ? p : null;
+  }
+}
+
+/// Where the order is delivered, as the server resolved it (Docs/19: `dropoff {name,lat,lng}`).
+class DropoffView {
+  const DropoffView({required this.name, required this.lat, required this.lng});
+  final String name;
+  final double lat, lng;
+
+  GeoPoint get point => GeoPoint(lat, lng);
 }
 
 class PersonView {
@@ -103,6 +128,7 @@ class OrderView {
     this.deliveryFee,
     this.dropoffHostel,
     this.dropoffNotes,
+    this.dropoff,
     this.createdAt,
     this.updatedAt,
     this.paidAt,
@@ -127,6 +153,10 @@ class OrderView {
   final double? deliveryFee;
   final String? dropoffHostel;
   final String? dropoffNotes;
+
+  /// The server's drop point with coordinates (additive; null for an older server or a stored
+  /// value it could not recognise).
+  final DropoffView? dropoff;
   final DateTime? createdAt, updatedAt, paidAt, acceptedAt, pickedUpAt, deliveredAt, cancelledAt;
 
   /// `CUSTOMER | VENDOR | ADMIN | SYSTEM`.
@@ -160,6 +190,17 @@ class OrderView {
     return 'Drop point not set';
   }
 
+  /// The drop point as a map pin and navigation target: the server's `dropoff` when it came with
+  /// valid coordinates, otherwise the campus table (same numbers) looked up by the hostel name.
+  /// Null when the point is unknown: then no pin and no Navigate button are offered, and the
+  /// screens keep showing [dropLabel] as plain text.
+  DropoffView? get dropPlace {
+    final d = dropoff;
+    if (d != null && d.point.isValid) return d;
+    final byName = dropPointByName(dropoffHostel) ?? dropPointByName(customer?.hostelBlock);
+    return byName == null ? null : DropoffView(name: byName.name, lat: byName.lat, lng: byName.lng);
+  }
+
   /// When the order entered the pool (paid), for "x min ago".
   DateTime? get offeredAt => paidAt ?? createdAt;
 
@@ -191,6 +232,7 @@ class OrderView {
       deliveryFee: _num(raw['deliveryFee']),
       dropoffHostel: _str(raw['dropoffHostel']),
       dropoffNotes: _str(raw['dropoffNotes']),
+      dropoff: _dropoff(raw['dropoff']),
       createdAt: _date(raw['createdAt']),
       updatedAt: _date(raw['updatedAt']),
       paidAt: _date(raw['paidAt']),
@@ -249,7 +291,18 @@ class OrderView {
       address: _str(raw['address']),
       lat: _num(raw['lat']),
       lng: _num(raw['lng']),
+      hasLocation: raw['hasLocation'] == true,
     );
+  }
+
+  static DropoffView? _dropoff(Object? raw) {
+    if (raw is! Map) return null;
+    final name = _str(raw['name']);
+    final lat = _num(raw['lat']);
+    final lng = _num(raw['lng']);
+    if (name == null || lat == null || lng == null) return null;
+    final view = DropoffView(name: name, lat: lat, lng: lng);
+    return view.point.isValid ? view : null;
   }
 
   static PersonView? _person(Object? raw) {

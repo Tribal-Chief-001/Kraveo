@@ -27,6 +27,8 @@ Map<String, dynamic> orderJson({
   String vendorName = 'FC Night Mess',
   String drop = 'Block 2',
   String? otpCode,
+  Map<String, dynamic>? vendorExtra, // merged into `vendor` (e.g. {'hasLocation': true})
+  Map<String, dynamic>? dropoff, // the additive Docs/19 `dropoff {name,lat,lng}`
 }) =>
     {
       'id': id,
@@ -51,7 +53,8 @@ Map<String, dynamic> orderJson({
       'items': [
         {'id': 'i1', 'menuItemId': 'm1', 'name': 'Veg Thali', 'quantity': 2, 'price': 90.0},
       ],
-      'vendor': {'id': 'v1', 'name': vendorName, 'address': 'Entry Gate 1', 'lat': 23.07, 'lng': 76.85},
+      if (dropoff != null) 'dropoff': dropoff,
+      'vendor': {'id': 'v1', 'name': vendorName, 'address': 'Entry Gate 1', 'lat': 23.07, 'lng': 76.85, ...?vendorExtra},
       // Real backend: the pool view has customer null; an assigned rider sees name + phone.
       'customer': pool ? null : {'id': 'c1', 'name': 'Aman Sharma', 'phone': phone, 'hostelBlock': drop},
       'driver': pool ? null : {'id': driverId, 'name': 'Test Rider', 'phone': '+91 9000000000'},
@@ -72,6 +75,8 @@ OrderView order({
   String? cancelReason,
   String vendorName = 'FC Night Mess',
   String drop = 'Block 2',
+  Map<String, dynamic>? vendorExtra,
+  Map<String, dynamic>? dropoff,
 }) =>
     OrderView.tryParse(orderJson(
       id: id,
@@ -87,6 +92,8 @@ OrderView order({
       cancelReason: cancelReason,
       vendorName: vendorName,
       drop: drop,
+      vendorExtra: vendorExtra,
+      dropoff: dropoff,
     ))!;
 
 OrderView offer({String id = 'pool-1', String status = 'READY_FOR_PICKUP', double fee = 30, String vendorName = 'Underdoggs Cafe', String drop = 'Block 4', String paymentStatus = 'PAID'}) =>
@@ -112,6 +119,9 @@ class FakeRiderApi implements RiderOrdersApi {
 
   /// When set, `fetchAvailable` waits for it (to test races with socket events).
   Completer<void>? availableGate;
+
+  /// When set, `postLocation` records the call and then waits for it (a slow network).
+  Completer<void>? onLocationGate;
 
   @override
   Future<ApiResult<List<OrderView>>> fetchAvailable() async {
@@ -172,6 +182,7 @@ class FakeRiderApi implements RiderOrdersApi {
   Future<ApiResult<void>> postLocation(double lat, double lng, {double heading = 0}) async {
     calls.add('location');
     locations.add((lat, lng));
+    if (onLocationGate != null) await onLocationGate!.future;
     return location;
   }
 }
@@ -219,8 +230,30 @@ class FakeLocation implements LocationSource {
   int permissionRequests = 0;
   final opened = <LocationProblem>[];
 
+  /// When true, [track] hands out a controllable stream (standing in for the foreground
+  /// service); when false the source cannot stream and the controller polls [read].
+  bool streaming = false;
+
+  /// How many times a stream was listened to / cancelled (cancel = service and notification off).
+  int trackStarts = 0;
+  int trackStops = 0;
+  StreamController<LocationReading>? _stream;
+
+  bool get tracking => _stream?.hasListener ?? false;
+
+  /// A fix or problem arriving from the (fake) foreground service.
+  void emit(LocationReading r) => _stream?.add(r);
+
   @override
   Future<LocationReading> read() async => reading;
+
+  @override
+  Stream<LocationReading>? track() {
+    if (!streaming) return null;
+    final c = StreamController<LocationReading>(sync: true, onListen: () => trackStarts++, onCancel: () => trackStops++);
+    _stream = c;
+    return c.stream;
+  }
 
   @override
   Future<void> requestPermission() async => permissionRequests++;
@@ -230,12 +263,16 @@ class FakeLocation implements LocationSource {
 }
 
 class FakeRider {
-  FakeRider({Duration poll = const Duration(hours: 1), Duration gps = const Duration(hours: 1)}) {
-    services = RiderServices(api: api, socket: socket, location: location, pollInterval: poll, locationInterval: gps, clock: () => testNow);
+  FakeRider({Duration poll = const Duration(hours: 1), Duration gps = const Duration(hours: 1), bool streaming = false}) {
+    location.streaming = streaming;
+    services = RiderServices(api: api, socket: socket, location: location, pollInterval: poll, locationInterval: gps, clock: () => testNow, uptime: () => uptime);
   }
 
   final api = FakeRiderApi();
   final socket = FakeRiderSocket();
   final location = FakeLocation();
   late final RiderServices services;
+
+  /// The monotonic clock used by the posting throttle; tests move it by hand.
+  Duration uptime = Duration.zero;
 }

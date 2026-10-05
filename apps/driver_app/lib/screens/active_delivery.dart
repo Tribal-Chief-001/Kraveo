@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import '../models/geo.dart';
 import '../models/order_view.dart';
+import '../services/navigation.dart';
 import '../state/rider_controller.dart';
 import '../widgets/gate_otp_dialog.dart';
+import '../widgets/map/delivery_map_card.dart';
+import '../widgets/map/map_view.dart';
 import '../widgets/pipeline_stepper.dart';
 import '../widgets/support_sheet.dart';
 import '../widgets/swipe_accept_card.dart' show OfferCard;
@@ -14,10 +18,14 @@ import '../widgets/ui/screen_header.dart';
 /// Arrived -> enter the customer's code -> delivered. Also shows how a delivery ended
 /// (delivered / cancelled / moved by Kraveo) until the rider acknowledges it.
 class ActiveDeliveryScreen extends StatelessWidget {
-  const ActiveDeliveryScreen({super.key, required this.controller, required this.onGoHome});
+  const ActiveDeliveryScreen({super.key, required this.controller, required this.onGoHome, this.mapFactory, this.navigationLauncher});
 
   final RiderController controller;
   final VoidCallback onGoHome;
+
+  /// Test seams. Production: the real Google map and the real "open Google Maps" launcher.
+  final MapViewFactory? mapFactory;
+  final NavigationLauncher? navigationLauncher;
 
   @override
   Widget build(BuildContext context) {
@@ -36,7 +44,7 @@ class ActiveDeliveryScreen extends StatelessWidget {
             },
           );
         } else if (order != null) {
-          body = _DeliveryView(controller: controller, order: order);
+          body = _DeliveryView(controller: controller, order: order, mapFactory: mapFactory, navigationLauncher: navigationLauncher);
         } else if (!controller.activeChecked) {
           body = const Center(
             child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -60,9 +68,11 @@ class ActiveDeliveryScreen extends StatelessWidget {
 }
 
 class _DeliveryView extends StatefulWidget {
-  const _DeliveryView({required this.controller, required this.order});
+  const _DeliveryView({required this.controller, required this.order, this.mapFactory, this.navigationLauncher});
   final RiderController controller;
   final OrderView order;
+  final MapViewFactory? mapFactory;
+  final NavigationLauncher? navigationLauncher;
 
   @override
   State<_DeliveryView> createState() => _DeliveryViewState();
@@ -85,6 +95,50 @@ class _DeliveryViewState extends State<_DeliveryView> {
         initiallyLocked: c.activeLocked,
         onSubmit: c.verifyOtp,
       ),
+    );
+  }
+
+  /// Opens Google Maps navigation to [point]; says so when no maps app or browser can.
+  Future<void> _navigate(GeoPoint point, String label) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final opened = await openNavigation(point, label: label, launcher: widget.navigationLauncher ?? const UrlNavigationLauncher());
+    if (!opened && mounted) {
+      messenger
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Could not open Google Maps. Install it, or follow the address on this screen.')));
+    }
+  }
+
+  /// The Navigate button for the leg the rider is on: to the restaurant before pickup (disabled
+  /// with the reason when the restaurant has no real pin), to the drop point afterwards (hidden
+  /// when the drop point is not a known campus point: the name stays on screen as text).
+  Widget? _navigateButton(BuildContext context) {
+    final k = context.k;
+    if (o.status.isBeforePickup) {
+      final pin = o.vendor?.point;
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        KButton(
+          key: const ValueKey('navigate-restaurant'),
+          label: 'Navigate to restaurant',
+          icon: LucideIcons.navigation,
+          kind: KButtonKind.tonal,
+          onPressed: pin == null ? null : () => _navigate(pin, o.restaurantName),
+        ),
+        if (pin == null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text('Restaurant location not set - call the restaurant', key: const ValueKey('restaurant-location-missing'), style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+          ),
+      ]);
+    }
+    final drop = o.dropPlace;
+    if (drop == null) return null;
+    return KButton(
+      key: const ValueKey('navigate-drop'),
+      label: 'Navigate to ${drop.name}',
+      icon: LucideIcons.navigation,
+      kind: KButtonKind.tonal,
+      onPressed: () => _navigate(drop.point, drop.name),
     );
   }
 
@@ -205,6 +259,9 @@ class _DeliveryViewState extends State<_DeliveryView> {
       };
     }
 
+    final navigateButton = _navigateButton(context);
+    final showMap = o.vendor?.point != null || o.dropPlace != null;
+
     return RefreshIndicator(
       onRefresh: c.pollNow,
       child: ListView(
@@ -261,6 +318,12 @@ class _DeliveryViewState extends State<_DeliveryView> {
             Padding(
               padding: const EdgeInsets.fromLTRB(KSpace.gutter, 10, KSpace.gutter, 0),
               child: Text(c.actionError!, key: const ValueKey('action-error'), style: KraveoType.titleMd.copyWith(color: KraveoPalette.danger)),
+            ),
+          if (navigateButton != null) Padding(padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0), child: navigateButton),
+          if (showMap)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0),
+              child: DeliveryMapCard(key: const ValueKey('delivery-map-card'), order: o, rider: c.myPosition, factory: widget.mapFactory),
             ),
           Padding(
             padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0),

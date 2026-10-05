@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/geo.dart';
 import '../models/order_view.dart';
 import '../services/location_source.dart';
 import '../services/rider_orders_api.dart';
@@ -13,9 +14,17 @@ class RiderServices {
     required this.socket,
     required this.location,
     this.pollInterval = const Duration(seconds: 15),
-    this.locationInterval = const Duration(seconds: 10),
+    this.locationInterval = kLocationInterval,
+    this.minPostGap = const Duration(seconds: 9),
     DateTime Function()? clock,
-  }) : now = clock ?? DateTime.now;
+    Duration Function()? uptime,
+  })  : now = clock ?? DateTime.now,
+        uptime = uptime ?? _stopwatchUptime();
+
+  static Duration Function() _stopwatchUptime() {
+    final watch = Stopwatch()..start();
+    return () => watch.elapsed;
+  }
 
   factory RiderServices.real() => RiderServices(api: HttpRiderOrdersApi(), socket: IoRiderSocket(), location: GeolocatorLocationSource());
 
@@ -24,7 +33,14 @@ class RiderServices {
   final LocationSource location;
   final Duration pollInterval;
   final Duration locationInterval;
+
+  /// A streamed position is posted to Kraveo at most this often (battery and data). A little
+  /// under [locationInterval] so the phone's own 10 s cadence is not halved by timing jitter.
+  final Duration minPostGap;
   final DateTime Function() now;
+
+  /// A monotonic clock (not the wall clock) for the posting throttle. Tests pass their own.
+  final Duration Function() uptime;
 }
 
 /// What the GPS line on screen says. "ok" is the only state in which a position is sent.
@@ -78,6 +94,7 @@ class RiderController extends ChangeNotifier {
   StreamSubscription<RiderSocketEvent>? _socketSub;
   Timer? _pollTimer;
   Timer? _locTimer;
+  StreamSubscription<LocationReading>? _trackSub;
   bool _foreground = true;
 
   // ---- duty ----
@@ -129,8 +146,20 @@ class RiderController extends ChangeNotifier {
   LocationState _location = LocationState.off;
   DateTime? _lastFixAt;
   bool _locBusy = false;
+  bool _posting = false;
   bool _lastLocationPostFailed = false;
+  Duration? _lastPostAt;
+  int _trackFailures = 0;
+  final ValueNotifier<GeoPoint?> _position = ValueNotifier<GeoPoint?>(null);
   LocationState get location => _location;
+
+  /// The rider's own latest real fix, for the map card (null when off duty or no fix yet).
+  /// A separate notifier so a GPS fix repaints the map only, not every screen.
+  ValueListenable<GeoPoint?> get myPosition => _position;
+
+  /// True while the foreground-service position stream is running (always false for a source
+  /// that cannot stream, which is polled on a timer instead).
+  bool get isTracking => _trackSub != null;
   DateTime? get lastFixAt => _lastFixAt;
   bool get lastLocationPostFailed => _lastLocationPostFailed;
 
@@ -232,6 +261,9 @@ class RiderController extends ChangeNotifier {
     _disposed = true;
     _pollTimer?.cancel();
     _locTimer?.cancel();
+    unawaited(_trackSub?.cancel());
+    _trackSub = null;
+    _position.dispose();
     _socketSub?.cancel();
     services.socket.dispose();
     _messages.close();
@@ -344,22 +376,130 @@ class RiderController extends ChangeNotifier {
   // GPS
   // =====================================================================================
 
+  /// Going on duty: take one reading at once (it also shows the permission prompt and gives the
+  /// first fix quickly), then keep sharing. A source that can stream gets a foreground-service
+  /// position stream (updates continue with the screen off); otherwise, and whenever the stream
+  /// cannot run, the original 10 s timer polls `read()`.
   void _startLocation() {
+    _cancelTracking();
     _locTimer?.cancel();
+    _locTimer = null;
     _location = LocationState.waiting;
-    unawaited(_locationTick());
-    _locTimer = Timer.periodic(services.locationInterval, (_) => _locationTick());
+    _lastPostAt = null;
+    _trackFailures = 0;
+    unawaited(_locationTick().whenComplete(() {
+      if (!_onDuty || _disposed) return;
+      // Only start the foreground service once a reading worked (permission is settled);
+      // otherwise poll, which names the problem and retries.
+      if (_location == LocationState.ok) {
+        _ensureSharing();
+      } else {
+        _startGpsTimer();
+      }
+    }));
   }
 
   void _stopLocation() {
     _locTimer?.cancel();
     _locTimer = null;
+    _cancelTracking();
+    _trackFailures = 0;
+    _lastPostAt = null;
     _location = LocationState.off;
+    if (!_disposed) _position.value = null;
   }
 
-  /// One GPS reading. A real fix is posted; anything else is shown as a problem and nothing is
-  /// sent. There is no fallback position: Kraveo would rather show "location unavailable" than
-  /// a made-up point on the map.
+  void _cancelTracking() {
+    final sub = _trackSub;
+    _trackSub = null;
+    if (sub != null) unawaited(sub.cancel()); // stops the foreground service and its notification
+  }
+
+  /// Streams when it can (and has not failed repeatedly), polls otherwise.
+  void _ensureSharing() {
+    if (!_onDuty || _disposed || _trackSub != null) return;
+    if (_trackFailures < _maxTrackFailures) {
+      Stream<LocationReading>? stream;
+      try {
+        stream = services.location.track();
+      } catch (_) {
+        stream = null;
+      }
+      if (stream != null) {
+        _locTimer?.cancel();
+        _locTimer = null;
+        _trackSub = stream.listen(_onTracked, onError: (_) => _trackLost(), onDone: _trackLost, cancelOnError: false);
+        return;
+      }
+    }
+    _startGpsTimer();
+  }
+
+  void _startGpsTimer() {
+    _locTimer ??= Timer.periodic(services.locationInterval, (_) => _locationTick());
+  }
+
+  static const int _maxTrackFailures = 3;
+
+  /// The stream broke (permission/GPS problem, plugin error, ended): fall back to polling, which
+  /// names the problem on screen and starts the stream again once a reading works.
+  void _trackLost() {
+    if (_trackSub == null) return;
+    _cancelTracking();
+    _trackFailures++;
+    _startGpsTimer();
+  }
+
+  /// One streamed reading. Shown at once, but posted only if the last post is at least
+  /// [RiderServices.minPostGap] old and none is in flight.
+  void _onTracked(LocationReading reading) {
+    if (!_onDuty || _disposed) return;
+    if (!reading.hasFix) {
+      _applyProblem(reading.problem!);
+      _trackLost();
+      _notify();
+      return;
+    }
+    final changed = _location != LocationState.ok;
+    _location = LocationState.ok;
+    _lastFixAt = _now();
+    _position.value = GeoPoint(reading.lat!, reading.lng!);
+    final last = _lastPostAt;
+    final due = last == null || services.uptime() - last >= services.minPostGap;
+    if (due && !_posting && !_locBusy) {
+      unawaited(_post(reading));
+    } else if (changed) {
+      _notify();
+    }
+  }
+
+  Future<void> _post(LocationReading reading) async {
+    _posting = true;
+    _lastPostAt = services.uptime();
+    try {
+      final r = await _api.postLocation(reading.lat!, reading.lng!, heading: reading.heading);
+      if (_disposed) return;
+      _lastLocationPostFailed = !r.ok;
+      _notify();
+    } finally {
+      _posting = false;
+    }
+  }
+
+  void _applyProblem(LocationProblem problem) {
+    _location = switch (problem) {
+      LocationProblem.serviceOff => LocationState.serviceOff,
+      LocationProblem.permissionDenied => LocationState.permissionDenied,
+      LocationProblem.permissionDeniedForever => LocationState.permissionDeniedForever,
+      LocationProblem.unavailable => LocationState.unavailable,
+    };
+    _position.value = null;
+  }
+
+  /// One GPS reading (polling, the first reading after going on duty, and the "fix" buttons).
+  /// A real fix is posted; anything else is shown as a problem and nothing is sent. There is
+  /// no fallback position: Kraveo would rather show "location unavailable" than a made-up
+  /// point on the map.
   Future<void> _locationTick() async {
     if (!_onDuty || _locBusy || _disposed) return;
     _locBusy = true;
@@ -369,24 +509,24 @@ class RiderController extends ChangeNotifier {
       if (reading.hasFix) {
         _location = LocationState.ok;
         _lastFixAt = _now();
+        _position.value = GeoPoint(reading.lat!, reading.lng!);
+        _lastPostAt = services.uptime();
         final r = await _api.postLocation(reading.lat!, reading.lng!, heading: reading.heading);
         _lastLocationPostFailed = !r.ok;
       } else {
-        _location = switch (reading.problem!) {
-          LocationProblem.serviceOff => LocationState.serviceOff,
-          LocationProblem.permissionDenied => LocationState.permissionDenied,
-          LocationProblem.permissionDeniedForever => LocationState.permissionDeniedForever,
-          LocationProblem.unavailable => LocationState.unavailable,
-        };
+        _applyProblem(reading.problem!);
       }
       _notify();
     } finally {
       _locBusy = false;
     }
+    // A reading worked while only the timer is running: (re)start the position stream.
+    if (_onDuty && !_disposed && _trackSub == null && _location == LocationState.ok) _ensureSharing();
   }
 
   /// The "Allow location" / "Turn on GPS" buttons.
   Future<void> fixLocation() async {
+    _trackFailures = 0; // the rider acted: let the stream try again
     switch (_location) {
       case LocationState.permissionDenied:
         await services.location.requestPermission();
