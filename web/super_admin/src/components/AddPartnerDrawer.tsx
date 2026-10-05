@@ -3,6 +3,7 @@ import { Bike, Check, Copy, Loader2, RefreshCw, Store } from 'lucide-react';
 import { NewPartnerInput, PartnerKind } from '../types';
 import { apiService } from '../services/api';
 import { copyText, generatePassword } from '../lib/credentials';
+import { parseLocationInput } from '../lib/campus';
 import { Drawer } from './ui/Drawer';
 import { Field } from './ui/Field';
 import { useToast } from './ui/Toast';
@@ -19,10 +20,11 @@ const VEHICLES = ['Bike', 'Scooter', 'Cycle', 'On foot'];
 const NO_PLATE = new Set(['Cycle', 'On foot']);
 const CATEGORIES = ['North Indian', 'South Indian', 'Chinese', 'Rolls & Wraps', 'Tea & Snacks', 'Biryani', 'Fast food', 'Desserts'];
 
-type Form = Record<'name' | 'phone' | 'password' | 'restaurantName' | 'category' | 'address' | 'fssaiNumber' | 'vehicleType' | 'vehicleRegNo' | 'emergencyPhone' | 'upiId', string>;
-const EMPTY: Form = { name: '', phone: '', password: '', restaurantName: '', category: '', address: '', fssaiNumber: '', vehicleType: 'Bike', vehicleRegNo: '', emergencyPhone: '', upiId: '' };
+type Form = Record<'name' | 'phone' | 'password' | 'restaurantName' | 'category' | 'address' | 'location' | 'fssaiNumber' | 'vehicleType' | 'vehicleRegNo' | 'emergencyPhone' | 'upiId', string>;
+const EMPTY: Form = { name: '', phone: '', password: '', restaurantName: '', category: '', address: '', location: '', fssaiNumber: '', vehicleType: 'Bike', vehicleRegNo: '', emergencyPhone: '', upiId: '' };
 
 const digits = (v: string) => v.replace(/\D/g, '').slice(-10);
+const pinFrom = (text: string): { lat?: number; lng?: number } => { const p = text.trim() ? parseLocationInput(text) : null; return p && p.ok ? { lat: p.lat, lng: p.lng } : {}; };
 
 const validate = (kind: PartnerKind, f: Form): Partial<Record<keyof Form, string>> => {
   const e: Partial<Record<keyof Form, string>> = {};
@@ -32,6 +34,10 @@ const validate = (kind: PartnerKind, f: Form): Partial<Record<keyof Form, string
   if (kind === 'VENDOR') {
     if (f.restaurantName.trim().length < 2) e.restaurantName = 'Enter the restaurant name.';
     if (f.address.trim().length < 3) e.address = 'Enter where the kitchen is.';
+    if (f.location.trim()) {
+      const parsed = parseLocationInput(f.location);
+      if (!parsed.ok) e.location = parsed.message;
+    }
     if (f.fssaiNumber.trim() && !/^\d{14}$/.test(f.fssaiNumber.replace(/\s/g, ''))) e.fssaiNumber = 'FSSAI number has 14 digits. Leave empty if not available.';
   } else {
     if (!NO_PLATE.has(f.vehicleType) && f.vehicleRegNo.trim().length < 4) e.vehicleRegNo = 'Enter the number plate (leave a note if not known yet).';
@@ -74,7 +80,7 @@ export const AddPartnerDrawer: React.FC<Props> = ({ open, kind, onClose, onCreat
       phone: digits(form.phone),
       password: form.password,
       ...(isVendor
-        ? { restaurantName: form.restaurantName.trim(), category: form.category.trim() || 'Campus kitchen', address: form.address.trim(), fssaiNumber: form.fssaiNumber.replace(/\s/g, '') }
+        ? { restaurantName: form.restaurantName.trim(), category: form.category.trim() || 'Campus kitchen', address: form.address.trim(), fssaiNumber: form.fssaiNumber.replace(/\s/g, ''), ...pinFrom(form.location) }
         : { vehicleType: form.vehicleType, vehicleRegNo: form.vehicleRegNo.trim(), emergencyPhone: digits(form.emergencyPhone) || '', upiId: form.upiId.trim() }),
     };
     try {
@@ -136,6 +142,9 @@ export const AddPartnerDrawer: React.FC<Props> = ({ open, kind, onClose, onCreat
               </Field>
               <Field label="Where is the kitchen?" htmlFor="ap-address" required error={show('address')}>
                 <input id="ap-address" className="k-input" value={form.address} onChange={set('address')} placeholder="Area or landmark near campus" aria-invalid={Boolean(show('address'))} />
+              </Field>
+              <Field label="Location (paste from Google Maps, e.g. 23.0745, 76.8590)" htmlFor="ap-location" hint="Optional now. Shows the kitchen on the live map and to riders. You can add it later from the Vendors tab." error={show('location')}>
+                <input id="ap-location" className="k-input" inputMode="decimal" autoComplete="off" value={form.location} onChange={set('location')} placeholder="23.0745, 76.8590" aria-invalid={Boolean(show('location'))} />
               </Field>
               <Field label="FSSAI licence number" htmlFor="ap-fssai" hint="Optional now. 14 digits." error={show('fssaiNumber')}>
                 <input id="ap-fssai" className="k-input" inputMode="numeric" value={form.fssaiNumber} onChange={set('fssaiNumber')} aria-invalid={Boolean(show('fssaiNumber'))} />

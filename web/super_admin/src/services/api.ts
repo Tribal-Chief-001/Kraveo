@@ -16,10 +16,12 @@ import {
   OrderStatus,
   Vendor,
   normalizeDriver,
+  normalizeDriverPin,
   normalizeOrder,
   normalizeVendor,
 } from '../types';
 import { normalizeAttention } from '../lib/orderProblems';
+import type { DropPointInfo } from '../lib/campus';
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? 'https://api.kraveo.site' : 'http://localhost:5000');
 export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (import.meta.env.PROD ? 'https://api.kraveo.site' : 'http://localhost:5000');
@@ -130,15 +132,31 @@ export const apiService = {
 
   async fetchDriverLocations(): Promise<DriverPin[]> {
     const data = await request<any[]>('/api/drivers/locations');
-    return (Array.isArray(data) ? data : []).map((location: any) => ({
-      id: location.driverId,
-      name: location.driverName || 'Runner',
-      lat: Number(location.lat),
-      lng: Number(location.lng),
-      heading: Number(location.heading || 0),
-      status: 'DELIVERING_GATE',
-      lastUpdated: location.lastUpdated,
-    }));
+    return (Array.isArray(data) ? data : []).map(normalizeDriverPin).filter((pin): pin is DriverPin => pin !== null);
+  },
+
+  /** Campus drop points and map centre. Never throws: the map falls back to its built-in copy (older server, offline). */
+  async fetchCampus(): Promise<{ center: { lat: number; lng: number }; dropPoints: DropPointInfo[] } | null> {
+    try {
+      const data = await request<any>('/api/campus');
+      const points: DropPointInfo[] = (Array.isArray(data?.dropPoints) ? data.dropPoints : [])
+        .filter((p: any) => p && typeof p.name === 'string' && Number.isFinite(p.lat) && Number.isFinite(p.lng))
+        .map((p: any) => ({ id: String(p.id ?? p.name), name: p.name, group: p.group === 'girls' ? 'girls' : 'boys', lat: p.lat, lng: p.lng }));
+      const c = data?.center;
+      if (points.length === 0 || !c || !Number.isFinite(c.lat) || !Number.isFinite(c.lng)) return null;
+      return { center: { lat: c.lat, lng: c.lng }, dropPoints: points };
+    } catch {
+      return null;
+    }
+  },
+
+  /** Sets a restaurant's map pin (admin only; the server checks ranges and that the point is on campus). */
+  async setVendorLocation(vendorId: string, lat: number, lng: number): Promise<{ lat: number; lng: number; hasLocation: boolean }> {
+    const data = await request<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/location`, {
+      method: 'PATCH',
+      body: JSON.stringify({ lat, lng }),
+    });
+    return { lat: Number(data?.lat ?? lat), lng: Number(data?.lng ?? lng), hasLocation: data?.hasLocation !== false };
   },
 
   async fetchAnalytics(range: 'today' | '7d' | '30d' = '7d'): Promise<AnalyticsData> {

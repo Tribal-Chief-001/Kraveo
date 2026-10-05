@@ -107,6 +107,8 @@ export interface Vendor {
   address: string;
   lat?: number;
   lng?: number;
+  /** Server flag: false while the restaurant still has the placeholder pin. Undefined on an older server. */
+  hasLocation?: boolean;
   activeOrdersCount: number;
   menuItems?: MenuItem[];
   approvalStatus?: ApprovalStatus;
@@ -135,7 +137,34 @@ export interface DriverPin {
   status: 'IDLE' | 'EN_ROUTE_DHABA' | 'DELIVERING_GATE';
   currentOrderId?: string;
   lastUpdated?: string;
+  /** From the server since the campus-maps release; undefined on an older server (treated as on duty). */
+  dutyStatus?: 'ONLINE' | 'OFFLINE' | 'IN_TRANSIT';
+  approvalStatus?: string | null;
 }
+
+/**
+ * One rider position from `GET /api/drivers/locations` or the `driver_location_update` socket event.
+ * The row's key is `driverId` (the rider's user id; the socket event also carries it as `id`). Null when the
+ * input has no id or no usable coordinates, so a bad event can never add a ghost marker.
+ */
+export const normalizeDriverPin = (raw: any): DriverPin | null => {
+  const id = String(raw?.driverId ?? raw?.id ?? '');
+  const lat = typeof raw?.lat === 'number' ? raw.lat : Number(raw?.lat);
+  const lng = typeof raw?.lng === 'number' ? raw.lng : Number(raw?.lng);
+  if (!id || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  const duty = raw?.dutyStatus;
+  return {
+    id,
+    name: raw?.driverName || raw?.name || 'Runner',
+    lat,
+    lng,
+    heading: Number(raw?.heading || 0) || 0,
+    status: 'DELIVERING_GATE',
+    lastUpdated: typeof raw?.lastUpdated === 'string' ? raw.lastUpdated : undefined,
+    dutyStatus: duty === 'ONLINE' || duty === 'OFFLINE' || duty === 'IN_TRANSIT' ? duty : undefined,
+    approvalStatus: typeof raw?.approvalStatus === 'string' ? raw.approvalStatus : null,
+  };
+};
 
 export interface DriverPartner {
   id: string;
@@ -348,6 +377,7 @@ export const normalizeVendor = (raw: any): Vendor => ({
   address: raw?.address || 'Address unavailable',
   lat: raw?.lat,
   lng: raw?.lng,
+  hasLocation: typeof raw?.hasLocation === 'boolean' ? raw.hasLocation : undefined,
   activeOrdersCount: asNumber(raw?.activeOrdersCount ?? raw?._count?.orders),
   menuItems: Array.isArray(raw?.menuItems) ? raw.menuItems : undefined,
   approvalStatus: raw?.approvalStatus,
@@ -453,4 +483,7 @@ export interface NewPartnerInput {
   vehicleRegNo?: string;
   emergencyPhone?: string;
   upiId?: string;
+  /** Vendor only, optional: the restaurant's map pin (validated by the server: on campus). */
+  lat?: number;
+  lng?: number;
 }

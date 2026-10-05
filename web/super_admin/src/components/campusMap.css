@@ -1,0 +1,77 @@
+/* Live campus map (Leaflet). Loaded together with the map chunk, after leaflet.css. */
+.k-map-wrap .leaflet-container {
+  background: transparent; /* the grid behind shows through when tiles are missing */
+  font-family: inherit;
+  outline-offset: -2px;
+}
+.k-map-wrap .leaflet-control-attribution {
+  background: rgba(8, 13, 9, 0.78);
+  color: #b4bfb6;
+  font-size: 10px;
+}
+.k-map-wrap .leaflet-control-attribution a { color: #8bd29a; }
+.k-map-wrap .leaflet-bar a,
+.k-map-wrap .leaflet-bar a:hover {
+  background: #1a241c;
+  color: #f4f7f2;
+  border-bottom-color: #26322a;
+}
+.k-map-wrap .leaflet-bar a:hover { background: #26322a; }
+
+/* Rider markers */
+.k-rider-marker {
+  background: transparent;
+  border: 0;
+  /* smooth movement between fixes; Leaflet writes the transform */
+  transition: transform 900ms linear;
+}
+.leaflet-zoom-anim .k-rider-marker { transition: transform 0.25s cubic-bezier(0, 0, 0.25, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .k-rider-marker, .leaflet-zoom-anim .k-rider-marker { transition: none; }
+}
+.k-rider { position: relative; width: 24px; height: 24px; display: block; }
+.k-rider__dot {
+  position: absolute; inset: 4px; border-radius: 9999px;
+  background: var(--k-c, #43ae55);
+  border: 2px solid #080d09;
+  box-shadow: 0 0 0 2px var(--k-c, #43ae55), 0 2px 8px rgba(0, 0, 0, 0.55);
+  transition: background-color 300ms, box-shadow 300ms, opacity 300ms;
+}
+.k-rider__label {
+  position: absolute; left: 50%; top: 100%; transform: translateX(-50%); margin-top: 1px;
+  max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 1px 7px; border-radius: 9999px;
+  font: 700 10px/1.4 inherit; color: #f4f7f2;
+  background: rgba(8, 13, 9, 0.88); border: 1px solid #26322a;
+  pointer-events: none;
+}
+.k-rider--idle { --k-c: #43ae55; }
+.k-rider--toRestaurant { --k-c: #f5a524; }
+.k-rider--delivering { --k-c: #3b82f6; }
+.k-rider--stale { --k-c: #9ca3af; }
+.k-rider--stale .k-rider__dot { opacity: 0.75; }
+.k-rider--offline { --k-c: #4b5563; }
+.k-rider--offline .k-rider__dot { background: #111812; opacity: 0.9; }
+.k-rider--selected .k-rider__dot { box-shadow: 0 0 0 3px #fff, 0 2px 10px rgba(0, 0, 0, 0.6); }
+.leaflet-marker-icon.k-rider-marker:focus-visible .k-rider__dot { box-shadow: 0 0 0 3px #fff, 0 0 0 5px var(--k-c, #43ae55); }
+
+/* Restaurants and drop points */
+.k-pin-marker { background: transparent; border: 0; }
+.k-pin {
+  display: inline-flex; align-items: center; gap: 4px; transform: translate(-50%, -50%);
+  padding: 2px 8px; border-radius: 9999px; white-space: nowrap;
+  font: 800 10px/1.5 inherit; letter-spacing: 0.02em;
+  border: 1.5px solid; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+.k-pin--boys { color: #dbeafe; background: rgba(30, 58, 138, 0.9); border-color: #60a5fa; }
+.k-pin--girls { color: #fce7f3; background: rgba(131, 24, 67, 0.9); border-color: #f472b6; }
+.k-pin--vendor { color: #1f1300; background: #ffd600; border-color: #080d09; border-radius: 6px; max-width: 9rem; overflow: hidden; text-overflow: ellipsis; }
+
+/* Popups in the dashboard's dark theme */
+.leaflet-popup.k-popup .leaflet-popup-content-wrapper,
+.leaflet-popup.k-popup .leaflet-popup-tip { background: #1a241c; color: #f4f7f2; border: 1px solid #26322a; }
+.leaflet-popup.k-popup .leaflet-popup-content { margin: 10px 14px; font-size: 12px; line-height: 1.45; }
+.leaflet-popup.k-popup a.leaflet-popup-close-button { color: #b4bfb6; }
+.k-popup__title { font-weight: 800; font-size: 13px; }
+.k-popup__row { color: #b4bfb6; }
+.k-popup__mono { font-family: ui-monospace, monospace; color: #7c897f; }

@@ -1,6 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bike, Clock, Crosshair, MapPin, PackageCheck, Radio, Timer, UserX, Users } from 'lucide-react';
-import { DriverPartner, DriverPin, Order, OrderStatus } from '../types';
+import { DriverPartner, DriverPin, Order, OrderStatus, Vendor } from '../types';
+import { apiService } from '../services/api';
+import { DropPointInfo, FALLBACK_DROP_POINTS, LatLng, campusCenter, vendorHasRealPin } from '../lib/campus';
+import { RIDER_STATE_META, RIDER_STATE_ORDER, RiderMarkerState, countByState, riderMarkerState } from '../lib/riderMarkers';
+import type { MapRider, MapVendor } from './CampusMap';
 import { PIPELINE_ORDER, STATUS_META, inr, statusMeta, timeAgo } from '../lib/tokens';
 import { AnimatedNumber } from './ui/AnimatedNumber';
 import { PaymentPill, OtpLockedPill } from './ui/OrderBadges';
@@ -10,10 +14,30 @@ import { EmptyState } from './ui/EmptyState';
 import { KpiTile } from './ui/KpiTile';
 import { Skeleton } from './ui/Skeleton';
 
+// Leaflet (~150 kB) loads only when the map tab is opened; the rest of the dashboard never pays for it.
+const CampusMap = lazy(() => import('./CampusMap'));
+
+/** If the map chunk cannot load (offline, blocked) or the map throws, the list and the pipeline keep working. */
+class MapBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error: unknown) { console.error('campus map failed:', error instanceof Error ? error.message : 'unknown error'); }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div className="flex h-full items-center justify-center rounded-k-lg border border-kraveo-line bg-kraveo-night/60">
+        <EmptyState icon={MapPin} title="The map could not be loaded" description="Check the connection and reload the page. The runner list and the delivery pipeline are not affected." />
+      </div>
+    );
+  }
+}
+
 interface LiveCommandCenterProps {
   drivers: DriverPin[];
   orders: Order[];
   driverPartners: DriverPartner[];
+  /** Restaurants with a real pin are drawn on the map. */
+  vendors?: Vendor[];
   onReassignDriver: ReassignHandler;
   /** Opens the order drawer (details, cancel, reset OTP lock). */
   onOpenOrder?: (orderId: string) => void;
@@ -21,24 +45,29 @@ interface LiveCommandCenterProps {
   query?: string;
 }
 
-// Same projection as before: a fixed window around the VIT Bhopal campus.
-const projectCoordinate = (lat: number, lng: number) => ({
-  top: `${Math.max(8, Math.min(88, 50 - (lat - 23.0768) * 900))}%`,
-  left: `${Math.max(6, Math.min(94, 50 + (lng - 76.8524) * 650))}%`,
+const EMPTY_VENDORS: Vendor[] = [];
+
+/** One tracked-runner row. Memoised on primitives, so a position update only re-renders the row that moved. */
+const RunnerRow = React.memo(function RunnerRow({ id, name, state, subtitle, onFocus }: { id: string; name: string; state: RiderMarkerState; subtitle: string; onFocus: (id: string) => void }) {
+  const meta = RIDER_STATE_META[state];
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onFocus(id)}
+        aria-label={`${name}, ${meta.label.toLowerCase()}. ${subtitle}. Show on map`}
+        className="flex w-full items-center gap-3 rounded-k-md border border-transparent p-2.5 text-left transition-colors hover:border-kraveo-line hover:bg-kraveo-surface2"
+      >
+        <Avatar name={name} size="sm" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-bold text-kraveo-ink">{name}</span>
+          <span className="block truncate text-[11px] text-kraveo-ink3">{subtitle}</span>
+        </span>
+        <span className={`inline-flex items-center gap-1.5 text-[11px] font-bold ${meta.text}`}><span className={`k-dot ${meta.dot}`} aria-hidden="true" />{meta.label}</span>
+      </button>
+    </li>
+  );
 });
-
-const STALE_AFTER_MS = 15 * 60 * 1000;
-
-type RunnerState = 'available' | 'assigned' | 'onTheWay' | 'atGate';
-
-const RUNNER_STATE: Record<RunnerState, { label: string; hex: string; dot: string; text: string }> = {
-  available: { label: 'Available', hex: '#43AE55', dot: 'bg-kraveo-g400', text: 'text-kraveo-g400' },
-  assigned: { label: 'Assigned', hex: '#14B8A6', dot: 'bg-kraveo-status-accepted', text: 'text-kraveo-status-accepted' },
-  onTheWay: { label: 'On the way', hex: '#3B82F6', dot: 'bg-kraveo-status-pickedUp', text: 'text-kraveo-status-pickedUp' },
-  atGate: { label: 'At gate', hex: '#8B5CF6', dot: 'bg-kraveo-status-atGate', text: 'text-kraveo-status-atGate' },
-};
-
-
 
 const orderMatches = (order: Order, query: string): boolean => {
   const q = query.trim().toLowerCase();
@@ -47,7 +76,7 @@ const orderMatches = (order: Order, query: string): boolean => {
     .some((value) => Boolean(value) && String(value).toLowerCase().includes(q));
 };
 
-export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, orders, driverPartners, onReassignDriver, onOpenOrder, loading = false, query = '' }) => {
+export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, orders, driverPartners, vendors = EMPTY_VENDORS, onReassignDriver, onOpenOrder, loading = false, query = '' }) => {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -77,143 +106,68 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
     return map;
   }, [activeOrders]);
 
-  const runnerState = (driver: DriverPin): RunnerState => {
+  // Marker state per rider: off duty > stale (> 2 min) > delivering > heading to the restaurant > idle.
+  const riderStates = useMemo(() => {
+    const map = new Map<string, RiderMarkerState>();
+    // The roster is live (driver_duty_update), a position's own duty flag is only as fresh as its last fix.
+    const dutyByUser = new Map(driverPartners.filter((partner) => partner.userId).map((partner) => [partner.userId as string, partner.dutyStatus] as const));
+    for (const driver of drivers) {
+      map.set(driver.id, riderMarkerState({ dutyStatus: dutyByUser.get(driver.id) ?? driver.dutyStatus, lastUpdated: driver.lastUpdated, orderStatus: activeByDriver.get(driver.id)?.status, now }));
+    }
+    return map;
+  }, [drivers, driverPartners, activeByDriver, now]);
+
+  const plottable = useMemo(() => drivers.filter((driver) => Number.isFinite(driver.lat) && Number.isFinite(driver.lng)), [drivers]);
+  const stateCounts = useMemo(() => countByState(plottable.map((driver) => riderStates.get(driver.id) ?? 'stale')), [plottable, riderStates]);
+
+  // Campus data: built-in copy first, the server's answer replaces it when it arrives.
+  const [campus, setCampus] = useState<{ center: LatLng; dropPoints: DropPointInfo[] }>(() => ({ center: campusCenter(), dropPoints: FALLBACK_DROP_POINTS }));
+  useEffect(() => {
+    let alive = true;
+    apiService.fetchCampus().then((data) => { if (alive && data) setCampus(data); });
+    return () => { alive = false; };
+  }, []);
+
+  const mapRiders = useMemo<MapRider[]>(() => plottable.map((driver) => {
     const order = activeByDriver.get(driver.id);
-    if (!order) return 'available';
-    if (order.status === 'ARRIVED_AT_GATE') return 'atGate';
-    if (order.status === 'PICKED_UP') return 'onTheWay';
-    return 'assigned';
-  };
+    return {
+      id: driver.id,
+      name: driver.name,
+      lat: driver.lat,
+      lng: driver.lng,
+      state: riderStates.get(driver.id) ?? 'stale',
+      lastUpdated: driver.lastUpdated,
+      orderLabel: order ? `${shortId(order.id)} to ${order.dropoffHostel}` : null,
+    };
+  }), [plottable, activeByDriver, riderStates]);
 
-  const isStale = (driver: DriverPin): boolean => {
-    if (!driver.lastUpdated) return false;
-    const t = new Date(driver.lastUpdated).getTime();
-    return Number.isFinite(t) && now - t > STALE_AFTER_MS;
-  };
+  const mapVendors = useMemo<MapVendor[]>(() => vendors
+    .filter((vendor) => vendorHasRealPin(vendor))
+    .map((vendor) => ({ id: vendor.id, name: vendor.name, lat: vendor.lat as number, lng: vendor.lng as number })), [vendors]);
 
-  const plottable = drivers.filter((driver) => Number.isFinite(driver.lat) && Number.isFinite(driver.lng));
-  const stateCounts = plottable.reduce<Record<RunnerState, number>>((acc, driver) => { acc[runnerState(driver)] += 1; return acc; }, { available: 0, assigned: 0, onTheWay: 0, atGate: 0 });
+  const [focusRequest, setFocusRequest] = useState<{ id: string; n: number } | null>(null);
+  const focusCounter = useRef(0);
+  const focusRider = useCallback((id: string) => { focusCounter.current += 1; setFocusRequest({ id, n: focusCounter.current }); }, []);
 
-  const visibleOrders = activeOrders.filter((order) => orderMatches(order, query));
-  const lanes = PIPELINE_ORDER.map((key) => ({
+  // The parent re-creates these handlers on every render; the pipeline below must not re-render because of that.
+  const reassignRef = useRef(onReassignDriver);
+  reassignRef.current = onReassignDriver;
+  const openOrderRef = useRef(onOpenOrder);
+  openOrderRef.current = onOpenOrder;
+  const hasOpenOrder = Boolean(onOpenOrder);
+  const stableReassign = useCallback<ReassignHandler>((...args) => reassignRef.current(...args), []);
+  const stableOpenOrder = useMemo(() => (hasOpenOrder ? (orderId: string) => openOrderRef.current?.(orderId) : undefined), [hasOpenOrder]);
+
+  const visibleOrders = useMemo(() => activeOrders.filter((order) => orderMatches(order, query)), [activeOrders, query]);
+  const lanes = useMemo(() => PIPELINE_ORDER.map((key) => ({
     key,
     meta: STATUS_META[key],
     orders: visibleOrders.filter((order) => statusMeta(order.status).key === key),
-  }));
+  })), [visibleOrders]);
 
-  return (
-    <div className="space-y-5 sm:space-y-6">
-      {/* KPI strip: every number comes from the loaded feeds; "-" when a source has nothing to report */}
-      <section aria-label="Key numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-        <KpiTile index={0} loading={initialLoad} label="Active deliveries" icon={Bike} tone="text-kraveo-status-pickedUp" toneBg="bg-kraveo-status-pickedUp/15"
-          value={<AnimatedNumber value={activeOrders.length} />} note={activeOrders.length ? 'Orders not yet delivered' : 'No open orders'} />
-        <KpiTile index={1} loading={initialLoad} label="Drivers online" icon={Users}
-          value={<AnimatedNumber value={driverPartners.length ? runnersOnline : null} />}
-          note={driverPartners.length ? `of ${driverPartners.length} registered runners` : 'Runner roster unavailable'} />
-        <KpiTile index={2} loading={initialLoad} label="Pending orders" icon={PackageCheck} tone="text-kraveo-status-placed" toneBg="bg-kraveo-status-placed/15"
-          value={<AnimatedNumber value={pendingCount} />} note={pendingCount ? `Paid, waiting for the restaurant${unpaidCount ? ` · ${unpaidCount} unpaid` : ''}` : unpaidCount ? `${unpaidCount} waiting for payment` : 'Nothing waiting'} />
-        <KpiTile index={3} loading={initialLoad} label="Avg delivery time" icon={Timer} tone="text-kraveo-status-atGate" toneBg="bg-kraveo-status-atGate/15"
-          value={<AnimatedNumber value={avgDeliveryMinutes ? avgDeliveryMinutes.value : null} decimals={1} suffix={avgDeliveryMinutes ? ' min' : ''} />}
-          note={avgDeliveryMinutes ? `Placed to last update, ${avgDeliveryMinutes.count} delivered` : 'No delivered orders yet'} />
-      </section>
-
-      {/* Map + runners */}
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6" aria-label="Runner map">
-        <div className="k-card k-reveal flex h-[420px] min-w-0 flex-col overflow-hidden p-3 sm:h-[480px] sm:p-4 lg:col-span-2" style={{ ['--i' as string]: 4 }}>
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
-            <div className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 items-center justify-center rounded-k-sm bg-kraveo-g400/15 text-kraveo-g400"><Crosshair className="h-4 w-4" aria-hidden="true" /></span>
-              <div>
-                <h2 className="font-display text-base font-bold leading-tight text-kraveo-ink">Live coordinate view</h2>
-                <p className="text-[11px] text-kraveo-ink3">VIT Bhopal region</p>
-              </div>
-            </div>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-kraveo-surface2 px-3 py-1 text-xs font-bold text-kraveo-ink2">
-              <Radio className="h-3.5 w-3.5 text-kraveo-g400" aria-hidden="true" />{plottable.length} runner{plottable.length === 1 ? '' : 's'} plotted
-            </span>
-          </div>
-
-          <div className="relative flex-1 overflow-hidden rounded-k-lg border border-kraveo-line bg-[radial-gradient(ellipse_at_50%_40%,#12281A_0%,#0B140D_55%,#080D09_100%)]">
-            <div className="k-map-grid absolute inset-0" />
-            <div className="absolute inset-x-6 top-1/2 border-t border-dashed border-kraveo-g400/20" />
-            <div className="absolute inset-y-6 left-1/2 border-l border-dashed border-kraveo-g400/20" />
-            <span className="absolute left-3 top-3 rounded-md bg-kraveo-night/70 px-2 py-1 text-[10px] font-bold tracking-widest text-kraveo-ink3">N</span>
-
-            {plottable.map((driver) => {
-              const state = runnerState(driver);
-              const s = RUNNER_STATE[state];
-              const stale = isStale(driver);
-              const description = `${driver.name}, ${s.label.toLowerCase()}, ${driver.lat.toFixed(5)}, ${driver.lng.toFixed(5)}${driver.lastUpdated ? `, updated ${timeAgo(driver.lastUpdated, now)}` : ''}${stale ? ', location is stale' : ''}`;
-              return (
-                <div
-                  key={driver.id}
-                  tabIndex={0}
-                  role="img"
-                  aria-label={description}
-                  style={projectCoordinate(driver.lat, driver.lng)}
-                  className={`group absolute -translate-x-1/2 -translate-y-1/2 outline-none transition-[top,left] duration-slow ease-emphasized focus-visible:z-20 hover:z-20 ${stale ? 'opacity-50' : ''}`}
-                >
-                  <div className="relative mx-auto flex h-5 w-5 items-center justify-center">
-                    {!stale && <span className="absolute inset-0 animate-ring-out rounded-full" style={{ backgroundColor: s.hex }} aria-hidden="true" />}
-                    <span className="relative h-3.5 w-3.5 rounded-full border-2 border-kraveo-night" style={{ backgroundColor: s.hex, boxShadow: `0 0 14px ${s.hex}` }} />
-                  </div>
-                  <div className="mt-1 max-w-[7rem] truncate rounded-full border border-kraveo-line bg-kraveo-night/85 px-2 py-0.5 text-center text-[10px] font-bold text-kraveo-ink backdrop-blur group-hover:border-kraveo-g400/50 group-focus-visible:border-kraveo-g400/50">{driver.name}</div>
-                  <div role="tooltip" className="pointer-events-none absolute left-1/2 top-full z-30 mt-1.5 hidden w-max max-w-[14rem] -translate-x-1/2 rounded-k-sm border border-kraveo-line bg-kraveo-surface2 px-3 py-2 text-[11px] leading-snug text-kraveo-ink2 shadow-k-lift group-hover:block group-focus-visible:block">
-                    <p className="font-bold text-kraveo-ink">{driver.name}</p>
-                    <p className={s.text}>{s.label}{stale ? ' · stale' : ''}</p>
-                    <p className="font-mono text-kraveo-ink3">{driver.lat.toFixed(5)}, {driver.lng.toFixed(5)}</p>
-                    {driver.lastUpdated && <p className="text-kraveo-ink3">Updated {timeAgo(driver.lastUpdated, now)}</p>}
-                  </div>
-                </div>
-              );
-            })}
-
-            {plottable.length === 0 && (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <EmptyState icon={MapPin} title="No runner positions yet" description="Markers appear here as soon as the location feed reports a runner's position." />
-              </div>
-            )}
-          </div>
-
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 px-1 text-xs text-kraveo-ink2" aria-label="Map legend" role="group">
-            {(Object.keys(RUNNER_STATE) as RunnerState[]).map((state) => (
-              <span key={state} className="inline-flex items-center gap-1.5">
-                <span className={`k-dot ${RUNNER_STATE[state].dot}`} aria-hidden="true" />
-                {RUNNER_STATE[state].label}
-                <span className="font-bold tabular-nums text-kraveo-ink">{stateCounts[state]}</span>
-              </span>
-            ))}
-            <span className="ml-auto hidden text-[11px] text-kraveo-ink3 sm:inline">Faded marker: no update for 15 min</span>
-          </div>
-        </div>
-
-        <div className="k-card k-reveal flex max-h-[420px] min-w-0 flex-col overflow-hidden p-4 sm:max-h-[480px] sm:h-[480px]" style={{ ['--i' as string]: 5 }}>
-          <div className="mb-3 flex items-center justify-between border-b border-kraveo-line pb-3">
-            <h2 className="flex items-center gap-2 font-display text-base font-bold text-kraveo-ink"><Bike className="h-4 w-4 text-kraveo-g400" aria-hidden="true" /> Tracked runners</h2>
-            <span className="rounded-full bg-kraveo-surface2 px-2.5 py-0.5 text-xs font-bold tabular-nums text-kraveo-ink2">{drivers.length}</span>
-          </div>
-          <ul className="-mx-1 flex-1 space-y-1.5 overflow-y-auto px-1">
-            {initialLoad && Array.from({ length: 4 }).map((_, index) => <li key={index}><Skeleton className="h-14 w-full" /></li>)}
-            {!initialLoad && drivers.length === 0 && <li><EmptyState icon={Bike} title="No location feed" description="No runner has reported a location yet." className="py-8" /></li>}
-            {drivers.map((driver) => {
-              const state = runnerState(driver);
-              const order = activeByDriver.get(driver.id);
-              return (
-                <li key={driver.id} className="flex items-center gap-3 rounded-k-md border border-transparent p-2.5 transition-colors hover:border-kraveo-line hover:bg-kraveo-surface2">
-                  <Avatar name={driver.name} size="sm" />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-bold text-kraveo-ink">{driver.name}</p>
-                    <p className="truncate text-[11px] text-kraveo-ink3">{order ? `${shortId(order.id)} · ${order.dropoffHostel}` : `Updated ${timeAgo(driver.lastUpdated, now)}`}</p>
-                  </div>
-                  <span className={`inline-flex items-center gap-1.5 text-[11px] font-bold ${RUNNER_STATE[state].text}`}><span className={`k-dot ${RUNNER_STATE[state].dot}`} aria-hidden="true" />{RUNNER_STATE[state].label}</span>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      </section>
-
-      {/* Delivery pipeline lanes */}
+  // Rebuilt only when orders, riders or the filter change. A position update (every few seconds per rider)
+  // re-renders the map card and the changed list row, never the order lanes.
+  const pipeline = useMemo(() => (
       <section aria-label="Delivery pipeline" className="space-y-3">
         <div className="flex items-center justify-between gap-3 px-1">
           <h2 className="flex items-center gap-2 font-display text-lg font-bold text-kraveo-ink"><Clock className="h-4 w-4 text-kraveo-g400" aria-hidden="true" /> Delivery pipeline
@@ -240,8 +194,8 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
                 {lane.orders.map((order) => (
                   <article key={order.id} className="rounded-k-md border border-kraveo-line bg-kraveo-night/60 p-3 transition-colors hover:border-kraveo-g400/40">
                     <div className="flex items-center justify-between gap-2">
-                      {onOpenOrder
-                        ? <button type="button" aria-haspopup="dialog" aria-label={`Open order ${shortId(order.id)}`} onClick={() => onOpenOrder(order.id)} className="rounded font-mono text-xs font-bold text-kraveo-g300 hover:underline" title={order.id}>{shortId(order.id)}</button>
+                      {stableOpenOrder
+                        ? <button type="button" aria-haspopup="dialog" aria-label={`Open order ${shortId(order.id)}`} onClick={() => stableOpenOrder(order.id)} className="rounded font-mono text-xs font-bold text-kraveo-g300 hover:underline" title={order.id}>{shortId(order.id)}</button>
                         : <span className="font-mono text-xs font-bold text-kraveo-ink" title={order.id}>{shortId(order.id)}</span>}
                       <span className="text-[11px] text-kraveo-ink3">{timeAgo(order.createdAt, now)}</span>
                     </div>
@@ -257,7 +211,7 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
                           ? <><Avatar name={order.driverName} size="sm" className="!h-6 !w-6 !text-[9px]" /><span className="truncate font-bold text-kraveo-ink">{order.driverName}</span></>
                           : <span className="inline-flex items-center gap-1.5 rounded-full bg-kraveo-status-placed/15 px-2.5 py-1 font-bold text-kraveo-status-placed"><UserX className="h-3 w-3" aria-hidden="true" />Unassigned</span>}
                       </div>
-                      <RiderAssignSelect order={order} riders={driverPartners} onReassign={onReassignDriver} />
+                      <RiderAssignSelect order={order} riders={driverPartners} onReassign={stableReassign} />
                     </div>
                   </article>
                 ))}
@@ -266,6 +220,91 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
           ))}
         </div>
       </section>
+  ), [lanes, visibleOrders.length, query, initialLoad, now, driverPartners, stableOpenOrder, stableReassign]);
+
+  return (
+    <div className="space-y-5 sm:space-y-6">
+      {/* KPI strip: every number comes from the loaded feeds; "-" when a source has nothing to report */}
+      <section aria-label="Key numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+        <KpiTile index={0} loading={initialLoad} label="Active deliveries" icon={Bike} tone="text-kraveo-status-pickedUp" toneBg="bg-kraveo-status-pickedUp/15"
+          value={<AnimatedNumber value={activeOrders.length} />} note={activeOrders.length ? 'Orders not yet delivered' : 'No open orders'} />
+        <KpiTile index={1} loading={initialLoad} label="Drivers online" icon={Users}
+          value={<AnimatedNumber value={driverPartners.length ? runnersOnline : null} />}
+          note={driverPartners.length ? `of ${driverPartners.length} registered runners` : 'Runner roster unavailable'} />
+        <KpiTile index={2} loading={initialLoad} label="Pending orders" icon={PackageCheck} tone="text-kraveo-status-placed" toneBg="bg-kraveo-status-placed/15"
+          value={<AnimatedNumber value={pendingCount} />} note={pendingCount ? `Paid, waiting for the restaurant${unpaidCount ? ` · ${unpaidCount} unpaid` : ''}` : unpaidCount ? `${unpaidCount} waiting for payment` : 'Nothing waiting'} />
+        <KpiTile index={3} loading={initialLoad} label="Avg delivery time" icon={Timer} tone="text-kraveo-status-atGate" toneBg="bg-kraveo-status-atGate/15"
+          value={<AnimatedNumber value={avgDeliveryMinutes ? avgDeliveryMinutes.value : null} decimals={1} suffix={avgDeliveryMinutes ? ' min' : ''} />}
+          note={avgDeliveryMinutes ? `Placed to last update, ${avgDeliveryMinutes.count} delivered` : 'No delivered orders yet'} />
+      </section>
+
+      {/* Map + runners */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6" aria-label="Runner map">
+        <div className="k-card k-reveal flex h-[460px] min-w-0 flex-col overflow-hidden p-3 sm:h-[520px] sm:p-4 lg:col-span-2" style={{ ['--i' as string]: 4 }}>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-8 w-8 items-center justify-center rounded-k-sm bg-kraveo-g400/15 text-kraveo-g400"><Crosshair className="h-4 w-4" aria-hidden="true" /></span>
+              <div>
+                <h2 className="font-display text-base font-bold leading-tight text-kraveo-ink">Live campus map</h2>
+                <p className="text-[11px] text-kraveo-ink3">Drop points, restaurants and riders on duty</p>
+              </div>
+            </div>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-kraveo-surface2 px-3 py-1 text-xs font-bold text-kraveo-ink2" aria-live="polite">
+              <Radio className="h-3.5 w-3.5 text-kraveo-g400" aria-hidden="true" />{plottable.length} runner{plottable.length === 1 ? '' : 's'} plotted
+            </span>
+          </div>
+
+          <div className="relative min-h-0 flex-1 overflow-hidden rounded-k-lg border border-kraveo-line">
+            <MapBoundary>
+              <Suspense fallback={<div className="h-full w-full animate-pulse bg-kraveo-surface2/60" aria-busy="true" aria-label="Loading map" />}>
+                <CampusMap riders={mapRiders} vendors={mapVendors} dropPoints={campus.dropPoints} center={campus.center} now={now} focusRequest={focusRequest} />
+              </Suspense>
+            </MapBoundary>
+            {plottable.length === 0 && !initialLoad && (
+              <p className="pointer-events-none absolute left-1/2 top-3 z-[500] -translate-x-1/2 rounded-full border border-kraveo-line bg-kraveo-night/90 px-3 py-1 text-[11px] text-kraveo-ink2" role="status">
+                No runner positions yet. Markers appear when a runner goes on duty.
+              </p>
+            )}
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 px-1 text-xs text-kraveo-ink2" aria-label="Map legend" role="group">
+            {RIDER_STATE_ORDER.map((state) => (
+              <span key={state} className="inline-flex items-center gap-1.5">
+                <span className="k-dot" style={{ backgroundColor: RIDER_STATE_META[state].hex }} aria-hidden="true" />
+                {RIDER_STATE_META[state].label}
+                <span className="font-bold tabular-nums text-kraveo-ink">{stateCounts[state]}</span>
+              </span>
+            ))}
+            <span className="ml-auto hidden text-[11px] text-kraveo-ink3 sm:inline">Grey: no update for 2 min</span>
+          </div>
+        </div>
+
+        <div className="k-card k-reveal flex max-h-[420px] min-w-0 flex-col overflow-hidden p-4 sm:max-h-[520px] sm:h-[520px]" style={{ ['--i' as string]: 5 }}>
+          <div className="mb-3 flex items-center justify-between border-b border-kraveo-line pb-3">
+            <h2 className="flex items-center gap-2 font-display text-base font-bold text-kraveo-ink"><Bike className="h-4 w-4 text-kraveo-g400" aria-hidden="true" /> Tracked runners</h2>
+            <span className="rounded-full bg-kraveo-surface2 px-2.5 py-0.5 text-xs font-bold tabular-nums text-kraveo-ink2">{drivers.length}</span>
+          </div>
+          <ul className="-mx-1 flex-1 space-y-1.5 overflow-y-auto px-1" aria-label="Tracked runners">
+            {initialLoad && Array.from({ length: 4 }).map((_, index) => <li key={index}><Skeleton className="h-14 w-full" /></li>)}
+            {!initialLoad && drivers.length === 0 && <li><EmptyState icon={Bike} title="No location feed" description="No runner has reported a location yet." className="py-8" /></li>}
+            {drivers.map((driver) => {
+              const order = activeByDriver.get(driver.id);
+              return (
+                <RunnerRow
+                  key={driver.id}
+                  id={driver.id}
+                  name={driver.name}
+                  state={riderStates.get(driver.id) ?? 'stale'}
+                  subtitle={order ? `${shortId(order.id)} · ${order.dropoffHostel}` : `Updated ${timeAgo(driver.lastUpdated, now)}`}
+                  onFocus={focusRider}
+                />
+              );
+            })}
+          </ul>
+        </div>
+      </section>
+
+      {pipeline}
     </div>
   );
 };

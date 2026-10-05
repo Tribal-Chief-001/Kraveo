@@ -9,7 +9,7 @@ import { DriverManager } from './components/DriverManager';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { ApplicationsPanel } from './components/ApplicationsPanel';
 import { CustomersPanel } from './components/CustomersPanel';
-import { AdminProfile, AttentionEntry, DriverPartner, DriverPin, Order, OrderStatus, TabType, Vendor, normalizeOrderPartial } from './types';
+import { AdminProfile, AttentionEntry, DriverPartner, DriverPin, Order, OrderStatus, TabType, Vendor, normalizeDriverPin, normalizeOrderPartial } from './types';
 import { ApiError, apiService, clearAuthToken, getAuthToken, isAuthenticated as hasSession, SOCKET_URL } from './services/api';
 import { LoginScreen } from './components/LoginScreen';
 import { LogoMark } from './components/ui/Logo';
@@ -20,10 +20,13 @@ import { NeedsAttentionPanel } from './components/NeedsAttentionPanel';
 import { DrawerMode, OrderDrawer } from './components/OrderDrawer';
 import { mergeInto, mergeOrderLists, patchOrder, restoreIfUntouched, upsertOrder } from './lib/orders';
 import { localAttention, pruneWithLiveOrders } from './lib/orderProblems';
+import { mergeRiderPins, newestPerRider, replaceRiderPins } from './lib/riderMarkers';
 
 /** Contract 3: sockets are only a speed-up; the REST list is polled while the page is visible. */
 const POLL_MS = 15_000;
 const ATTENTION_DEBOUNCE_MS = 1_500;
+/** Rider position events are applied to the map at most this often. */
+const LOCATION_FLUSH_MS = 1_000;
 
 export const App: React.FC = () => {
   const [isAuth, setIsAuth] = useState(false);
@@ -108,6 +111,8 @@ export const App: React.FC = () => {
     } catch (error) {
       handleSessionError(error);
     }
+    // Rider positions too: after a missed socket event the next poll puts every marker right again (no change = no re-render).
+    apiService.fetchDriverLocations().then((fresh) => setDrivers((current) => replaceRiderPins(current, fresh))).catch(() => { /* the live socket or the next poll catches up */ });
     loadAttention();
   }, [handleSessionError, loadAttention]);
 
@@ -125,7 +130,7 @@ export const App: React.FC = () => {
     if (ordersResult.status === 'fulfilled') setOrders((current) => mergeOrderLists(current, ordersResult.value));
     if (vendorsResult.status === 'fulfilled') setVendors(vendorsResult.value);
     if (driversResult.status === 'fulfilled') setDriverPartners(driversResult.value);
-    if (locationsResult.status === 'fulfilled') setDrivers(locationsResult.value);
+    if (locationsResult.status === 'fulfilled') setDrivers((current) => replaceRiderPins(current, locationsResult.value));
     const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (firstError) handleAuthFailure(firstError.reason);
     setIsLoading(false);
@@ -200,15 +205,26 @@ export const App: React.FC = () => {
       setApplicationsKey((key) => key + 1);
       refreshPendingCount();
     });
-    socket.on('driver_location_update', (location: DriverPin) => {
-      setDrivers((previous) => {
-        const exists = previous.some((driver) => driver.id === location.id);
-        return exists ? previous.map((driver) => driver.id === location.id ? { ...driver, ...location } : driver) : [location, ...previous];
-      });
+    // Rider positions arrive every few seconds per rider. They are buffered and applied at most once a second
+    // (newest fix per rider), so a busy hour never causes a render storm; unchanged riders keep their identity.
+    let pendingLocations: DriverPin[] = [];
+    let locationTimer: number | undefined;
+    const flushLocations = () => {
+      locationTimer = undefined;
+      const batch = newestPerRider(pendingLocations);
+      pendingLocations = [];
+      setDrivers((previous) => mergeRiderPins(previous, batch));
+    };
+    socket.on('driver_location_update', (raw: unknown) => {
+      const pin = normalizeDriverPin(raw);
+      if (!pin) return;
+      pendingLocations.push(pin);
+      if (locationTimer === undefined) locationTimer = window.setTimeout(flushLocations, LOCATION_FLUSH_MS);
     });
     return () => {
       socket.disconnect();
       window.clearTimeout(attentionTimer.current);
+      window.clearTimeout(locationTimer);
     };
   }, [fetchBackendData, isAuth, refreshPendingCount, toast, scheduleAttention, silentRefresh]);
 
@@ -359,6 +375,10 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleVendorLocationSaved = useCallback((vendorId: string, lat: number, lng: number, hasLocation: boolean) => {
+    setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, lat, lng, hasLocation } : vendor));
+  }, []);
+
   const handleLogout = () => {
     clearAuthToken();
     setIsAuth(false);
@@ -442,7 +462,7 @@ export const App: React.FC = () => {
         )}
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 p-4 pb-10 outline-none sm:p-6 sm:pb-12">
           <div key={activeTab} className="animate-fade-up">
-            {activeTab === 'map' && <LiveCommandCenter drivers={drivers} orders={orders} driverPartners={driverPartners} onReassignDriver={handleReassignDriver} onOpenOrder={openOrder} loading={isLoading} query={searchQuery} />}
+            {activeTab === 'map' && <LiveCommandCenter drivers={drivers} orders={orders} driverPartners={driverPartners} vendors={vendors} onReassignDriver={handleReassignDriver} onOpenOrder={openOrder} loading={isLoading} query={searchQuery} />}
             {activeTab === 'orders' && <OrdersTable orders={orders} attentionIds={attentionIds} onAdvance={handleStatusChange} onOpenOrder={openOrder} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} now={now} />}
             {activeTab === 'attention' && (
               <NeedsAttentionPanel
@@ -460,7 +480,7 @@ export const App: React.FC = () => {
               />
             )}
             {activeTab === 'applications' && <ApplicationsPanel refreshKey={applicationsKey} query={searchQuery} onChanged={fetchBackendData} onAuthError={handleSessionError} />}
-            {activeTab === 'vendors' && <VendorManager vendors={vendors} onToggleVendor={handleToggleVendor} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'vendors' && <VendorManager vendors={vendors} onToggleVendor={handleToggleVendor} onLocationSaved={handleVendorLocationSaved} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'drivers' && <DriverManager drivers={driverPartners} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'customers' && <CustomersPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} />}
             {activeTab === 'analytics' && <AnalyticsPanel />}
