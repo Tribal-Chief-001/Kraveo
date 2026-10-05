@@ -1,7 +1,7 @@
 name: customer_app
 description: "Kraveo Customer Food Ordering Mobile App for VIT Bhopal Students"
 publish_to: 'none'
-version: 1.4.0+7
+version: 1.4.1+8
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

@@ -9,6 +9,7 @@ import 'package:customer_app/providers/order_provider.dart';
 import 'package:customer_app/providers/session_provider.dart';
 import 'package:customer_app/screens/checkout_screen.dart';
 import 'package:customer_app/screens/live_tracking_screen.dart';
+import 'package:customer_app/screens/payment_success_screen.dart';
 import 'package:customer_app/screens/order_history_screen.dart';
 import 'package:customer_app/services/customer_api_service.dart';
 import 'package:customer_app/services/google_auth_service.dart';
@@ -141,6 +142,13 @@ void main() {
       expect(api.creates, hasLength(1));
       expect(api.paymentStarts, hasLength(2));
       expect(api.paymentStarts.toSet(), hasLength(1));
+      // A short success screen comes first, then it hands over to tracking by itself.
+      expect(find.byType(PaymentSuccessScreen), findsOneWidget);
+      expect(find.text('Payment successful'), findsOneWidget);
+      expect(find.byType(LiveTrackingScreen), findsNothing);
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(PaymentSuccessScreen), findsNothing);
       expect(find.byType(LiveTrackingScreen), findsOneWidget);
       expect(find.text('Waiting for the restaurant'), findsOneWidget);
       expect(cart.items, isEmpty);

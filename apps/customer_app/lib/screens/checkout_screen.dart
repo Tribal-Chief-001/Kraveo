@@ -19,6 +19,7 @@ import '../widgets/ui/sheet_chrome.dart';
 import '../widgets/ui/snack.dart';
 import '../widgets/ui/veg_mark.dart';
 import 'live_tracking_screen.dart';
+import 'payment_success_screen.dart';
 
 /// Checkout: the order is created on the server FIRST (`POST /orders`, idempotent per cart),
 /// the server's bill is shown, then Razorpay runs on that same order. A failed or cancelled
@@ -178,12 +179,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     switch (outcome.kind) {
       case PaymentOutcomeKind.paid:
       case PaymentOutcomeKind.confirming:
+        final placed = orders.orderById(id) ?? outcome.order;
         cart.clearCart();
         orders.clearCheckout();
-        if (outcome.kind == PaymentOutcomeKind.paid) {
-          showKSnack(context, 'Payment successful. Your order is on its way to the kitchen.', icon: LucideIcons.circleCheck);
-        }
-        _openTracking(id);
+        _openPaymentSuccess(id, placed, confirming: outcome.kind == PaymentOutcomeKind.confirming);
       case PaymentOutcomeKind.orderClosed:
         // The server won't take money for this order any more: back to the editable cart so
         // the next tap places a fresh order (new idempotency key).
@@ -231,6 +230,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       _setBusy(false);
       _showError(orderErrorMessage(r.error!, action: 'cancel the order'));
     }
+  }
+
+  /// Success beat first, then tracking. Falls back to tracking straight away if the order is unknown.
+  void _openPaymentSuccess(String orderId, OrderModel? order, {required bool confirming}) {
+    if (order == null) {
+      _openTracking(orderId);
+      return;
+    }
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PaymentSuccessScreen(
+          orderId: orderId,
+          amountLabel: rupee(order.totalAmount),
+          vendorName: order.vendorName.isEmpty ? 'the kitchen' : order.vendorName,
+          confirming: confirming,
+          onContinue: () {
+            if (!context.mounted) return;
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (context) => LiveTrackingScreen(orderId: orderId)),
+              (route) => route.isFirst,
+            );
+          },
+        ),
+      ),
+      (route) => route.isFirst,
+    );
   }
 
   void _openTracking(String orderId) {
