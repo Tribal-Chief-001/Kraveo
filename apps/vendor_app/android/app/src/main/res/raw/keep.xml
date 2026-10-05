@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The alarm sound and the status-bar icon are looked up by name at run time (channel setup, notification builder),
+     so resource shrinking in release builds must not remove them as "unused". -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/new_order_alarm,@drawable/ic_stat_kraveo" />

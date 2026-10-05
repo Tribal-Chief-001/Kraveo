@@ -8,13 +8,14 @@ import '../services/menu_stock_controller.dart';
 import '../services/order_queue_controller.dart';
 import '../services/order_queue_service.dart';
 import '../services/order_socket.dart';
-import '../services/permission_service.dart';
+import '../services/push/push_controller.dart';
 import '../services/vendor_backend.dart';
 import '../session/session_controller.dart';
 import '../models/partner_session.dart';
 import 'kitchen_queue.dart';
 import 'stock_manager.dart';
 import 'sales_analytics.dart';
+import '../widgets/push_status_cards.dart';
 import '../widgets/ui/ui.dart';
 
 class VendorHomeScreen extends StatefulWidget {
@@ -46,6 +47,10 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
   String? _vendorId;
   bool _initialised = false;
 
+  // Push (null when the app runs without it, e.g. in tests).
+  VoidCallback? _detachPush;
+  bool _explainerOpen = false;
+
   /// What the server last told us about the store (null until known).
   bool? _storeOpen;
   bool _storeBusy = false;
@@ -54,13 +59,17 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    PermissionService.requestVendorPermissions();
     _enableScreenWakeLock();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final push = PushScope.maybeOf(context);
+    if (push != null) {
+      _detachPush ??= push.attachHome(_onPushAction);
+      _maybeExplainNotifications(push);
+    }
     if (_initialised) return;
     _initialised = true;
     final session = SessionScope.maybeOf(context)?.session;
@@ -86,6 +95,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _detachPush?.call();
     _orders?.removeListener(_onOrdersChanged);
     _orders?.dispose();
     _menu?.dispose();
@@ -118,6 +128,47 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
       for (final o in c.incoming) {
         OrderQueueService.enqueueIncomingOrder(context, o.id, c);
       }
+    });
+  }
+
+  /// A push told us something: reload once; a tap also shows the kitchen queue and, for a new order that is
+  /// still waiting for an answer, its takeover.
+  Future<void> _onPushAction(PushAction action) async {
+    final c = _orders;
+    if (!mounted || c == null || c.isDisposed) return;
+    if (action.kind == PushActionKind.showQueue && _currentIndex != 0) setState(() => _currentIndex = 0);
+    await c.refresh();
+    if (!mounted || c.isDisposed) return;
+    final id = action.orderId;
+    if (action.kind == PushActionKind.showQueue && id != null && c.byId(id)?.isIncoming == true) {
+      OrderQueueService.enqueueIncomingOrder(context, id, c);
+    }
+  }
+
+  /// Right after an approved login: say why before the system asks (never on the first frame, only once).
+  void _maybeExplainNotifications(PushController push) {
+    if (_explainerOpen || !push.shouldExplain) return;
+    _explainerOpen = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || !push.shouldExplain) {
+        _explainerOpen = false;
+        return;
+      }
+      push.markExplained();
+      final agreed = await showConfirmSheet(
+        context,
+        icon: LucideIcons.bellRing,
+        title: 'Hear every new order',
+        hindiTitle: 'हर नया ऑर्डर सुनें',
+        message: 'Kraveo needs to send you notifications so a new order rings on this phone, even when the app is closed or the screen is locked.\nऐप बंद या स्क्रीन लॉक होने पर भी नया ऑर्डर बजे, इसके लिए नोटिफिकेशन चालू करें।',
+        safeLabel: 'Not now',
+        safeSublabel: 'अभी नहीं',
+        confirmLabel: 'Allow notifications',
+        confirmSublabel: 'नोटिफिकेशन चालू करें',
+        destructive: false,
+      );
+      _explainerOpen = false;
+      if (agreed) await push.requestNotifications();
     });
   }
 
@@ -334,6 +385,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
   Widget build(BuildContext context) {
     final k = context.k;
     final partner = SessionScope.maybeOf(context)?.session;
+    final push = PushScope.maybeOf(context);
     final orders = _orders;
     final menu = _menu;
 
@@ -392,6 +444,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
                 ),
               ),
             ),
+
+            if (push != null) PushStatusCards(push: push),
 
             Expanded(
               child: (orders == null || menu == null)

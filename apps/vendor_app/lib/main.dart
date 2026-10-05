@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -9,19 +10,36 @@ import 'screens/vendor_home_screen.dart';
 import 'services/order_queue_controller.dart';
 import 'services/order_queue_service.dart';
 import 'services/order_socket.dart';
+import 'services/push/device_registry.dart';
+import 'services/push/firebase_push_messaging.dart';
+import 'services/push/local_alarm_notifications.dart';
+import 'services/push/push_controller.dart';
+import 'services/push/push_permissions.dart';
 import 'services/vendor_backend.dart';
 import 'services/partner_auth_service.dart';
 import 'services/vendor_api_service.dart';
 import 'session/session_controller.dart';
 
 void main() {
-  runApp(const KraveoVendorApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  // Push is an addition: Firebase starts inside the controller (defensively), after the first frame is on its way.
+  final push = PushController(
+    messaging: FirebasePushMessaging(),
+    notifications: LocalAlarmNotifications(),
+    permissions: const SystemPushPermissions(),
+    registry: const HttpDeviceRegistry(),
+  );
+  runApp(KraveoVendorApp(push: push));
 }
 
 class KraveoVendorApp extends StatefulWidget {
   /// [auth] is the network layer for login / session checks; [backend], [socketFactory] and [alarm] drive the
   /// order screens. Tests pass fakes; the app uses the real Kraveo API, Socket.io and the loud alarm.
-  const KraveoVendorApp({super.key, this.auth, this.backend, this.socketFactory, this.alarm});
+  const KraveoVendorApp({super.key, this.auth, this.backend, this.socketFactory, this.alarm, this.push});
+
+  /// Push notifications (device token, permission, taps). Null = no push at all (tests, and the app still works on
+  /// the live connection and polling). The caller owns it; the app does not dispose it.
+  final PushController? push;
 
   final PartnerAuthService? auth;
   final VendorBackend? backend;
@@ -43,17 +61,19 @@ class _KraveoVendorAppState extends State<KraveoVendorApp> {
 
   @override
   Widget build(BuildContext context) {
-    return SessionScope(
-      controller: _session,
-      child: MaterialApp(
+    final app = MaterialApp(
         title: 'Kraveo Restaurant Partner',
         debugShowCheckedModeBanner: false,
         theme: KraveoTheme.vendor(),
         // The vendor theme already renders type ~12% larger; cap the system font scale so
         // huge accessibility settings enlarge text without breaking the fixed 64px targets.
         builder: (context, child) => MediaQuery.withClampedTextScaling(maxScaleFactor: 1.3, child: child ?? const SizedBox.shrink()),
-        home: AuthGate(session: _session, backend: widget.backend, socketFactory: widget.socketFactory, alarm: widget.alarm),
-      ),
+        home: AuthGate(session: _session, push: widget.push, backend: widget.backend, socketFactory: widget.socketFactory, alarm: widget.alarm),
+      );
+    final push = widget.push;
+    return SessionScope(
+      controller: _session,
+      child: push == null ? app : PushScope(controller: push, child: app),
     );
   }
 }
@@ -61,9 +81,10 @@ class _KraveoVendorAppState extends State<KraveoVendorApp> {
 /// Decides between splash, login, the "can't reach Kraveo" retry state and the app, and wires
 /// session expiry (HTTP 401 on any authenticated call) and sign-out to the rest of the app.
 class AuthGate extends StatefulWidget {
-  const AuthGate({super.key, required this.session, this.backend, this.socketFactory, this.alarm});
+  const AuthGate({super.key, required this.session, this.push, this.backend, this.socketFactory, this.alarm});
 
   final SessionController session;
+  final PushController? push;
   final VendorBackend? backend;
   final OrderSocketFactory? socketFactory;
   final AlarmSink? alarm;
@@ -84,12 +105,18 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     VendorApiService.onUnauthorized = _handleUnauthorized;
     VendorApiService.onNotApproved = _handleNotApproved;
     WidgetsBinding.instance.addObserver(this);
+    final push = widget.push;
+    if (push != null) {
+      _session.beforeLogout = push.unregisterForLogout;
+      unawaited(push.init());
+    }
     _session.restore();
   }
 
   @override
   void dispose() {
     _session.removeListener(_onSessionChanged);
+    if (_session.beforeLogout == widget.push?.unregisterForLogout) _session.beforeLogout = null;
     if (VendorApiService.onUnauthorized == _handleUnauthorized) VendorApiService.onUnauthorized = null;
     if (VendorApiService.onNotApproved == _handleNotApproved) VendorApiService.onNotApproved = null;
     WidgetsBinding.instance.removeObserver(this);
@@ -99,10 +126,32 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   /// Leaving the signed-in state (log out or expiry): stop anything that belongs to the old
   /// partner, such as a ringing order alarm or queued order pop-ups.
   void _onSessionChanged() {
+    _syncPush();
     final was = _lastStatus;
     _lastStatus = _session.status;
     if (was != SessionStatus.signedOut && _session.status == SessionStatus.signedOut) {
       OrderQueueService.clearQueue();
+    }
+  }
+
+  /// Tells the push layer who is signed in: an approved partner gets a device token registered; signing out
+  /// forgets it. Checking / unreachable states change nothing (the saved login is still there).
+  void _syncPush() {
+    final push = widget.push;
+    if (push == null) return;
+    switch (_session.status) {
+      case SessionStatus.signedOut:
+        push.onSignedOut();
+      case SessionStatus.signedIn:
+        final me = _session.session;
+        if (me != null && me.approval == PartnerApproval.approved) {
+          unawaited(push.onSignedIn(me.userId));
+        } else {
+          push.onNotApproved();
+        }
+      case SessionStatus.checking:
+      case SessionStatus.unreachable:
+        break;
     }
   }
 
@@ -126,7 +175,10 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _session.status == SessionStatus.signedIn) _session.refreshApproval();
+    if (state == AppLifecycleState.resumed && _session.status == SessionStatus.signedIn) {
+      _session.refreshApproval();
+      unawaited(widget.push?.onResumed());
+    }
   }
 
   /// A 401 came back from an authenticated call: back to login with an explanation.

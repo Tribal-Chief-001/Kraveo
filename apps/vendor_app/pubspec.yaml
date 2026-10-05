@@ -1,7 +1,7 @@
 name: vendor_app
 description: "Kraveo Dhaba Owner Mobile App (High Volume Audio & Simple UI)"
 publish_to: 'none'
-version: 1.4.0+7
+version: 1.5.0+9
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -19,6 +19,10 @@ dependencies:
   kraveo_ui:
     path: ../../packages/kraveo_ui
   lucide_icons_flutter: ^3.1.20
+  firebase_core: ^4.15.0
+  firebase_messaging: ^16.7.0
+  flutter_local_notifications: ^22.3.1
+  package_info_plus: ^10.2.1
 
 dev_dependencies:
   flutter_test:
@@ -28,6 +32,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # Same alarm tone as android/app/src/main/res/raw/new_order_alarm.ogg (in-app alarm, no network needed).
+    - assets/audio/new_order_alarm.ogg
 
 flutter_launcher_icons:
   android: true

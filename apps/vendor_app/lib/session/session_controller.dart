@@ -26,6 +26,10 @@ class SessionController extends ChangeNotifier {
 
   final PartnerAuthService auth;
 
+  /// Runs at the start of [logout], before the token is cleared, with the server call (best effort and bounded).
+  /// The push layer uses it to `DELETE /devices` while the JWT is still valid.
+  Future<void> Function()? beforeLogout;
+
   SessionStatus _status = SessionStatus.checking;
   PartnerSession? _session;
   bool _expiring = false;
@@ -185,6 +189,7 @@ class SessionController extends ChangeNotifier {
     try {
       await Future.wait<void>([
         if (beforeClear != null) beforeClear(),
+        if (beforeLogout != null) beforeLogout!(),
         if (token != null && token.isNotEmpty) auth.logout(token),
       ]).timeout(const Duration(seconds: 5));
     } catch (_) {}
