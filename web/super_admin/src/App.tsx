@@ -20,6 +20,7 @@ import { NeedsAttentionPanel } from './components/NeedsAttentionPanel';
 import { DrawerMode, OrderDrawer } from './components/OrderDrawer';
 import { mergeInto, mergeOrderLists, patchOrder, restoreIfUntouched, upsertOrder } from './lib/orders';
 import { localAttention, pruneWithLiveOrders } from './lib/orderProblems';
+import { SavedPin, vendorsNeedingLocation } from './lib/vendorLocation';
 import { mergeRiderPins, newestPerRider, replaceRiderPins } from './lib/riderMarkers';
 
 /** Contract 3: sockets are only a speed-up; the REST list is polled while the page is visible. */
@@ -375,8 +376,8 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleVendorLocationSaved = useCallback((vendorId: string, lat: number, lng: number, hasLocation: boolean) => {
-    setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, lat, lng, hasLocation } : vendor));
+  const handleVendorLocationSaved = useCallback((vendorId: string, saved: SavedPin) => {
+    setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, lat: saved.lat, lng: saved.lng, hasLocation: saved.hasLocation, locationSource: saved.locationSource, locationSetAt: saved.locationSetAt, locationAccuracyM: saved.locationAccuracyM } : vendor));
   }, []);
 
   const handleLogout = () => {
@@ -407,6 +408,7 @@ export const App: React.FC = () => {
     const base = attention.available === false ? localAttention(orders, now) : attention.entries;
     return pruneWithLiveOrders(base.map((entry) => (entry.orderId && byId.has(entry.orderId) ? { ...entry, order: byId.get(entry.orderId)! } : entry)));
   }, [attention.available, attention.entries, orders, now]);
+  const locationGaps = useMemo(() => vendorsNeedingLocation(vendors), [vendors]);
   const attentionIds = useMemo(() => new Set(attentionEntries.map((entry) => entry.orderId).filter((id): id is string => Boolean(id))), [attentionEntries]);
   const drawerOrder = drawer ? orders.find((order) => order.id === drawer.id) ?? (drawerFallback?.id === drawer.id ? drawerFallback : null) : null;
   const drawerEntry = drawer ? attentionEntries.find((entry) => entry.orderId === drawer.id) : undefined;
@@ -436,7 +438,7 @@ export const App: React.FC = () => {
         isLiveConnected={isLiveConnected}
         mobileOpen={mobileNavOpen}
         onCloseMobile={closeMobileNav}
-        badges={{ orders: activeOrderCount, attention: attentionEntries.length, applications: pendingApplications }}
+        badges={{ orders: activeOrderCount, attention: attentionEntries.length + locationGaps.length, applications: pendingApplications }}
         alertBadges={{ attention: true }}
       />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -467,6 +469,8 @@ export const App: React.FC = () => {
             {activeTab === 'attention' && (
               <NeedsAttentionPanel
                 entries={attentionEntries}
+                locationGaps={locationGaps}
+                onOpenVendors={() => handleSelectTab('vendors')}
                 serverAvailable={attention.available}
                 loading={attention.loading}
                 error={attention.error}
@@ -479,7 +483,7 @@ export const App: React.FC = () => {
                 onClearQuery={clearQuery}
               />
             )}
-            {activeTab === 'applications' && <ApplicationsPanel refreshKey={applicationsKey} query={searchQuery} onChanged={fetchBackendData} onAuthError={handleSessionError} />}
+            {activeTab === 'applications' && <ApplicationsPanel refreshKey={applicationsKey} query={searchQuery} onChanged={fetchBackendData} onAuthError={handleSessionError} onLocationSaved={handleVendorLocationSaved} />}
             {activeTab === 'vendors' && <VendorManager vendors={vendors} onToggleVendor={handleToggleVendor} onLocationSaved={handleVendorLocationSaved} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'drivers' && <DriverManager drivers={driverPartners} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'customers' && <CustomersPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} />}

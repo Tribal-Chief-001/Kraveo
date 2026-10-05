@@ -1,10 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { Loader2, MapPin, Plus, SearchX, Star, Store } from 'lucide-react';
+import { MapPin, Plus, SearchX, Star, Store } from 'lucide-react';
 import { Vendor } from '../types';
-import { apiService } from '../services/api';
-import { formatLatLng, parseLocationInput, vendorHasRealPin } from '../lib/campus';
-import { Field } from './ui/Field';
-import { useToast } from './ui/Toast';
+import type { SavedPin } from '../lib/vendorLocation';
+import { VendorLocationEditor } from './VendorLocationEditor';
 import { AddPartnerDrawer } from './AddPartnerDrawer';
 import { ApprovalPill } from './ui/ApprovalPill';
 import { Avatar } from './ui/Avatar';
@@ -18,65 +16,13 @@ interface VendorManagerProps {
   /** Called after a restaurant (with its owner login) was created, so the list reloads. */
   onCreated?: () => void;
   /** Called after an admin saved a restaurant's map pin, so the list (and the live map) use it at once. */
-  onLocationSaved?: (vendorId: string, lat: number, lng: number, hasLocation: boolean) => void;
+  onLocationSaved?: (vendorId: string, saved: SavedPin) => void;
   loading?: boolean;
   query?: string;
   onClearQuery?: () => void;
 }
 
 type VendorFilter = 'ALL' | 'OPEN' | 'CLOSED';
-
-/** "Location: not set" badge + inline editor. The text box takes whatever Google Maps gives (checked here and again by the server). */
-const VendorLocation: React.FC<{ vendor: Vendor; onSaved?: VendorManagerProps['onLocationSaved'] }> = ({ vendor, onSaved }) => {
-  const toast = useToast();
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState('');
-  const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
-  const has = vendorHasRealPin(vendor);
-  const inputId = `vloc-${vendor.id}`;
-
-  const open = () => { setText(has && vendor.lat !== undefined && vendor.lng !== undefined ? formatLatLng(vendor.lat, vendor.lng) : ''); setError(''); setEditing(true); };
-  const save = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const parsed = parseLocationInput(text);
-    if (!parsed.ok) { setError(parsed.message); return; }
-    setSaving(true); setError('');
-    try {
-      const saved = await apiService.setVendorLocation(vendor.id, parsed.lat, parsed.lng);
-      onSaved?.(vendor.id, saved.lat, saved.lng, saved.hasLocation);
-      toast.success('Location saved', `${vendor.name} is now on the map.`);
-      setEditing(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'The location could not be saved.');
-    } finally { setSaving(false); }
-  };
-
-  return (
-    <div className="mt-3 border-t border-kraveo-line pt-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <p className="k-label">Map location</p>
-          {has && vendor.lat !== undefined && vendor.lng !== undefined
-            ? <p className="truncate font-mono text-xs text-kraveo-ink2">{formatLatLng(vendor.lat, vendor.lng)}</p>
-            : <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-kraveo-status-placed/15 px-2 py-0.5 text-[11px] font-bold text-kraveo-status-placed">Not set</span>}
-        </div>
-        {!editing && <button type="button" className="k-btn-ghost !min-h-[36px] !px-3 text-xs" onClick={open} aria-label={`${has ? 'Change' : 'Set'} map location of ${vendor.name}`}>{has ? 'Change' : 'Set location'}</button>}
-      </div>
-      {editing && (
-        <form onSubmit={save} className="mt-3 space-y-2" noValidate>
-          <Field label="Location (paste from Google Maps, e.g. 23.0745, 76.8590)" htmlFor={inputId} error={error}>
-            <input id={inputId} className="k-input" inputMode="decimal" autoComplete="off" autoFocus value={text} onChange={(e) => { setText(e.target.value); setError(''); }} placeholder="23.0745, 76.8590" aria-invalid={Boolean(error)} aria-describedby={error ? `${inputId}-msg` : undefined} />
-          </Field>
-          <div className="flex gap-2">
-            <button type="button" className="k-btn-ghost flex-1 !min-h-[36px] text-xs" onClick={() => setEditing(false)} disabled={saving}>Cancel</button>
-            <button type="submit" className="k-btn-primary flex-1 !min-h-[36px] text-xs" disabled={saving} aria-busy={saving}>{saving ? <><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />Saving…</> : 'Save location'}</button>
-          </div>
-        </form>
-      )}
-    </div>
-  );
-};
 
 export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleVendor, onCreated, onLocationSaved, loading = false, query = '', onClearQuery }) => {
   const [showDrawer, setShowDrawer] = useState(false);
@@ -157,7 +103,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
               </div>
             </div>
 
-            <VendorLocation vendor={v} onSaved={onLocationSaved} />
+            <VendorLocationEditor id={v.id} name={v.name} pin={v} onSaved={onLocationSaved} />
 
             <div className="mt-4 flex items-center justify-between gap-3 border-t border-kraveo-line pt-4">
               <div className="flex items-center gap-2">

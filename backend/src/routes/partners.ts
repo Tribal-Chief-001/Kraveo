@@ -10,6 +10,8 @@ import { dropFromPartnerRooms, addToPartnerRooms } from '../realtime';
 import { errSummary } from '../utils/log';
 import { validParams } from '../utils/http';
 import { disableUserTokens } from '../services/push/deviceTokens';
+import { checkVendorLocation } from '../config/campus';
+import { vendorLocationView, checkAccuracy, devicePinData, describePin } from '../services/vendorLocation';
 
 /**
  * Partner (restaurant / rider) applications and the admin tools around them.
@@ -115,6 +117,22 @@ const driverFields = (b: any, ownPhone: string, requirePlate = true): { ok: true
   return { ok: true, data: { vehicleType, vehicleRegNo: plate || null, emergencyPhone, upiId: upi || null } };
 };
 
+/**
+ * Optional restaurant pin sent with sign-up (Docs/20): `lat` + `lng` (both or neither, JSON numbers, within 3 km of the campus)
+ * and an optional `locationAccuracyM` (0..5000). null/absent = no location, exactly as before. An accuracy without coordinates is ignored.
+ */
+const signupLocation = (b: any): { ok: true; pin: { lat: number; lng: number; accuracyM: number | null } | null } | { ok: false; error: Fail } => {
+  const has = (v: unknown) => v !== undefined && v !== null;
+  if (!has(b?.lat) && !has(b?.lng)) return { ok: true, pin: null };
+  if (!has(b.lat)) return { ok: false, error: { field: 'lat', message: 'Send both latitude and longitude, or neither.' } };
+  if (!has(b.lng)) return { ok: false, error: { field: 'lng', message: 'Send both latitude and longitude, or neither.' } };
+  const check = checkVendorLocation(b.lat, b.lng);
+  if (!check.ok) return { ok: false, error: { field: check.field, message: check.message } };
+  const acc = checkAccuracy(b.locationAccuracyM);
+  if (!acc.ok) return { ok: false, error: { field: 'locationAccuracyM', message: acc.message } };
+  return { ok: true, pin: { lat: check.lat, lng: check.lng, accuracyM: acc.value } };
+};
+
 export { vendorFields as validateVendorFields, driverFields as validateDriverFields, newRunnerCode, audit as writeAudit, clean, blankToNull };
 
 // ----------------------------------------------------------------------------
@@ -144,6 +162,7 @@ export const requireApprovedPartner = async (req: AuthenticatedRequest, res: Res
 const vendorView = (v: any) => v && ({
   id: v.id, name: v.name, category: v.category, address: v.address, fssaiNumber: v.fssaiNumber ?? null,
   isAcceptingOrders: v.isAcceptingOrders, approvalStatus: v.approvalStatus, rejectionReason: v.rejectionReason ?? null,
+  ...vendorLocationView(v),
 });
 const driverView = (d: any) => d && ({
   id: d.id, runnerCode: d.runnerCode, vehicleType: d.vehicleType, vehicleRegNo: d.vehicleRegNo ?? null,
@@ -171,6 +190,8 @@ partnerRouter.post('/auth/partner-signup', async (req: Request, res: Response) =
 
     const details = role === 'VENDOR' ? vendorFields(b) : driverFields(b, phone);
     if (!details.ok) return bad(details.error);
+    const location = role === 'VENDOR' ? signupLocation(b) : ({ ok: true, pin: null } as const);
+    if (!location.ok) return bad(location.error);
 
     if (!allowSignup(last10(phone))) {
       return res.status(429).json({ success: false, message: 'Too many sign-up attempts. Please try again in an hour.' });
@@ -187,7 +208,7 @@ partnerRouter.post('/auth/partner-signup', async (req: Request, res: Response) =
       if (role === 'VENDOR') {
         const d = (details as any).data;
         const vendor = await tx.vendor.create({
-          data: { userId: user.id, name: d.name, category: d.category, address: d.address, fssaiNumber: d.fssaiNumber, bannerImage: DEFAULT_BANNER, isAcceptingOrders: false, approvalStatus: 'PENDING', appliedAt: now },
+          data: { userId: user.id, name: d.name, category: d.category, address: d.address, fssaiNumber: d.fssaiNumber, bannerImage: DEFAULT_BANNER, isAcceptingOrders: false, approvalStatus: 'PENDING', appliedAt: now, ...(location.pin ? devicePinData(location.pin.lat, location.pin.lng, location.pin.accuracyM) : {}) },
         });
         return { user, vendor, driver: null };
       }
@@ -245,6 +266,36 @@ partnerRouter.get('/partner/me', requireAuth, requireRole('VENDOR', 'DRIVER'), a
   } catch (err) {
     console.error('partner/me failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
+  }
+});
+
+// The restaurant sets its own map pin from the phone's GPS (Docs/20). Own vendor row only (never an id from the body).
+// Allowed while the application is PENDING (the pin is part of what the admin reviews) and APPROVED; REJECTED / SUSPENDED
+// get the same 403 PARTNER_NOT_APPROVED as the other partner writes. Rate limited in middleware/rateLimit.ts (VENDOR_LOCATION).
+partnerRouter.put('/partner/vendor/location', requireAuth, requireRole('VENDOR'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {};
+    const bad = (e: Fail) => res.status(400).json({ success: false, field: e.field, message: e.message });
+    const { vendor } = await loadOwnProfile(req.user!.id, Role.VENDOR);
+    if (!vendor) return res.status(404).json({ success: false, message: 'No restaurant is linked to this account.' });
+    if (vendor.approvalStatus !== 'PENDING' && vendor.approvalStatus !== 'APPROVED') {
+      return res.status(403).json({ success: false, code: 'PARTNER_NOT_APPROVED', approvalStatus: vendor.approvalStatus, message: notApprovedMessage(vendor.approvalStatus) });
+    }
+    const check = checkVendorLocation(b.lat, b.lng);
+    if (!check.ok) return bad({ field: check.field, message: check.message });
+    const acc = checkAccuracy(b.accuracyM);
+    if (!acc.ok) return bad({ field: 'accuracyM', message: acc.message });
+
+    const updated = await prisma.vendor.update({ where: { id: vendor.id }, data: devicePinData(check.lat, check.lng, acc.value) });
+    await audit(
+      'VENDOR_LOCATION_SET', 'VENDOR', vendor.id,
+      `${vendor.name} set its own map location from the phone to ${check.lat.toFixed(6)}, ${check.lng.toFixed(6)}${acc.value !== null ? ` (about ${Math.round(acc.value)} m)` : ''}; previous: ${describePin(vendor)}`,
+    );
+    const { hasLocation, lat, lng, locationSource, locationSetAt, locationAccuracyM } = vendorLocationView(updated);
+    return res.json({ success: true, data: { lat, lng, hasLocation, locationSource, locationSetAt, locationAccuracyM } });
+  } catch (err) {
+    console.error('partner/vendor/location failed:', errSummary(err));
+    return res.status(500).json({ success: false, message: 'Could not save the location. Please try again.' });
   }
 });
 
@@ -328,7 +379,7 @@ const applicationRow = (kind: Kind, row: any) => ({
   reviewedAt: row.reviewedAt ?? null,
   createdAt: row.createdAt,
   ...(kind === 'VENDOR'
-    ? { vendor: { name: row.name, category: row.category, address: row.address, fssaiNumber: row.fssaiNumber ?? null, isAcceptingOrders: row.isAcceptingOrders } }
+    ? { vendor: { name: row.name, category: row.category, address: row.address, fssaiNumber: row.fssaiNumber ?? null, isAcceptingOrders: row.isAcceptingOrders, ...vendorLocationView(row) } }
     : { driver: { runnerCode: row.runnerCode, vehicleType: row.vehicleType, vehicleRegNo: row.vehicleRegNo ?? null, emergencyPhone: row.emergencyPhone ?? null, upiId: row.upiId ?? null } }),
 });
 

@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Ban, CheckCircle2, ExternalLink, KeyRound, Loader2, MapPin, Phone, RefreshCw, RotateCcw, SearchX, TriangleAlert, UserCheck } from 'lucide-react';
-import { AttentionEntry, Order } from '../types';
+import { AttentionEntry, Order, Vendor } from '../types';
+import { NO_LOCATION_TEXT } from '../lib/vendorLocation';
 import { inr, timeAgo } from '../lib/tokens';
 import { canCancel, canResetOtpLock } from '../lib/orders';
 import { ProblemMeta, TONE_CLASS, problemMeta } from '../lib/orderProblems';
@@ -22,6 +23,10 @@ interface Props {
   onOpenOrder: (orderId: string, mode?: DrawerMode, fallback?: Order | null) => void;
   onResetOtpLock: (orderId: string) => Promise<boolean>;
   onRetryRefund: (orderId: string) => Promise<boolean>;
+  /** Live restaurants that still have no real map pin (riders cannot navigate to them). */
+  locationGaps?: Vendor[];
+  /** Opens the Vendors tab, where the pin is set. */
+  onOpenVendors?: () => void;
   query?: string;
   onClearQuery?: () => void;
 }
@@ -74,10 +79,11 @@ const ActionButton: React.FC<{ meta: ProblemMeta; entry: AttentionEntry; busy: b
   }
 };
 
-export const NeedsAttentionPanel: React.FC<Props> = ({ entries, serverAvailable, loading, error, checkedAt, onRefresh, onOpenOrder, onResetOtpLock, onRetryRefund, query = '', onClearQuery }) => {
+export const NeedsAttentionPanel: React.FC<Props> = ({ entries, serverAvailable, loading, error, checkedAt, onRefresh, onOpenOrder, onResetOtpLock, onRetryRefund, locationGaps = [], onOpenVendors, query = '', onClearQuery }) => {
   const [busyId, setBusyId] = useState<string | null>(null);
   const q = query.trim().toLowerCase();
   const visible = useMemo(() => entries.filter((entry) => matches(entry, q)), [entries, q]);
+  const visibleGaps = useMemo(() => (q ? locationGaps.filter((v) => v.name.toLowerCase().includes(q) || v.address.toLowerCase().includes(q) || 'location'.includes(q)) : locationGaps), [locationGaps, q]);
   const critical = entries.filter((entry) => entry.problems.some((p) => problemMeta(p.code).tone === 'danger')).length;
 
   const runBusy = (action: (orderId: string) => Promise<boolean>) => async (orderId: string) => {
@@ -93,6 +99,7 @@ export const NeedsAttentionPanel: React.FC<Props> = ({ entries, serverAvailable,
         <div className="flex flex-wrap items-center gap-2 text-xs" aria-live="polite">
           <TonePill tone="danger">{critical} urgent</TonePill>
           <TonePill tone="warning">{entries.length - critical} to check</TonePill>
+          {locationGaps.length > 0 && <TonePill tone="warning" icon={MapPin}>{locationGaps.length} without location</TonePill>}
           <span className="text-kraveo-ink3">{checkedAt ? `Checked ${timeAgo(checkedAt)}` : 'Not checked yet'} · refreshes on every order event</span>
         </div>
         <button type="button" className="k-btn-ghost !min-h-[38px] self-start text-xs sm:self-auto" onClick={onRefresh} disabled={loading} aria-busy={loading}>
@@ -107,11 +114,29 @@ export const NeedsAttentionPanel: React.FC<Props> = ({ entries, serverAvailable,
       )}
       {error && <div role="alert" className="rounded-k-md border border-kraveo-danger/30 bg-kraveo-danger/10 px-4 py-3 text-sm text-kraveo-ink">{error}</div>}
 
+      {visibleGaps.length > 0 && (
+        <section className="k-card border-l-4 border-kraveo-status-placed p-4" aria-label="Restaurants without a map location">
+          <p className="font-bold text-kraveo-ink">Restaurants without a map location ({visibleGaps.length})</p>
+          <p className="mt-0.5 text-xs text-kraveo-ink3">Riders cannot navigate to a kitchen that has no pin. The restaurant can detect it from its app; you can also type it in.</p>
+          <ul className="mt-3 divide-y divide-kraveo-line">
+            {visibleGaps.map((v) => (
+              <li key={v.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate font-bold text-kraveo-ink">{v.name}</p>
+                  <p className="flex items-center gap-1 text-xs text-kraveo-status-placed"><TriangleAlert className="h-3 w-3 shrink-0" aria-hidden="true" />{NO_LOCATION_TEXT}</p>
+                </div>
+                {onOpenVendors && <button type="button" className="k-btn-ghost !min-h-[36px] shrink-0 !px-3 text-xs" onClick={onOpenVendors} aria-label={`Set the map location of ${v.name} in the Vendors tab`}><MapPin className="h-4 w-4" aria-hidden="true" />Set location</button>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <div className="grid grid-cols-1 items-start gap-3 sm:gap-4 xl:grid-cols-2">
         {loading && entries.length === 0 && Array.from({ length: 2 }).map((_, i) => <SkeletonCard key={i} lines={3} />)}
-        {!loading && visible.length === 0 && (
+        {!loading && visible.length === 0 && visibleGaps.length === 0 && (
           <div className="k-card xl:col-span-2">
-            {entries.length === 0
+            {entries.length === 0 && locationGaps.length === 0
               ? <EmptyState icon={CheckCircle2} title="Nothing needs you right now" description="Failed refunds, locked gate OTPs, payment mismatches and stuck orders show up here as soon as they happen." />
               : <EmptyState icon={SearchX} title="No problems match" description="Nothing matches the current search." action={<button className="k-btn-ghost" onClick={onClearQuery}>Clear search</button>} />}
           </div>

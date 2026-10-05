@@ -1,3 +1,5 @@
+import { readPin } from './lib/vendorLocation';
+
 export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'drivers' | 'customers' | 'analytics';
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED';
@@ -109,6 +111,10 @@ export interface Vendor {
   lng?: number;
   /** Server flag: false while the restaurant still has the placeholder pin. Undefined on an older server. */
   hasLocation?: boolean;
+  /** Who set the pin (DEVICE = the restaurant's phone, ADMIN = typed in the dashboard), when, and the GPS accuracy in metres. Null on older rows / servers. */
+  locationSource?: 'DEVICE' | 'ADMIN' | null;
+  locationSetAt?: string | null;
+  locationAccuracyM?: number | null;
   activeOrdersCount: number;
   menuItems?: MenuItem[];
   approvalStatus?: ApprovalStatus;
@@ -377,7 +383,7 @@ export const normalizeVendor = (raw: any): Vendor => ({
   address: raw?.address || 'Address unavailable',
   lat: raw?.lat,
   lng: raw?.lng,
-  hasLocation: typeof raw?.hasLocation === 'boolean' ? raw.hasLocation : undefined,
+  ...readPin(raw),
   activeOrdersCount: asNumber(raw?.activeOrdersCount ?? raw?._count?.orders),
   menuItems: Array.isArray(raw?.menuItems) ? raw.menuItems : undefined,
   approvalStatus: raw?.approvalStatus,
@@ -419,7 +425,12 @@ export interface Application {
   appliedAt: string;
   reviewedAt: string | null;
   createdAt: string;
-  vendor?: { name: string; category: string; address: string; fssaiNumber: string | null; isAcceptingOrders: boolean };
+  vendor?: {
+    name: string; category: string; address: string; fssaiNumber: string | null; isAcceptingOrders: boolean;
+    /** The pin the restaurant sent (or the admin set); absent on an older server. */
+    lat?: number | null; lng?: number | null; hasLocation?: boolean;
+    locationSource?: 'DEVICE' | 'ADMIN' | null; locationSetAt?: string | null; locationAccuracyM?: number | null;
+  };
   driver?: { runnerCode: string; vehicleType: string; vehicleRegNo: string | null; emergencyPhone: string | null; upiId: string | null };
 }
 

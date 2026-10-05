@@ -58,7 +58,7 @@ export const isNearCampus = (lat: number, lng: number, center: LatLng = campusCe
   Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && distanceKm(center, { lat, lng }) <= NEAR_CAMPUS_KM;
 
 /** A restaurant has a real pin when the server says so, or (older server) when it is a finite pin that is not the placeholder. */
-export const vendorHasRealPin = (v: { lat?: number; lng?: number; hasLocation?: boolean }): boolean => {
+export const vendorHasRealPin = (v: { lat?: number | null; lng?: number | null; hasLocation?: boolean }): boolean => {
   if (typeof v.hasLocation === 'boolean') return v.hasLocation && Number.isFinite(v.lat) && Number.isFinite(v.lng);
   if (typeof v.lat !== 'number' || typeof v.lng !== 'number' || !Number.isFinite(v.lat) || !Number.isFinite(v.lng)) return false;
   if (v.lat === 0 && v.lng === 0) return false;

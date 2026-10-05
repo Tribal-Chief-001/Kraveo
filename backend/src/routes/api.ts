@@ -16,6 +16,7 @@ import { timingSafeEqual } from 'crypto';
 import { orderRouter } from './orders';
 import { deviceRouter } from './devices';
 import { disableUserTokens } from '../services/push/deviceTokens';
+import { adminPinData, vendorLocationView, describePin, VENDOR_LOCATION_SELECT } from '../services/vendorLocation';
 import { partnerRouter, requireApprovedPartner, validateVendorFields, validateDriverFields, newRunnerCode, writeAudit, DEFAULT_BANNER } from './partners';
 
 export const apiRouter = Router();
@@ -248,8 +249,9 @@ apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
     }
     recordSuccess(key);
 
-    const vendors = role === 'VENDOR' ? await prisma.vendor.findMany({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true, approvalStatus: true, rejectionReason: true }, orderBy: { createdAt: 'asc' } }) : [];
-    const vendor = vendors.find((v) => v.approvalStatus === 'APPROVED') ?? vendors[0] ?? null;
+    const vendors = role === 'VENDOR' ? await prisma.vendor.findMany({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true, approvalStatus: true, rejectionReason: true, ...VENDOR_LOCATION_SELECT }, orderBy: { createdAt: 'asc' } }) : [];
+    const vendorRow = vendors.find((v) => v.approvalStatus === 'APPROVED') ?? vendors[0] ?? null;
+    const vendor = vendorRow ? { ...vendorRow, ...vendorLocationView(vendorRow) } : null;
     const driver = role === 'DRIVER' ? await prisma.driverPartner.findFirst({ where: { userId: user.id }, select: { id: true, runnerCode: true, approvalStatus: true, rejectionReason: true } }) : null;
     const approvalStatus = (vendor ?? driver)?.approvalStatus ?? 'APPROVED';
     const rejectionReason = (vendor ?? driver)?.rejectionReason ?? null;
@@ -517,9 +519,7 @@ apiRouter.post('/admin/partners', requireAuth, requireRole('ADMIN'), async (req:
         await tx.vendor.update({ where: { id: String(vendorId) }, data: { userId: created.id } });
         profileId = String(vendorId);
       } else if (role === 'VENDOR' && vendorData) {
-        const lat = pin ? pin.lat : undefined;
-        const lng = pin ? pin.lng : undefined;
-        const v = await tx.vendor.create({ data: { ...vendorData, userId: created.id, bannerImage: DEFAULT_BANNER, isAcceptingOrders: true, approvalStatus: 'APPROVED', ...(lat !== undefined ? { lat } : {}), ...(lng !== undefined ? { lng } : {}) } });
+        const v = await tx.vendor.create({ data: { ...vendorData, userId: created.id, bannerImage: DEFAULT_BANNER, isAcceptingOrders: true, approvalStatus: 'APPROVED', ...(pin ? adminPinData(pin.lat, pin.lng) : {}) } });
         profileId = v.id;
       }
       if (role === 'DRIVER' && driverData) {
@@ -539,10 +539,11 @@ apiRouter.get('/admin/partners', requireAuth, requireRole('ADMIN'), async (_req:
   try {
     const users = await prisma.user.findMany({
       where: { role: { in: [Role.VENDOR, Role.DRIVER] } },
-      select: { id: true, name: true, phone: true, role: true, createdAt: true, vendorsOwned: { select: { id: true, name: true, approvalStatus: true } }, driverProfile: { select: { id: true, runnerCode: true, approvalStatus: true } } },
+      select: { id: true, name: true, phone: true, role: true, createdAt: true, vendorsOwned: { select: { id: true, name: true, approvalStatus: true, ...VENDOR_LOCATION_SELECT } }, driverProfile: { select: { id: true, runnerCode: true, approvalStatus: true } } },
       orderBy: { createdAt: 'desc' },
     });
-    return res.json({ success: true, data: users });
+    const data = users.map((u) => ({ ...u, vendorsOwned: u.vendorsOwned.map((v) => ({ ...v, ...vendorLocationView(v) })) }));
+    return res.json({ success: true, data });
   } catch (err: any) {
     return fail(res, err, 'Could not list partners');
   }
@@ -629,6 +630,7 @@ apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: Authen
         address: address || 'Ashta Highway, near VIT Bhopal',
         lat: pin ? pin.lat : 23.0768,
         lng: pin ? pin.lng : 76.8524,
+        ...(pin ? adminPinData(pin.lat, pin.lng) : {}),
         bannerImage: bannerImage || 'https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=600',
         isAcceptingOrders: true,
       },
@@ -647,10 +649,10 @@ apiRouter.patch('/admin/vendors/:id/location', requireAuth, requireRole('ADMIN')
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const check = checkVendorLocation(body.lat, body.lng);
     if (!check.ok) return res.status(400).json({ success: false, field: check.field, message: check.message });
-    const existing = await prisma.vendor.findUnique({ where: { id: req.params.id }, select: { id: true, name: true } });
+    const existing = await prisma.vendor.findUnique({ where: { id: req.params.id }, select: { id: true, name: true, ...VENDOR_LOCATION_SELECT } });
     if (!existing) return res.status(404).json({ success: false, message: 'Vendor not found' });
-    const updated = await prisma.vendor.update({ where: { id: existing.id }, data: { lat: check.lat, lng: check.lng }, select: { id: true, name: true, lat: true, lng: true } });
-    await writeAudit('VENDOR_LOCATION_SET', 'VENDOR', updated.id, `Admin set the map location of ${updated.name} to ${check.lat.toFixed(6)}, ${check.lng.toFixed(6)}`);
+    const updated = await prisma.vendor.update({ where: { id: existing.id }, data: adminPinData(check.lat, check.lng), select: { id: true, name: true, ...VENDOR_LOCATION_SELECT } });
+    await writeAudit('VENDOR_LOCATION_SET', 'VENDOR', updated.id, `Admin set the map location of ${updated.name} to ${check.lat.toFixed(6)}, ${check.lng.toFixed(6)}; previous: ${describePin(existing)}`);
     return res.json({ success: true, data: { ...updated, hasLocation: vendorHasLocation(updated.lat, updated.lng) } });
   } catch (err: any) {
     return fail(res, err, 'Error setting the vendor location');

@@ -92,6 +92,10 @@ model Vendor {
   isAcceptingOrders Boolean  @default(true)
   lat               Float    @default(23.0768)
   lng               Float    @default(76.8524)
+  // Where the pin came from (Docs/20): DEVICE = the restaurant's own phone, ADMIN = typed by Kraveo, null = never set / legacy.
+  locationSource    String?
+  locationSetAt     DateTime?
+  locationAccuracyM Float?
   // Partner approval: rows created by Kraveo are APPROVED; self sign-ups start PENDING.
   approvalStatus    ApprovalStatus @default(APPROVED)
   rejectionReason   String?

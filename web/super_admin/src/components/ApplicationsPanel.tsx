@@ -1,9 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bike, Check, ClipboardCheck, Copy, KeyRound, Loader2, MapPin, Phone, RefreshCw, Store, X } from 'lucide-react';
 import { Application, ApplicationCounts, ApprovalStatus, PartnerKind } from '../types';
+import type { SavedPin } from '../lib/vendorLocation';
+import { VendorLocationEditor } from './VendorLocationEditor';
 import { ApiError, apiService } from '../services/api';
 import { copyText, generatePassword } from '../lib/credentials';
 import { timeAgo } from '../lib/tokens';
+import { vendorHasRealPin } from '../lib/campus';
 import { ApprovalPill } from './ui/ApprovalPill';
 import { Avatar } from './ui/Avatar';
 import { Drawer } from './ui/Drawer';
@@ -19,6 +22,8 @@ interface Props {
   /** Called after any decision so counts and the vendor/driver lists can refresh. */
   onChanged: () => void;
   onAuthError: (error: unknown) => void;
+  /** Called after an admin typed a pin for a restaurant here, so the Vendors tab and the live map use it too. */
+  onLocationSaved?: (vendorId: string, saved: SavedPin) => void;
 }
 
 type StatusFilter = ApprovalStatus | 'ALL';
@@ -49,7 +54,7 @@ type Dialog =
   | { type: 'password'; app: Application }
   | null;
 
-export const ApplicationsPanel: React.FC<Props> = ({ refreshKey, query = '', onChanged, onAuthError }) => {
+export const ApplicationsPanel: React.FC<Props> = ({ refreshKey, query = '', onChanged, onAuthError, onLocationSaved }) => {
   const toast = useToast();
   const [status, setStatus] = useState<StatusFilter>('PENDING');
   const [kind, setKind] = useState<KindFilter>('ALL');
@@ -96,6 +101,11 @@ export const ApplicationsPanel: React.FC<Props> = ({ refreshKey, query = '', onC
     } finally {
       setBusyId(null);
     }
+  };
+
+  const pinSaved = (id: string, saved: SavedPin) => {
+    setItems((current) => current.map((a) => (a.kind === 'VENDOR' && a.id === id && a.vendor ? { ...a, vendor: { ...a.vendor, ...saved } } : a)));
+    onLocationSaved?.(id, saved);
   };
 
   const visible = useMemo(() => {
@@ -170,7 +180,7 @@ export const ApplicationsPanel: React.FC<Props> = ({ refreshKey, query = '', onC
                   <>
                     <Detail label="Cuisine">{dash(a.vendor?.category)}</Detail>
                     <Detail label="FSSAI">{dash(a.vendor?.fssaiNumber)}</Detail>
-                    <div className="col-span-2"><Detail label="Location"><span className="inline-flex items-start gap-1"><MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-kraveo-ink3" aria-hidden="true" />{dash(a.vendor?.address)}</span></Detail></div>
+                    <div className="col-span-2"><Detail label="Address"><span className="inline-flex items-start gap-1"><MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-kraveo-ink3" aria-hidden="true" />{dash(a.vendor?.address)}</span></Detail></div>
                   </>
                 ) : (
                   <>
@@ -181,6 +191,15 @@ export const ApplicationsPanel: React.FC<Props> = ({ refreshKey, query = '', onC
                   </>
                 )}
               </div>
+
+              {isVendor && a.vendor && (
+                <>
+                  <VendorLocationEditor id={a.id} name={a.vendor.name} pin={a.vendor} onSaved={pinSaved} heading="Map pin" notSetLabel="Not provided" />
+                  {a.status === 'PENDING' && !vendorHasRealPin(a.vendor) && (
+                    <p className="mt-2 text-xs text-kraveo-ink3">The restaurant did not send a location. Type one above before approving, or approve now and set it later (riders cannot navigate to it until then).</p>
+                  )}
+                </>
+              )}
 
               {(a.status === 'REJECTED' || a.status === 'SUSPENDED') && a.rejectionReason && (
                 <p className="mt-3 rounded-k-sm bg-kraveo-surface2 px-3 py-2 text-xs text-kraveo-ink2"><span className="font-bold text-kraveo-ink">Reason shown to them:</span> {a.rejectionReason}</p>

@@ -22,6 +22,7 @@ import {
 } from '../types';
 import { normalizeAttention } from '../lib/orderProblems';
 import type { DropPointInfo } from '../lib/campus';
+import type { SavedPin } from '../lib/vendorLocation';
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? 'https://api.kraveo.site' : 'http://localhost:5000');
 export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (import.meta.env.PROD ? 'https://api.kraveo.site' : 'http://localhost:5000');
@@ -151,12 +152,18 @@ export const apiService = {
   },
 
   /** Sets a restaurant's map pin (admin only; the server checks ranges and that the point is on campus). */
-  async setVendorLocation(vendorId: string, lat: number, lng: number): Promise<{ lat: number; lng: number; hasLocation: boolean }> {
+  async setVendorLocation(vendorId: string, lat: number, lng: number): Promise<SavedPin> {
     const data = await request<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/location`, {
       method: 'PATCH',
       body: JSON.stringify({ lat, lng }),
     });
-    return { lat: Number(data?.lat ?? lat), lng: Number(data?.lng ?? lng), hasLocation: data?.hasLocation !== false };
+    return {
+      lat: Number(data?.lat ?? lat), lng: Number(data?.lng ?? lng), hasLocation: data?.hasLocation !== false,
+      // an admin save is always source ADMIN with no accuracy; an older server does not say, so fill it in
+      locationSource: data?.locationSource === 'DEVICE' ? 'DEVICE' : 'ADMIN',
+      locationSetAt: typeof data?.locationSetAt === 'string' ? data.locationSetAt : new Date().toISOString(),
+      locationAccuracyM: typeof data?.locationAccuracyM === 'number' ? data.locationAccuracyM : null,
+    };
   },
 
   async fetchAnalytics(range: 'today' | '7d' | '30d' = '7d'): Promise<AnalyticsData> {
