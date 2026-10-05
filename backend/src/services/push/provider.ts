@@ -87,7 +87,8 @@ const createFcmProvider = (): PushProvider | null => {
             // No FCM collapse key: FCM allows only a few active collapse keys per device, so a phone that was offline for a
             // while would silently lose pushes. Duplicates are already prevented server-side (PushLog.key).
             // Lock screen shows the real text (it never holds a code or phone); urgent events ask for max heads-up priority.
-            notification: { channelId: m.channelId, visibility: 'public', priority: m.priority === 'high' ? 'max' : 'default' },
+            // `tag`: a newer push for the same order (a reminder, the next status) replaces the previous banner instead of stacking.
+            notification: { channelId: m.channelId, visibility: 'public', priority: m.priority === 'high' ? 'max' : 'default', tag: `order_${m.data.orderId}` },
           },
         });
       },

@@ -46,6 +46,9 @@ const inChunks = async <T>(items: T[], fn: (item: T) => Promise<void>) => {
   for (let i = 0; i < items.length; i += CONCURRENCY) await Promise.all(items.slice(i, i + CONCURRENCY).map(fn));
 };
 
+/** What the apps see in `data.event`: a reminder is shown and routed exactly like the original NEW_ORDER. */
+const wireEvent = (event: PushEvent): string => (event === 'NEW_ORDER_REMINDER' ? 'NEW_ORDER' : event);
+
 type LogRow = { id: string; orderId: string; userId: string; event: string; attempts: number; createdAt: Date };
 
 const loadOrderForPush = (orderId: string) => prisma.order.findUnique({ where: { id: orderId }, include: ORDER_VIEW_INCLUDE });
@@ -72,7 +75,7 @@ const deliver = async (provider: PushProvider, row: LogRow, order: OrderWithRela
         priority: def.priority,
         ttlSeconds: def.ttlSeconds,
         collapseKey: `${event}:${order.id}`,
-        data: { event, orderId: order.id, v: '1' },
+        data: { event: wireEvent(event), orderId: order.id, v: '1' }, // the apps know NEW_ORDER; a reminder is the same news again
       };
       try {
         await withTimeout(Promise.resolve().then(() => provider.send(message)), sendTimeoutMs());
@@ -123,7 +126,7 @@ export const notifyOrderEvent = async (orderId: string, event: PushEvent, opts: 
         let row: LogRow;
         try {
           row = await prisma.pushLog.create({
-            data: { key: `${orderId}:${event}:${userId}`, orderId, userId, event, status: 'PENDING', attempts: 0, nextAttemptAt: new Date(now.getTime() + LEASE_MS) },
+            data: { key: `${orderId}:${event}:${userId}${opts.bucket != null ? `:${opts.bucket}` : ''}`, orderId, userId, event, status: 'PENDING', attempts: 0, nextAttemptAt: new Date(now.getTime() + LEASE_MS) },
             select: { id: true, orderId: true, userId: true, event: true, attempts: true, createdAt: true },
           });
         } catch (err) {
@@ -212,17 +215,27 @@ export const sweepMissedPushes = async (now: Date = new Date()): Promise<number>
   // 1) NEW_ORDER: paid in the last 10 min (the useful window), still waiting for the restaurant, no PushLog row for the owner yet.
   const paid = await prisma.order.findMany({
     where: { status: 'PLACED', paymentStatus: 'PAID', paidAt: { gte: new Date(now.getTime() - 10 * 60_000), lte: new Date(now.getTime() - 20_000) } },
-    select: { id: true, vendor: { select: { userId: true } } },
+    select: { id: true, paidAt: true, vendor: { select: { userId: true } } },
     orderBy: { paidAt: 'asc' },
     take: 30,
   });
   for (const o of paid) {
     const ownerId = o.vendor.userId;
     if (!ownerId) continue;
-    const seen = await prisma.pushLog.findUnique({ where: { key: `${o.id}:NEW_ORDER:${ownerId}` }, select: { id: true } });
-    if (seen) continue;
-    looked += 1;
-    await notifyOrderEvent(o.id, 'NEW_ORDER');
+    const seen = await prisma.pushLog.findUnique({ where: { key: `${o.id}:NEW_ORDER:${ownerId}` }, select: { id: true, status: true } });
+    if (!seen) {
+      looked += 1;
+      await notifyOrderEvent(o.id, 'NEW_ORDER');
+      continue;
+    }
+    // Reminder: the phone alarm rings once per push, so while the order stays unanswered the restaurant is nudged every minute
+    // (one push per minute bucket, up to the 10 min auto-cancel). Only after the first push was really delivered: a pending retry,
+    // a permanent failure or a restaurant with no device has nothing to repeat.
+    const minutes = Math.floor((now.getTime() - o.paidAt!.getTime()) / 60_000);
+    if (minutes >= 1 && seen.status === 'SENT') {
+      looked += 1;
+      await notifyOrderEvent(o.id, 'NEW_ORDER_REMINDER', { bucket: minutes });
+    }
   }
   // 2) NEW_DELIVERY: food waiting for a rider (ready, unclaimed, last 30 min): riders who are idle now and never heard about it are told.
   const waiting = await prisma.order.findMany({

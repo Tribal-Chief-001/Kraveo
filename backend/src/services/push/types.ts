@@ -4,6 +4,7 @@ export type PushApp = 'CUSTOMER' | 'VENDOR' | 'DRIVER';
 
 export const PUSH_EVENTS = [
   'NEW_ORDER',
+  'NEW_ORDER_REMINDER',
   'ORDER_CANCELLED_VENDOR',
   'NEW_DELIVERY',
   'DELIVERY_ASSIGNED',
@@ -47,4 +48,6 @@ export interface PushProvider {
 export interface PushOptions {
   /** Specific recipient for DELIVERY_ASSIGNED / DELIVERY_CANCELLED (the rider); ignored by the other events. */
   userId?: string;
+  /** Makes the claim key unique per repeat (NEW_ORDER_REMINDER: the minute since the order was paid). */
+  bucket?: number;
 }

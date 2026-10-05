@@ -554,10 +554,11 @@ describe('Push notifications', () => {
       row = (await logOf(id, 'NEW_ORDER'))[0];
       expect(row).toMatchObject({ status: 'SENT', attempts: 2, lastError: null });
       expect(row.sentAt).not.toBeNull();
-      expect(fake.to(id, 'NEW_ORDER')).toHaveLength(1);
+      const original = () => fake.to(id, 'NEW_ORDER').filter((m) => m.title === 'New order'); // reminders (own test) travel as NEW_ORDER too
+      expect(original()).toHaveLength(1);
       // and it is not sent a third time
       await runOrderMaintenance(new Date(Date.now() + 10 * 60_000));
-      expect(fake.to(id, 'NEW_ORDER')).toHaveLength(1);
+      expect(original()).toHaveLength(1);
     });
 
     test('QUOTA_EXCEEDED, INTERNAL and network errors (no code, timeout) are transient; five attempts then FAILED', async () => {
@@ -899,7 +900,7 @@ describe('Push notifications', () => {
     test('no OTP, phone number, address or private note in any title / body / data of any event', async () => {
       // Make sure each of the 12 events was exercised by the tests above.
       const seen = new Set(everything.map((m) => m.data.event));
-      expect([...PUSH_EVENTS].filter((e) => !seen.has(e))).toEqual([]);
+      expect([...PUSH_EVENTS].filter((e) => e !== 'NEW_ORDER_REMINDER' && !seen.has(e))).toEqual([]); // a reminder travels as NEW_ORDER (own test)
       expect(secrets.otps.size).toBeGreaterThan(0);
 
       const phones = [STUDENT, STUDENT2, STUDENT3, VENDOR, RIDER, RIDER2, ADMIN].map((u) => u.phone.replace(/\D/g, '').slice(-10));
@@ -976,12 +977,48 @@ describe('Push notifications', () => {
       expect(fake.to(id, 'NEW_ORDER').map((m) => m.token)).toEqual([TOK.vendor]);
       fake.sent.length = 0;
       await sweepMissedPushes(new Date());
-      expect(fake.to(id, 'NEW_ORDER')).toHaveLength(0);
+      expect(fake.to(id, 'NEW_ORDER').filter((m) => m.title === 'New order')).toHaveLength(0); // never the original twice (a reminder may follow)
       // Too old (outside the 10 min useful window) or already handled by the restaurant: not swept.
       await prisma.pushLog.deleteMany({ where: { orderId: id } });
       await prisma.order.update({ where: { id }, data: { paidAt: new Date(Date.now() - 11 * 60_000) } });
+      fake.sent.length = 0;
       await sweepMissedPushes(new Date());
       expect(fake.to(id, 'NEW_ORDER')).toHaveLength(0);
+    });
+
+    test('reminders: an unanswered paid order nudges the restaurant once per minute, with the same wire event, until it is answered or too old', async () => {
+      await registerAll();
+      const id = await placePaid();
+      const base = new Date();
+      await prisma.order.update({ where: { id }, data: { paidAt: new Date(base.getTime() - 61_000) } });
+      fake.sent.length = 0;
+      await sweepMissedPushes(base);
+      await flush();
+      const first = fake.to(id, 'NEW_ORDER'); // wire event stays NEW_ORDER so the apps need no change
+      expect(first).toHaveLength(1);
+      expect(first[0]).toMatchObject({ token: TOK.vendor, title: 'Order waiting - accept it now', channelId: 'new_orders', priority: 'high', data: { event: 'NEW_ORDER', orderId: id, v: '1' } });
+      expect((await prisma.pushLog.findMany({ where: { orderId: id, event: 'NEW_ORDER_REMINDER' } })).map((r) => r.key)).toEqual([`${id}:NEW_ORDER_REMINDER:${VENDOR.id}:1`]);
+      fake.sent.length = 0;
+      await sweepMissedPushes(new Date(base.getTime() + 5_000)); // same minute: nothing new
+      expect(fake.sent).toHaveLength(0);
+      await sweepMissedPushes(new Date(base.getTime() + 61_000)); // next minute: one more
+      await flush();
+      expect(fake.to(id, 'NEW_ORDER')).toHaveLength(1);
+      expect(await prisma.pushLog.count({ where: { orderId: id, event: 'NEW_ORDER_REMINDER' } })).toBe(2);
+      // Answered: no more reminders.
+      expect((await setStatus(id, 'ACCEPTED', tVendor)).status).toBe(200);
+      await flush();
+      fake.sent.length = 0;
+      await sweepMissedPushes(new Date(base.getTime() + 125_000));
+      expect(fake.to(id, 'NEW_ORDER')).toHaveLength(0);
+    });
+
+    test('reminders: a restaurant with no device gets no reminder rows (nothing to repeat)', async () => {
+      const id = await placePaid(); // no tokens registered: NEW_ORDER is SKIPPED
+      expect((await logOf(id, 'NEW_ORDER'))[0].status).toBe('SKIPPED');
+      await prisma.order.update({ where: { id }, data: { paidAt: new Date(Date.now() - 125_000) } });
+      await sweepMissedPushes(new Date());
+      expect(await prisma.pushLog.count({ where: { orderId: id, event: 'NEW_ORDER_REMINDER' } })).toBe(0);
     });
 
     test('sweep: a rider who became idle after the order reached the pool is told once; riders already told are not told again', async () => {

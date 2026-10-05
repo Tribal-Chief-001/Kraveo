@@ -14,6 +14,8 @@ const STATUS = { ttlSeconds: 3600, usefulMinutes: 30 };
 
 const DEFS: Record<PushEvent, Def> = {
   NEW_ORDER: { app: 'VENDOR', channelId: 'new_orders', priority: 'high', ...URGENT },
+  // Sent by the sweep once a minute while a paid order is still unanswered (the phone alarm only rings for a moment per push).
+  NEW_ORDER_REMINDER: { app: 'VENDOR', channelId: 'new_orders', priority: 'high', ...URGENT },
   ORDER_CANCELLED_VENDOR: { app: 'VENDOR', channelId: 'order_updates', priority: 'high', ...STATUS },
   NEW_DELIVERY: { app: 'DRIVER', channelId: 'new_deliveries', priority: 'high', ...URGENT },
   DELIVERY_ASSIGNED: { app: 'DRIVER', channelId: 'new_deliveries', priority: 'high', ...STATUS },
@@ -55,6 +57,10 @@ export const buildCopy = (event: PushEvent, o: OrderWithRelations): { title: str
     case 'NEW_ORDER': {
       const n = o.items.reduce((sum, i) => sum + i.quantity, 0);
       return { title: 'New order', body: `${n} item${n === 1 ? '' : 's'} - Rs ${rupees(o.totalAmount)}. Tap to accept.` };
+    }
+    case 'NEW_ORDER_REMINDER': {
+      const n = o.items.reduce((sum, i) => sum + i.quantity, 0);
+      return { title: 'Order waiting - accept it now', body: `${n} item${n === 1 ? '' : 's'} - Rs ${rupees(o.totalAmount)}. The customer is waiting.` };
     }
     case 'ORDER_CANCELLED_VENDOR':
       return { title: 'Order cancelled', body: `Order ${orderRef(o.id)} was cancelled.` };
@@ -108,6 +114,7 @@ const approvedRider = async (userId: string): Promise<string[]> => {
 export const resolveRecipients = async (event: PushEvent, o: OrderWithRelations, opts: PushOptions = {}): Promise<string[]> => {
   switch (event) {
     case 'NEW_ORDER':
+    case 'NEW_ORDER_REMINDER':
     case 'ORDER_CANCELLED_VENDOR':
       return o.vendor.userId && o.vendor.approvalStatus === 'APPROVED' ? [o.vendor.userId] : [];
     case 'NEW_DELIVERY':
@@ -122,7 +129,7 @@ export const resolveRecipients = async (event: PushEvent, o: OrderWithRelations,
 
 /** Retries only make sense while the news is still true (a vendor is not alarmed about an order someone else already handled). */
 export const stillUseful = (event: PushEvent, o: OrderWithRelations): boolean => {
-  if (event === 'NEW_ORDER') return o.status === 'PLACED' && o.paymentStatus === 'PAID';
+  if (event === 'NEW_ORDER' || event === 'NEW_ORDER_REMINDER') return o.status === 'PLACED' && o.paymentStatus === 'PAID';
   if (event === 'NEW_DELIVERY') return isPoolEligible(o);
   // A late retry must not announce a step the order has already moved past ("accepted" after "delivered").
   switch (event) {
