@@ -11,13 +11,18 @@ const Key kBatteryCardKey = ValueKey('push-battery-card');
 const Key kBatteryAllowKey = ValueKey('push-battery-allow');
 const Key kBatteryDismissKey = ValueKey('push-battery-dismiss');
 
-/// Persistent notices under the store switch: notifications are off (with a button to fix it), or else the one-time
-/// "allow unrestricted battery" hint. One at a time and compact, so the order list keeps its room. Shows nothing when
-/// push is fine or not wired.
+/// Persistent notices under the store switch, ONE at a time and compact, so the order list keeps its room:
+/// 1. notifications are off (with a button to fix it), because a missed order is the costliest problem;
+/// 2. else [locationNotice]: the restaurant has no map location yet, so riders cannot find it;
+/// 3. else the one-time "allow unrestricted battery" hint.
+/// Shows nothing when push is fine or not wired and there is no location notice.
 class PushStatusCards extends StatelessWidget {
-  const PushStatusCards({super.key, required this.push});
+  const PushStatusCards({super.key, required this.push, this.locationNotice});
 
   final PushController push;
+
+  /// The location banner when the restaurant has no pin (null otherwise). Waits for the notification banner.
+  final Widget? locationNotice;
 
   @override
   Widget build(BuildContext context) {
@@ -28,22 +33,36 @@ class PushStatusCards extends StatelessWidget {
         final Widget card;
         if (banner != PushBanner.none) {
           card = _NotificationBanner(key: kNotificationBannerKey, push: push, blocked: banner == PushBanner.blocked);
+        } else if (locationNotice != null) {
+          card = locationNotice!;
         } else if (push.showBatteryCard) {
           card = _BatteryCard(key: kBatteryCardKey, push: push);
         } else {
           return const SizedBox.shrink();
         }
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, 0),
-          child: VMaxWidth(
-            // Never more than a third of the screen: scrolls inside itself on a very small phone.
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.34),
-              child: SingleChildScrollView(child: card),
-            ),
-          ),
-        );
+        return NoticeFrame(child: card);
       },
+    );
+  }
+}
+
+/// Spacing + size cap shared by every notice under the store switch.
+class NoticeFrame extends StatelessWidget {
+  const NoticeFrame({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, 0),
+      child: VMaxWidth(
+        // Never more than a third of the screen: scrolls inside itself on a very small phone.
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.34),
+          child: SingleChildScrollView(child: child),
+        ),
+      ),
     );
   }
 }

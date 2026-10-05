@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/partner_session.dart';
+import '../services/location/location_capture.dart';
+import '../services/location/location_scope.dart';
 import '../services/partner_auth_service.dart';
+import '../widgets/location_sheet.dart';
 import '../widgets/ui/choice_chip.dart';
 import '../widgets/ui/field_block.dart';
 import '../widgets/ui/phone_input.dart';
@@ -48,6 +51,9 @@ class _SignupScreenState extends State<SignupScreen> {
   bool _showPassword = false;
   bool _showFssai = false;
   bool _busy = false;
+
+  /// The kitchen position detected with "Use my current location" (optional).
+  LocationFix? _fix;
   final Map<String, String> _errors = {};
   String? _problem;
 
@@ -110,6 +116,9 @@ class _SignupScreenState extends State<SignupScreen> {
       address: _address.text.trim(),
       category: (_category == null || _category == 'Other') ? '' : _category!,
       fssaiNumber: _fssai.text.replaceAll(RegExp(r'\s'), ''),
+      lat: _fix?.lat,
+      lng: _fix?.lng,
+      locationAccuracyM: _fix?.accuracyM,
     );
     SignupResult result;
     try {
@@ -129,7 +138,11 @@ class _SignupScreenState extends State<SignupScreen> {
       _busy = false;
       switch (result.failure!) {
         case SignupFailure.invalid:
-          if (result.field != null && result.message != null) {
+          if (const {'location', 'lat', 'lng', 'locationAccuracyM'}.contains(result.field)) {
+            // The server did not accept the detected spot: drop it and say why; the account can still be made without it.
+            _fix = null;
+            _problem = '${result.message ?? 'Kraveo could not use this location.'}\nThe location was removed. Detect it again, or create the account without it.\nलोकेशन हटा दी गई। फिर से पता करें या बिना लोकेशन के अकाउंट बनाएं।';
+          } else if (result.field != null && result.message != null) {
             _errors[result.field!] = result.message!;
           } else {
             _problem = result.message ?? 'Please check the details and try again.\nजानकारी जाँचकर फिर कोशिश करें।';
@@ -155,6 +168,67 @@ class _SignupScreenState extends State<SignupScreen> {
         _problem = null;
       });
     }
+  }
+
+  /// "Use my current location": explains, reads the GPS once, shows the result; the owner may carry on without it.
+  Future<void> _detectLocation() async {
+    if (_busy) return;
+    FocusScope.of(context).unfocus();
+    final fix = await showLocationDetectSheet(
+      context,
+      services: LocationScope.of(context),
+      title: 'Use my current location',
+      hindiTitle: 'मेरी मौजूदा लोकेशन',
+      skipLabel: 'Continue without',
+      skipSublabel: 'बिना लोकेशन के आगे बढ़ें',
+    );
+    if (fix != null && mounted) setState(() => _fix = fix);
+  }
+
+  Widget _locationBlock(KraveoTokens k) {
+    final fix = _fix;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (fix == null)
+        KButton(
+          key: const ValueKey('signup-location-button'),
+          label: 'Use my current location',
+          sublabel: 'मेरी मौजूदा लोकेशन',
+          icon: LucideIcons.crosshair,
+          kind: KButtonKind.tonal,
+          expand: true,
+          onPressed: _busy ? null : _detectLocation,
+        )
+      else
+        Container(
+          key: const ValueKey('signup-location-chip'),
+          padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+          decoration: BoxDecoration(color: k.brandSoft, borderRadius: BorderRadius.circular(KRadius.lg)),
+          child: Row(children: [
+            Icon(LucideIcons.circleCheck, size: 24, color: k.brand),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Location captured (${formatAccuracy(fix.accuracyM)})', style: KraveoType.titleMd.copyWith(color: k.ink, fontSize: 16, fontWeight: FontWeight.w800)),
+                Text('लोकेशन मिल गई', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 13)),
+              ]),
+            ),
+            SizedBox(
+              width: 124,
+              child: KButton(
+                key: const ValueKey('signup-location-change'),
+                label: 'Change',
+                sublabel: 'बदलें',
+                kind: KButtonKind.ghost,
+                expand: true,
+                onPressed: _busy ? null : _detectLocation,
+              ),
+            ),
+          ]),
+        ),
+      const SizedBox(height: 6),
+      Text('Optional: riders use it to find your kitchen on the map  ·  चुनना जरूरी नहीं, राइडर इससे रसोई ढूंढते हैं',
+          style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 13)),
+    ]);
   }
 
   TextStyle _fieldStyle(KraveoTokens k) => KraveoType.titleLg.copyWith(color: k.ink, fontSize: 21);
@@ -246,6 +320,10 @@ class _SignupScreenState extends State<SignupScreen> {
                     ),
                   ),
                 ),
+                if (!_editing) ...[
+                  const SizedBox(height: 10),
+                  KReveal(index: 2, child: _locationBlock(k)),
+                ],
                 const SizedBox(height: 18),
                 KReveal(
                   index: 3,

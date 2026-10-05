@@ -3,7 +3,10 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/partner_session.dart';
+import '../services/location/location_capture.dart';
+import '../services/location/vendor_location_api.dart';
 import '../services/partner_auth_service.dart';
+import '../services/vendor_backend.dart';
 import '../services/vendor_api_service.dart';
 
 enum SessionStatus {
@@ -20,11 +23,20 @@ enum SessionStatus {
 /// injects it into every request); this keeps the who-am-I basics next to it. A password is
 /// only ever passed straight through to the server and is never stored.
 class SessionController extends ChangeNotifier {
-  SessionController({PartnerAuthService? auth}) : auth = auth ?? ApiPartnerAuthService();
+  SessionController({PartnerAuthService? auth, VendorLocationApi? locationApi})
+      : auth = auth ?? ApiPartnerAuthService(),
+        locationApi = locationApi ?? HttpVendorLocationApi();
 
   static const String sessionPrefKey = 'kraveo_vendor_session';
 
   final PartnerAuthService auth;
+
+  /// `PUT /partner/vendor/location` (tests pass a fake).
+  final VendorLocationApi locationApi;
+
+  /// The "Set your restaurant location" sheet is offered ONCE per app start / login. Set when it was shown (or when
+  /// the owner just created the account and had the chance to detect it there); cleared on login and logout.
+  bool locationPromptShown = false;
 
   /// Runs at the start of [logout], before the token is cleared, with the server call (best effort and bounded).
   /// The push layer uses it to `DELETE /devices` while the JWT is still valid.
@@ -115,6 +127,7 @@ class SessionController extends ChangeNotifier {
     if (result.ok) {
       await VendorApiService.saveToken(result.token!);
       await _persist(result.session!);
+      locationPromptShown = false; // a new login asks again (once)
       _set(SessionStatus.signedIn, result.session);
     }
     return result;
@@ -127,6 +140,9 @@ class SessionController extends ChangeNotifier {
     if (result.ok && result.token != null) {
       await VendorApiService.saveToken(result.token!);
       await _persist(result.session!);
+      // The form just offered "Use my current location"; do not pop a sheet over the status screen right away. The
+      // banner stays and the next login / app start asks again.
+      locationPromptShown = true;
       _set(SessionStatus.signedIn, result.session);
     }
     return result;
@@ -157,7 +173,12 @@ class SessionController extends ChangeNotifier {
       case ProfileOutcome.valid:
         final before = _session;
         final fresh = _mergeFresh(before, result.session!);
-        final changed = before == null || before.approval != fresh.approval || before.rejectionReason != fresh.rejectionReason;
+        final changed = before == null ||
+            before.approval != fresh.approval ||
+            before.rejectionReason != fresh.rejectionReason ||
+            before.hasLocation != fresh.hasLocation ||
+            before.lat != fresh.lat ||
+            before.lng != fresh.lng;
         await _persist(fresh);
         _session = fresh;
         if (changed) notifyListeners();
@@ -168,6 +189,29 @@ class SessionController extends ChangeNotifier {
       case ProfileOutcome.unreachable:
         return false;
     }
+  }
+
+  /// Saves the restaurant's own pin (`PUT /partner/vendor/location`). On success the local profile shows the pin at
+  /// once and the profile is re-read from Kraveo; on failure nothing local changes (the banner stays) and the result
+  /// carries the server's message.
+  Future<ApiResult<SavedLocation>> saveRestaurantLocation(LocationFix fix) async {
+    final result = await locationApi.save(lat: fix.lat, lng: fix.lng, accuracyM: fix.accuracyM);
+    final saved = result.data;
+    if (!result.ok || saved == null) {
+      return result.ok ? const ApiResult.failure(ApiFailure.server) : result;
+    }
+    final now = _session;
+    if (_status == SessionStatus.signedIn && now != null) {
+      final updated = now.withLocation(lat: saved.lat, lng: saved.lng, source: saved.source, setAt: saved.setAt, accuracyM: saved.accuracyM);
+      await _persist(updated);
+      _session = updated;
+      notifyListeners();
+    }
+    // Ask Kraveo what it now holds; a network problem here keeps the local state.
+    try {
+      await refreshApproval();
+    } catch (_) {}
+    return result;
   }
 
   /// A 401 came back from an authenticated call: drop the token, show login.
@@ -194,6 +238,7 @@ class SessionController extends ChangeNotifier {
       ]).timeout(const Duration(seconds: 5));
     } catch (_) {}
     await _clearAll();
+    locationPromptShown = false;
     _set(SessionStatus.signedOut);
   }
 }

@@ -47,7 +47,7 @@
         <li>Accounts are created by us. We store the partner’s name, phone number and a salted hash of their password (we cannot read the password).</li>
         <li><b>Delivery partners:</b> while a rider is <b>on duty</b> (switched ON in the Delivery Partner app), the app shares the rider’s live location with Kraveo, even when the screen is off; Android shows a notification while this is happening. Kraveo uses it to dispatch and support deliveries and to keep riders and customers safe. The customer sees the rider’s position only for an order that rider is carrying. We keep only the latest position of each rider, not a history. Switching off duty or logging out stops the sharing. The app asks for location permission for this purpose.</li>
         <li>Delivery and restaurant partners also get notifications about new orders and deliveries, which need the same device token described above.</li>
-        <li>Restaurants: restaurant name, the restaurant’s location on the campus map, menu items, prices and the orders they receive.</li>
+        <li>Restaurants: restaurant name, the restaurant’s location on the campus map, menu items, prices and the orders they receive. The Restaurant Partner app reads the phone’s location <b>only when the restaurant taps “Detect my location”</b> (once, to set the kitchen’s pin so riders can find it); it never tracks a restaurant afterwards. An admin can also enter or correct the pin.</li>
       </ul>
 
       <h2>2. Why we use it</h2>

@@ -7,6 +7,8 @@ import 'screens/application_status_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
 import 'screens/vendor_home_screen.dart';
+import 'services/location/location_scope.dart';
+import 'services/location/vendor_location_api.dart';
 import 'services/order_queue_controller.dart';
 import 'services/order_queue_service.dart';
 import 'services/order_socket.dart';
@@ -35,7 +37,13 @@ void main() {
 class KraveoVendorApp extends StatefulWidget {
   /// [auth] is the network layer for login / session checks; [backend], [socketFactory] and [alarm] drive the
   /// order screens. Tests pass fakes; the app uses the real Kraveo API, Socket.io and the loud alarm.
-  const KraveoVendorApp({super.key, this.auth, this.backend, this.socketFactory, this.alarm, this.push});
+  const KraveoVendorApp({super.key, this.auth, this.backend, this.socketFactory, this.alarm, this.push, this.locationServices, this.locationApi});
+
+  /// The phone's GPS + the maps link opener for "Detect my location" (tests pass fakes; null = the real ones).
+  final LocationServices? locationServices;
+
+  /// `PUT /partner/vendor/location` (tests pass a fake; null = the real API).
+  final VendorLocationApi? locationApi;
 
   /// Push notifications (device token, permission, taps). Null = no push at all (tests, and the app still works on
   /// the live connection and polling). The caller owns it; the app does not dispose it.
@@ -51,7 +59,8 @@ class KraveoVendorApp extends StatefulWidget {
 }
 
 class _KraveoVendorAppState extends State<KraveoVendorApp> {
-  late final SessionController _session = SessionController(auth: widget.auth);
+  late final SessionController _session = SessionController(auth: widget.auth, locationApi: widget.locationApi);
+  late final LocationServices _location = widget.locationServices ?? LocationServices();
 
   @override
   void dispose() {
@@ -73,7 +82,10 @@ class _KraveoVendorAppState extends State<KraveoVendorApp> {
     final push = widget.push;
     return SessionScope(
       controller: _session,
-      child: push == null ? app : PushScope(controller: push, child: app),
+      child: LocationScope(
+        services: _location,
+        child: push == null ? app : PushScope(controller: push, child: app),
+      ),
     );
   }
 }

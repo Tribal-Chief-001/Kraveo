@@ -37,6 +37,12 @@ class PartnerSession {
     this.category,
     this.address,
     this.fssaiNumber,
+    this.hasLocation,
+    this.lat,
+    this.lng,
+    this.locationSource,
+    this.locationSetAt,
+    this.locationAccuracyM,
   });
 
   final String userId;
@@ -59,6 +65,23 @@ class PartnerSession {
   final String? category;
   final String? address;
   final String? fssaiNumber;
+
+  /// Does Kraveo have a real pin for this restaurant (riders navigate to it)? `null` = the server did not say
+  /// (an older server that cannot store a location): the app then never nags, because it could not save one anyway.
+  /// `false` = the server says there is no real pin yet, which is what makes the app ask for it.
+  final bool? hasLocation;
+  final double? lat;
+  final double? lng;
+
+  /// `DEVICE` (the restaurant detected it) or `ADMIN` (typed in the dashboard); null when unknown or not set.
+  final String? locationSource;
+  final DateTime? locationSetAt;
+
+  /// How close the phone said the GPS fix was, in metres (only for a `DEVICE` pin).
+  final double? locationAccuracyM;
+
+  /// True only when the server explicitly says the restaurant has no pin yet.
+  bool get needsLocation => hasLocation == false;
 
   bool get isApproved => approval == PartnerApproval.approved;
 
@@ -90,8 +113,17 @@ class PartnerSession {
       category: vendor['category']?.toString(),
       address: vendor['address']?.toString(),
       fssaiNumber: vendor['fssaiNumber']?.toString(),
+      hasLocation: vendor['hasLocation'] is bool ? vendor['hasLocation'] as bool : null,
+      lat: _num(vendor['lat']),
+      lng: _num(vendor['lng']),
+      locationSource: vendor['locationSource'] is String ? vendor['locationSource'] as String : null,
+      locationSetAt: _date(vendor['locationSetAt']),
+      locationAccuracyM: _num(vendor['locationAccuracyM']),
     );
   }
+
+  static double? _num(Object? raw) => raw is num && raw.isFinite ? raw.toDouble() : null;
+  static DateTime? _date(Object? raw) => raw is String ? DateTime.tryParse(raw) : null;
 
   /// Parses `GET /partner/me`, `POST /auth/partner-signup` and `PUT /partner/application`
   /// (all share the same shape). Returns null when the body has no usable user.
@@ -110,6 +142,34 @@ class PartnerSession {
         category: category,
         address: address,
         fssaiNumber: fssaiNumber,
+        hasLocation: hasLocation,
+        lat: lat,
+        lng: lng,
+        locationSource: locationSource,
+        locationSetAt: locationSetAt,
+        locationAccuracyM: locationAccuracyM,
+      );
+
+  /// The same restaurant after a successful `PUT /partner/vendor/location`.
+  PartnerSession withLocation({required double lat, required double lng, String? source, DateTime? setAt, double? accuracyM}) => PartnerSession(
+        userId: userId,
+        name: name,
+        phone: phone,
+        avatarId: avatarId,
+        vendorId: vendorId,
+        vendorName: vendorName,
+        isAcceptingOrders: isAcceptingOrders,
+        approval: approval,
+        rejectionReason: rejectionReason,
+        category: category,
+        address: address,
+        fssaiNumber: fssaiNumber,
+        hasLocation: true,
+        lat: lat,
+        lng: lng,
+        locationSource: source ?? 'DEVICE',
+        locationSetAt: setAt ?? DateTime.now().toUtc(),
+        locationAccuracyM: accuracyM,
       );
 
   /// Parses a contract `user` object.
@@ -141,6 +201,12 @@ class PartnerSession {
         category: category,
         address: address,
         fssaiNumber: fssaiNumber,
+        hasLocation: hasLocation,
+        lat: lat,
+        lng: lng,
+        locationSource: locationSource,
+        locationSetAt: locationSetAt,
+        locationAccuracyM: locationAccuracyM,
       );
 
   Map<String, dynamic> toJson() => {
@@ -156,6 +222,12 @@ class PartnerSession {
         'category': category,
         'address': address,
         'fssaiNumber': fssaiNumber,
+        'hasLocation': hasLocation,
+        'lat': lat,
+        'lng': lng,
+        'locationSource': locationSource,
+        'locationSetAt': locationSetAt?.toUtc().toIso8601String(),
+        'locationAccuracyM': locationAccuracyM,
       };
 
   static PartnerSession? fromStoredJson(Object? raw) {
@@ -175,6 +247,12 @@ class PartnerSession {
       category: raw['category']?.toString(),
       address: raw['address']?.toString(),
       fssaiNumber: raw['fssaiNumber']?.toString(),
+      hasLocation: raw['hasLocation'] is bool ? raw['hasLocation'] as bool : null,
+      lat: _num(raw['lat']),
+      lng: _num(raw['lng']),
+      locationSource: raw['locationSource'] is String ? raw['locationSource'] as String : null,
+      locationSetAt: _date(raw['locationSetAt']),
+      locationAccuracyM: _num(raw['locationAccuracyM']),
     );
   }
 }

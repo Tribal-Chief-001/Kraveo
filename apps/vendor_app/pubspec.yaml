@@ -1,7 +1,7 @@
 name: vendor_app
 description: "Kraveo Dhaba Owner Mobile App (High Volume Audio & Simple UI)"
 publish_to: 'none'
-version: 1.5.1+10
+version: 1.6.0+11
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -23,6 +23,10 @@ dependencies:
   firebase_messaging: ^16.7.0
   flutter_local_notifications: ^22.3.1
   package_info_plus: ^10.2.1
+  # One-time GPS read when the restaurant taps "Detect my location" (foreground only, no background location).
+  geolocator: ^11.0.0
+  # "Open in Google Maps to check" link (external app / browser; the vendor app has no Maps key).
+  url_launcher: ^6.3.3
 
 dev_dependencies:
   flutter_test:

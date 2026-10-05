@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/partner_session.dart';
+import '../session/session_controller.dart';
+import '../widgets/location_flow.dart';
 
 /// What a restaurant sees after creating an account until Kraveo approves it, or when the application was
 /// rejected or the account suspended. Pending applications are re-checked every [pollEvery] and when the
@@ -34,12 +36,31 @@ class _ApplicationStatusScreenState extends State<ApplicationStatusScreen> with 
   bool _checking = false;
   bool _loggingOut = false;
   bool _checkedOnce = false;
+  bool _promptOpen = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _timer = Timer.periodic(widget.pollEvery, (_) => _check(silent: true));
+    _maybePromptForLocation();
+  }
+
+  @override
+  void didUpdateWidget(ApplicationStatusScreen old) {
+    super.didUpdateWidget(old);
+    _maybePromptForLocation();
+  }
+
+  /// A pending restaurant that still has no map location is asked once per app start / login (the banner below stays).
+  void _maybePromptForLocation() {
+    if (_promptOpen) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _promptOpen || !shouldPromptForLocation(SessionScope.maybeOf(context))) return;
+      _promptOpen = true;
+      await promptForRestaurantLocation(context);
+      _promptOpen = false;
+    });
   }
 
   @override
@@ -171,6 +192,10 @@ class _ApplicationStatusScreenState extends State<ApplicationStatusScreen> with 
                       ]),
                     ),
                   ),
+                ],
+                if (pending && s.needsLocation) ...[
+                  const SizedBox(height: 18),
+                  const LocationBanner(key: kLocationBannerKey),
                 ],
                 const SizedBox(height: 18),
                 KReveal(

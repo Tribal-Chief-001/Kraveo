@@ -52,6 +52,9 @@ class PartnerSignupForm {
     required this.address,
     this.category = '',
     this.fssaiNumber = '',
+    this.lat,
+    this.lng,
+    this.locationAccuracyM,
   });
 
   final String ownerName;
@@ -61,6 +64,15 @@ class PartnerSignupForm {
   final String address;
   final String category;
   final String fssaiNumber;
+
+  /// The kitchen's GPS position when the owner tapped "Use my current location" (optional; both or neither).
+  final double? lat;
+  final double? lng;
+
+  /// How close the GPS said it was, in metres.
+  final double? locationAccuracyM;
+
+  bool get hasLocation => lat != null && lng != null;
 
   /// Body for `POST /auth/partner-signup`.
   Map<String, dynamic> toSignupJson() => {
@@ -72,6 +84,12 @@ class PartnerSignupForm {
         'category': category,
         'address': address,
         'fssaiNumber': fssaiNumber,
+        // Only when detected, and always both coordinates (the server refuses half a location).
+        if (hasLocation) ...{
+          'lat': lat,
+          'lng': lng,
+          if (locationAccuracyM != null && locationAccuracyM!.isFinite) 'locationAccuracyM': double.parse(locationAccuracyM!.toStringAsFixed(1)),
+        },
       };
 
   /// Body for `PUT /partner/application` (phone and password cannot change there).

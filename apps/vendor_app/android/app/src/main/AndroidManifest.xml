@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Lets the app ask (with an explanation first) to be exempt from battery optimisation so orders are never delayed. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- Restaurant location: ONE foreground read of the phone's GPS when the owner taps "Detect my location" (a few
+         seconds, app on screen). No background location, no foreground service, no wake lock for this. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
 
     <application
         android:label="Kraveo Restaurant Partner"
@@ -49,6 +53,15 @@
             android:value="order_updates" />
     </application>
     <queries>
+        <!-- "Open in Google Maps to check" (Android 11+ package visibility): any maps app for geo: links and a browser for the https link. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="geo"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

@@ -15,6 +15,7 @@ import '../models/partner_session.dart';
 import 'kitchen_queue.dart';
 import 'stock_manager.dart';
 import 'sales_analytics.dart';
+import '../widgets/location_flow.dart';
 import '../widgets/push_status_cards.dart';
 import '../widgets/ui/ui.dart';
 
@@ -51,6 +52,9 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
   VoidCallback? _detachPush;
   bool _explainerOpen = false;
 
+  /// The once-per-start "Set your restaurant location" sheet is open (or about to open).
+  bool _locationPromptOpen = false;
+
   /// What the server last told us about the store (null until known).
   bool? _storeOpen;
   bool _storeBusy = false;
@@ -70,6 +74,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
       _detachPush ??= push.attachHome(_onPushAction);
       _maybeExplainNotifications(push);
     }
+    _maybeLocationPrompt(push);
     if (_initialised) return;
     _initialised = true;
     final session = SessionScope.maybeOf(context)?.session;
@@ -171,6 +176,27 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
       );
       _explainerOpen = false;
       if (agreed) await push.requestNotifications();
+      if (mounted) _maybeLocationPrompt(push);
+    });
+  }
+
+  /// Notification permission is settled: not waiting for the system to report it, and no explainer open or due.
+  bool _pushSettled(PushController? push) =>
+      push == null || (!_explainerOpen && !push.shouldExplain && (!push.isActive || push.notificationAccess != null));
+
+  /// Once per app start / login, when Kraveo says this restaurant has no map location: offer the detect sheet.
+  /// It waits for the notification explainer (one thing at a time, notifications first); the banner stays either way.
+  void _maybeLocationPrompt(PushController? push) {
+    if (_locationPromptOpen || !_pushSettled(push)) return;
+    if (!shouldPromptForLocation(SessionScope.maybeOf(context))) return;
+    _locationPromptOpen = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _explainerOpen || !shouldPromptForLocation(SessionScope.maybeOf(context))) {
+        _locationPromptOpen = false;
+        return;
+      }
+      await promptForRestaurantLocation(context);
+      _locationPromptOpen = false;
     });
   }
 
@@ -355,6 +381,21 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
             if (partner != null) ...[
               const SizedBox(height: 20),
               _AccountCard(partner: partner),
+              if (partner.hasLocation != null) ...[
+                const SizedBox(height: 12),
+                KButton(
+                  key: kLocationRowKey,
+                  label: partner.hasLocation == true ? 'Update restaurant location' : 'Set restaurant location',
+                  sublabel: partner.hasLocation == true ? 'रेस्टोरेंट की लोकेशन बदलें' : 'रेस्टोरेंट की लोकेशन डालें',
+                  icon: LucideIcons.mapPin,
+                  kind: KButtonKind.tonal,
+                  large: true,
+                  onPressed: () {
+                    Navigator.of(sheetContext).pop();
+                    if (mounted) runRestaurantLocationFlow(context, update: partner.hasLocation == true);
+                  },
+                ),
+              ],
               const SizedBox(height: 12),
               KButton(
                 key: const ValueKey('logout-button'),
@@ -447,7 +488,10 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
               ),
             ),
 
-            if (push != null) PushStatusCards(push: push),
+            if (push != null)
+              PushStatusCards(push: push, locationNotice: partner?.needsLocation == true ? const LocationBanner(key: kLocationBannerKey) : null)
+            else if (partner?.needsLocation == true)
+              const NoticeFrame(child: LocationBanner(key: kLocationBannerKey)),
 
             Expanded(
               child: (orders == null || menu == null)
