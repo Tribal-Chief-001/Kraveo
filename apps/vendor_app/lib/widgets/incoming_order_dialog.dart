@@ -233,7 +233,7 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
     final ss = (late ? 0 : left.inSeconds.remainder(60)).toString().padLeft(2, '0');
     return Semantics(
       liveRegion: true,
-      label: 'New order ${order.shortCode}, food ${formatRupees(order.foodValue)}, customer pays ${formatRupees(order.totalAmount)}',
+      label: 'New order ${order.shortCode}. You earn ${formatRupees(order.earned)}',
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 14),
@@ -282,8 +282,8 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
                       child: FittedBox(
                         fit: BoxFit.scaleDown,
                         child: Column(mainAxisSize: MainAxisSize.min, children: [
-                          Text('Customer pays  ·  ग्राहक देगा', maxLines: 1, style: KraveoType.label.copyWith(color: k.onBrand.withValues(alpha: 0.9), fontSize: 13)),
-                          Text(formatRupees(order.totalAmount), style: KraveoType.displayLg.copyWith(fontSize: 64, height: 1.05, color: k.accent)),
+                          Text('You earn  ·  आपकी कमाई', maxLines: 1, style: KraveoType.label.copyWith(color: k.onBrand.withValues(alpha: 0.9), fontSize: 13)),
+                          Text(formatRupees(order.earned), key: const ValueKey('you-earn'), style: KraveoType.displayLg.copyWith(fontSize: 64, height: 1.05, color: k.accent)),
                         ]),
                       ),
                     ),
@@ -293,8 +293,8 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
               FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Text(
-                  'Food ${formatRupees(order.foodValue)}  ·  खाने का दाम  (rest is delivery and packaging)',
-                  key: const ValueKey('food-amount'),
+                  'At your prices  ·  आपके दाम पर',
+                  key: const ValueKey('earn-help'),
                   maxLines: 1,
                   style: KraveoType.titleMd.copyWith(color: k.onBrand, fontSize: 15, fontWeight: FontWeight.w800),
                 ),
@@ -368,7 +368,11 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
                 child: Text(order.items[i].name, maxLines: 3, overflow: TextOverflow.ellipsis, style: KraveoType.titleLg.copyWith(color: k.ink, fontSize: 21, fontWeight: FontWeight.w700)),
               ),
               const SizedBox(width: 10),
-              Text(formatRupees(order.items[i].totalPrice), style: KraveoType.titleMd.copyWith(color: k.inkMuted)),
+              // A big line total shrinks a little instead of squeezing the dish name out of the row.
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 110),
+                child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerRight, child: Text(formatRupees(order.items[i].totalPrice), maxLines: 1, style: KraveoType.titleMd.copyWith(color: k.inkMuted))),
+              ),
             ]),
           ),
         ],

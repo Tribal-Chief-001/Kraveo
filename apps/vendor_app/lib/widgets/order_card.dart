@@ -173,12 +173,17 @@ class _OrderCardState extends State<OrderCard> {
                   Text(pill.$3, style: KraveoType.titleMd.copyWith(color: k.inkMuted)),
                 ]),
                 const SizedBox(height: 6),
-                Text.rich(
-                  TextSpan(children: [
-                    TextSpan(text: 'Food ${formatRupees(order.foodValue)}', style: KraveoType.titleMd.copyWith(color: k.inkMuted, fontWeight: FontWeight.w700)),
-                    TextSpan(text: '  ·  ', style: KraveoType.titleMd.copyWith(color: k.inkFaint)),
-                    TextSpan(text: 'Customer pays ${formatRupees(order.totalAmount)}', style: KraveoType.titleLg.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
-                  ]),
+                // Only what the restaurant earns: no customer total, fees, discount or coupon (Docs/21 section 7).
+                Semantics(
+                  label: 'You earn ${formatRupees(order.earned)}',
+                  excludeSemantics: true,
+                  child: Text.rich(
+                    key: ValueKey('earn-${order.id}'),
+                    TextSpan(children: [
+                      TextSpan(text: 'You earn ${formatRupees(order.earned)}', style: KraveoType.titleLg.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
+                      TextSpan(text: '  ·  आपकी कमाई', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 13)),
+                    ]),
+                  ),
                 ),
               ]),
             ),
@@ -469,17 +474,26 @@ class _ItemRow extends StatelessWidget {
               child: Text('${item.quantity}×', style: KraveoType.headline.copyWith(fontSize: 28, color: done ? k.brand : k.ink)),
             ),
             Expanded(
-              child: Text(
-                item.name,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: KraveoType.titleLg.copyWith(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: done ? k.inkMuted : k.ink,
-                  decoration: done ? TextDecoration.lineThrough : null,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                Text(
+                  item.name,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: KraveoType.titleLg.copyWith(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: done ? k.inkMuted : k.ink,
+                    decoration: done ? TextDecoration.lineThrough : null,
+                  ),
                 ),
-              ),
+                // The restaurant's own price for the line (the server sends vendor prices to the restaurant).
+                if (item.unitPrice > 0)
+                  Text(
+                    item.quantity > 1 ? '${formatRupees(item.unitPrice)} each · ${formatRupees(item.totalPrice)}' : formatRupees(item.totalPrice),
+                    key: ValueKey('item-price-${item.id ?? item.name}'),
+                    style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14),
+                  ),
+              ]),
             ),
             const SizedBox(width: 10),
             AnimatedContainer(

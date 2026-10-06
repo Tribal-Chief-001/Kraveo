@@ -175,6 +175,7 @@ class OrderModel {
     this.deliveryFee,
     this.taxAndPackaging,
     this.discount,
+    this.vendorSubtotal,
     this.dropoffHostel,
     this.dropoffNotes,
     required this.createdAt,
@@ -206,6 +207,9 @@ class OrderModel {
   final double? deliveryFee;
   final double? taxAndPackaging;
   final double? discount;
+
+  /// What the restaurant earns from this order (`vendorSubtotal`), when a server sends it under that name.
+  final double? vendorSubtotal;
   final String? dropoffHostel;
   final String? dropoffNotes;
   final DateTime createdAt;
@@ -255,6 +259,11 @@ class OrderModel {
   /// The food value of the order (what the kitchen sold), before fees.
   double get foodValue => (subtotal != null && subtotal! > 0) ? subtotal! : itemsTotal;
 
+  /// What the restaurant earns ("You earn"). The server's vendor view (Docs/21 section 3) carries the restaurant's
+  /// own prices in `price` and `subtotal`/`total` = the earned amount; the customer's total, fees and discounts never
+  /// reach the restaurant and the app never shows them. From an OLD server this falls back to the food subtotal.
+  double get earned => (vendorSubtotal != null && vendorSubtotal! > 0) ? vendorSubtotal! : foodValue;
+
   /// When the order reached its final state, for sorting history.
   DateTime get lastEventAt => cancelledAt ?? deliveredAt ?? pickedUpAt ?? updatedAt ?? createdAt;
 
@@ -268,6 +277,7 @@ class OrderModel {
         deliveryFee: deliveryFee,
         taxAndPackaging: taxAndPackaging,
         discount: discount,
+        vendorSubtotal: vendorSubtotal,
         dropoffHostel: dropoffHostel,
         dropoffNotes: dropoffNotes,
         createdAt: createdAt,
@@ -338,6 +348,7 @@ class OrderModel {
       deliveryFee: _double(raw['deliveryFee']),
       taxAndPackaging: _double(raw['taxAndPackaging']),
       discount: _double(raw['discount']),
+      vendorSubtotal: _double(raw['vendorSubtotal']),
       dropoffHostel: (hostel == null || hostel.isEmpty) ? null : hostel,
       dropoffNotes: notes,
       createdAt: createdAt,

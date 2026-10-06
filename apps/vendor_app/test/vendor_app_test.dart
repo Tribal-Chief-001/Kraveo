@@ -86,7 +86,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.text('New order'), findsOneWidget);
-      expect(find.text('₹245'), findsOneWidget);
+      expect(find.text('₹205'), findsOneWidget, reason: 'the restaurant sees what it earns, not the customer total');
+      expect(find.text('₹245'), findsNothing);
       expect(find.text('No onions please'), findsOneWidget);
       expect(find.text('Decline'), findsOneWidget);
       expect(find.text('Accept'), findsOneWidget);

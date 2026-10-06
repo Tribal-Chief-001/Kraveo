@@ -133,7 +133,7 @@ void main() {
       () => backend.fetchMenu('ven-42'),
       (_) => http.Response(jsonEncode({'data': [{'id': 'm1', 'name': 'Thali', 'price': 90, 'category': 'Main Course', 'isAvailable': true}]}), 200),
     );
-    expect(sent.last.url.path, endsWith('/menus/ven-42'));
+    expect(sent.last.url.path, endsWith('/vendors/ven-42/menu-manage'));
     expect(sent.last.headers['Authorization'], 'Bearer jwt-abc'); // so an owner can see their own menu while pending
     expect(menu.data!.single.name, 'Thali');
 

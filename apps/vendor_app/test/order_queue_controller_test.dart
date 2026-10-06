@@ -389,8 +389,8 @@ void main() {
     test('history pages load on demand and cover "today" for the earnings screen', () async {
       final now = DateTime.now();
       backend.history = [
-        order(id: 'h1', status: 'DELIVERED', createdAt: now.subtract(const Duration(hours: 1))),
-        order(id: 'h2', status: 'DELIVERED', createdAt: now.subtract(const Duration(hours: 2))),
+        order(id: 'h1', status: 'DELIVERED', createdAt: now.subtract(const Duration(minutes: 1))),
+        order(id: 'h2', status: 'DELIVERED', createdAt: now.subtract(const Duration(minutes: 2))),
         order(id: 'h3', status: 'CANCELLED', cancelledBy: 'CUSTOMER', createdAt: now.subtract(const Duration(days: 2))),
       ];
       final c = make();

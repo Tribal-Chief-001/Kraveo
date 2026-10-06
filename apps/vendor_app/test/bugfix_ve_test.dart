@@ -602,22 +602,26 @@ void main() {
 
     // -------------------------------------------------------------------------------------------- VE-09
 
-    testWidgets('VE-09 the takeover shows Food and Customer pays; the Orders card too', (tester) async {
+    testWidgets('VE-09 the takeover and the Orders card show only "You earn" (no customer total, fees or food split)', (tester) async {
       backend.put(order(id: 'ord-1234'));
       await launch(tester);
       expect(find.byType(IncomingOrderDialog), findsOneWidget);
-      expect(find.byKey(const ValueKey('food-amount')), findsOneWidget);
-      expect(tester.widget<Text>(find.byKey(const ValueKey('food-amount'))).data, startsWith('Food ₹205'));
-      expect(find.textContaining('Customer pays'), findsWidgets);
-      expect(find.text('₹245'), findsOneWidget);
+      expect(find.byKey(const ValueKey('earn-help')), findsOneWidget);
+      expect(find.byKey(const ValueKey('you-earn')), findsOneWidget);
+      expect(tester.widget<Text>(find.byKey(const ValueKey('you-earn'))).data, '₹205');
+      expect(find.textContaining('You earn'), findsWidgets);
+      expect(find.textContaining('Customer pays'), findsNothing);
+      expect(find.textContaining('delivery'), findsNothing);
+      expect(find.text('₹245'), findsNothing, reason: 'the customer total must not be shown');
       await unmount(tester);
     });
 
-    testWidgets('VE-09 the order card says Food and Customer pays with paise when present', (tester) async {
-      backend.put(OrderModel.fromJson(orderJson(id: 'ord-1', status: 'ACCEPTED', total: 245.5))!);
+    testWidgets('VE-09 the order card says "You earn" with paise when present', (tester) async {
+      backend.put(OrderModel.fromJson({...orderJson(id: 'ord-1', status: 'ACCEPTED', total: 245.5), 'subtotal': 205.5})!);
       await launch(tester);
-      expect(find.textContaining('Food ₹205'), findsOneWidget);
-      expect(find.textContaining('Customer pays ₹245.50'), findsOneWidget);
+      expect(find.textContaining('You earn ₹205.50'), findsOneWidget);
+      expect(find.textContaining('Customer pays'), findsNothing);
+      expect(find.textContaining('Food ₹'), findsNothing);
       await unmount(tester);
     });
 

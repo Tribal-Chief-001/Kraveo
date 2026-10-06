@@ -22,7 +22,6 @@ class _AddDishModalState extends State<AddDishModal> {
   final _nameController = TextEditingController();
   final _priceController = TextEditingController();
   String _selectedCategory = 'Main Course';
-  bool _inStock = true;
 
   /// Veg by default; the customer app shows the green or red mark from this.
   bool _isVeg = true;
@@ -51,7 +50,7 @@ class _AddDishModalState extends State<AddDishModal> {
       _saving = true;
       _error = null;
     });
-    final problem = await widget.onSubmit(_nameController.text.trim(), _selectedCategory, double.parse(_priceController.text.trim()), _inStock, isVeg: _isVeg);
+    final problem = await widget.onSubmit(_nameController.text.trim(), _selectedCategory, double.parse(_priceController.text.trim()), true, isVeg: _isVeg);
     if (!mounted) return;
     if (problem == null) {
       Navigator.pop(context);
@@ -160,7 +159,7 @@ class _AddDishModalState extends State<AddDishModal> {
             ]),
             const SizedBox(height: 18),
 
-            _fieldLabel(k, 'Price', 'दाम'),
+            _fieldLabel(k, 'Your price', 'आपका दाम'),
             TextFormField(
               controller: _priceController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -184,10 +183,31 @@ class _AddDishModalState extends State<AddDishModal> {
                 return null;
               },
             ),
+            Padding(
+              padding: const EdgeInsets.only(left: 4, top: 8),
+              child: Text(
+                'The price you want to receive for one portion. Kraveo sets the price customers pay.\nएक प्लेट पर आपको जो दाम चाहिए। ग्राहक का दाम Kraveo तय करता है।',
+                key: const ValueKey('add-dish-price-help'),
+                style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 13.5),
+              ),
+            ),
             const SizedBox(height: 18),
 
-            _fieldLabel(k, 'Available now?', 'अभी उपलब्ध है?'),
-            VStockSwitch(inStock: _inStock, onToggle: () => setState(() => _inStock = !_inStock), dishName: 'New dish'),
+            KCard(
+              key: const ValueKey('add-dish-approval-note'),
+              color: Color.alphaBlend(KraveoPalette.warning.withValues(alpha: 0.14), k.surface),
+              elevated: false,
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(LucideIcons.clock, size: 22, color: k.ink),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Kraveo checks every new dish before customers can see it. You will see "Pending approval" until then.\nहर नया व्यंजन Kraveo जाँचेगा, फिर ग्राहकों को दिखेगा।',
+                    style: KraveoType.bodySm.copyWith(color: k.ink, fontSize: 14),
+                  ),
+                ),
+              ]),
+            ),
             const SizedBox(height: 24),
 
             if (_error != null) ...[

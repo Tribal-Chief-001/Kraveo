@@ -585,8 +585,10 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
                             builder: (context, _) {
                               final noDishes = menu.loadedOnce && menu.dishes.isEmpty;
                               final closed = _storeOpen == false;
-                              if (!noDishes && !closed) return const SizedBox.shrink();
+                              final waiting = menu.loadedOnce && menu.dishes.isNotEmpty && !menu.dishes.any((d) => d.isLive) && menu.waitingCount > 0;
+                              if (!noDishes && !closed && !waiting) return const SizedBox.shrink();
                               return FirstRunCard(
+                                waitingApproval: waiting,
                                 hasDishes: !noDishes,
                                 isOpen: !closed,
                                 onAddDish: () => setState(() => _currentIndex = 1),

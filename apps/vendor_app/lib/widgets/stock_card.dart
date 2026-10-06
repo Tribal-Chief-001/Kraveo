@@ -9,24 +9,31 @@ class StockCard extends StatelessWidget {
   final VoidCallback onToggleStock;
   final Function(double newPrice) onUpdatePrice;
 
+  /// Sends a rejected dish to Kraveo again with this price. Without it, a rejected dish uses [onUpdatePrice].
+  final Function(double price)? onResubmit;
+
   const StockCard({
     super.key,
     required this.dish,
     required this.onToggleStock,
     required this.onUpdatePrice,
+    this.onResubmit,
   });
+
+  void _resubmit(double price) => (onResubmit ?? onUpdatePrice)(price);
 
   void _showPriceEditSheet(BuildContext context) {
     showKSheet<void>(
       context,
-      builder: (ctx) => _PriceEditSheet(dish: dish, onSave: onUpdatePrice),
+      builder: (ctx) => _PriceEditSheet(dish: dish, onSave: dish.status == DishStatus.rejected ? _resubmit : onUpdatePrice),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    final inStock = dish.inStock;
+    final inStock = dish.inStock || !dish.isLive; // "sold out" only means something for a live dish
+    final rejected = dish.status == DishStatus.rejected;
     final hindi = hindiCategory(dish.category);
 
     return AnimatedContainer(
@@ -36,14 +43,14 @@ class StockCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: inStock ? k.surface : Color.alphaBlend(KraveoPalette.danger.withValues(alpha: 0.06), k.surface),
         borderRadius: KRadius.card,
-        border: Border.all(color: inStock ? k.line : KraveoPalette.danger.withValues(alpha: 0.55), width: inStock ? 1.5 : 2),
+        border: Border.all(color: (inStock && !rejected) ? k.line : KraveoPalette.danger.withValues(alpha: 0.55), width: (inStock && !rejected) ? 1.5 : 2),
         boxShadow: KShadow.soft(k.shadowTint),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            _DishPhoto(imageUrl: dish.imageUrl, dimmed: !inStock),
+            _DishPhoto(imageUrl: dish.imageUrl, dimmed: !inStock || rejected),
             const SizedBox(width: 14),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -66,28 +73,32 @@ class StockCard extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14),
                 ),
+                const SizedBox(height: 8),
+                // Only a dish the server reported a status for gets a chip; an old server has no approval step.
+                if (dish.statusKnown) VDishStatusChip(key: ValueKey('chip-${dish.id}'), status: dish.status),
               ]),
             ),
           ]),
           const SizedBox(height: 14),
 
-          // Price stepper: big - / + around a tappable price
+          // Price stepper: big - / + around a tappable price (a rejected dish has no steppers: fix it, then send again)
           Row(children: [
-            _StepButton(
-              key: const ValueKey('price-minus'),
-              icon: LucideIcons.minus,
-              semanticLabel: 'Lower price by 10 rupees',
-              enabled: dish.price > 10,
-              onTap: () {
-                if (dish.price > 10) {
-                  onUpdatePrice(dish.price - 10);
-                }
-              },
-            ),
+            if (!rejected)
+              _StepButton(
+                key: const ValueKey('price-minus'),
+                icon: LucideIcons.minus,
+                semanticLabel: 'Lower price by 10 rupees',
+                enabled: dish.editPrice > 10,
+                onTap: () {
+                  if (dish.editPrice > 10) {
+                    onUpdatePrice(dish.editPrice - 10);
+                  }
+                },
+              ),
             Expanded(
               child: Semantics(
                 button: true,
-                label: 'Price ${formatRupees(dish.price)}. Double tap to type a new price.',
+                label: 'Your price ${formatRupees(dish.price)}. Double tap to type a new price.',
                 excludeSemantics: true,
                 child: KPressable(
                   onTap: () => _showPriceEditSheet(context),
@@ -97,30 +108,120 @@ class StockCard extends StatelessWidget {
                     alignment: Alignment.center,
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Text(formatRupees(dish.price), style: KraveoType.displayMd.copyWith(fontSize: 34, color: inStock ? k.brand : k.inkMuted)),
-                        const SizedBox(width: 8),
-                        Icon(LucideIcons.pencil, size: 18, color: k.inkFaint),
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Row(mainAxisSize: MainAxisSize.min, children: [
+                          Text(formatRupees(dish.price), key: const ValueKey('your-price'), style: KraveoType.displayMd.copyWith(fontSize: 34, color: (inStock && !rejected) ? k.brand : k.inkMuted)),
+                          const SizedBox(width: 8),
+                          Icon(LucideIcons.pencil, size: 18, color: k.inkFaint),
+                        ]),
+                        Text('Your price · आपका दाम', maxLines: 1, style: KraveoType.caption.copyWith(color: k.inkMuted, fontSize: 12.5, fontWeight: FontWeight.w700)),
                       ]),
                     ),
                   ),
                 ),
               ),
             ),
-            _StepButton(
-              key: const ValueKey('price-plus'),
-              icon: LucideIcons.plus,
-              semanticLabel: 'Raise price by 10 rupees',
-              onTap: () => onUpdatePrice(dish.price + 10),
-            ),
+            if (!rejected)
+              _StepButton(
+                key: const ValueKey('price-plus'),
+                icon: LucideIcons.plus,
+                semanticLabel: 'Raise price by 10 rupees',
+                onTap: () => onUpdatePrice(dish.editPrice + 10),
+              ),
           ]),
           const SizedBox(height: 14),
 
-          // The one big IN STOCK / SOLD OUT switch
-          VStockSwitch(inStock: inStock, onToggle: onToggleStock, dishName: dish.name),
+          if (dish.statusKnown && dish.status != DishStatus.live) ...[
+            _ApprovalNote(dish: dish, onResubmit: () => _resubmit(dish.price)),
+            if (dish.isLive) const SizedBox(height: 14),
+          ],
+
+          // The one big IN STOCK / SOLD OUT switch (live dishes only; a dish customers cannot see has nothing to sell out)
+          if (dish.isLive) VStockSwitch(inStock: inStock, onToggle: onToggleStock, dishName: dish.name),
         ],
       ),
     );
+  }
+}
+
+/// What is happening with this dish at Kraveo: waiting, a price change waiting (old price stays live), or the
+/// rejection reason with a button to send it again.
+class _ApprovalNote extends StatelessWidget {
+  const _ApprovalNote({required this.dish, required this.onResubmit});
+  final DishModel dish;
+  final VoidCallback onResubmit;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    switch (dish.status) {
+      case DishStatus.changePending:
+        return Container(
+          key: const ValueKey('price-change-note'),
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Color.alphaBlend(KraveoPalette.warning.withValues(alpha: 0.14), k.surface), borderRadius: BorderRadius.circular(KRadius.lg)),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(LucideIcons.clock, size: 22, color: k.ink),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  dish.pendingPrice == null ? 'New price sent for approval' : 'New price ${formatRupees(dish.pendingPrice!)} · Sent for approval',
+                  key: const ValueKey('pending-price'),
+                  style: KraveoType.titleMd.copyWith(color: k.ink, fontWeight: FontWeight.w800, fontSize: 16),
+                ),
+                Text(
+                  'Customers still get the old price (${formatRupees(dish.price)}) until Kraveo approves.\nमंज़ूरी तक पुराना दाम चलेगा।',
+                  style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 13.5),
+                ),
+              ]),
+            ),
+          ]),
+        );
+      case DishStatus.pending:
+        return Container(
+          key: const ValueKey('pending-note'),
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Color.alphaBlend(KraveoPalette.warning.withValues(alpha: 0.14), k.surface), borderRadius: BorderRadius.circular(KRadius.lg)),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(LucideIcons.clock, size: 22, color: k.ink),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Waiting for Kraveo to approve. Customers cannot see this dish yet.\nKraveo की मंज़ूरी का इंतज़ार। ग्राहकों को अभी नहीं दिखेगा।',
+                style: KraveoType.bodySm.copyWith(color: k.ink, fontSize: 14),
+              ),
+            ),
+          ]),
+        );
+      case DishStatus.rejected:
+        final reason = dish.rejectionReason;
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Container(
+            key: const ValueKey('rejected-note'),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: Color.alphaBlend(KraveoPalette.danger.withValues(alpha: 0.08), k.surface), borderRadius: BorderRadius.circular(KRadius.lg)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Kraveo did not approve this dish · मंज़ूर नहीं हुआ', style: KraveoType.titleMd.copyWith(color: kDangerDeep, fontWeight: FontWeight.w800, fontSize: 16)),
+              if (reason != null) Text('Reason: $reason', key: const ValueKey('rejection-reason'), style: KraveoType.body.copyWith(color: k.ink, fontSize: 15)),
+              Text('Fix the price if needed, then send it again.\nदाम ठीक करके दोबारा भेजें।', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 13.5)),
+            ]),
+          ),
+          const SizedBox(height: 12),
+          KButton(
+            key: ValueKey('resubmit-${dish.id}'),
+            label: 'Send again for approval',
+            sublabel: 'फिर से भेजें',
+            icon: LucideIcons.send,
+            large: true,
+            onPressed: onResubmit,
+          ),
+        ]);
+      case DishStatus.live:
+        return const SizedBox.shrink();
+    }
   }
 }
 
@@ -233,8 +334,20 @@ double? parseDishPrice(String raw) {
 String priceFieldText(double price) => price == price.roundToDouble() ? price.toStringAsFixed(0) : price.toStringAsFixed(2);
 
 class _PriceEditSheetState extends State<_PriceEditSheet> {
-  late final TextEditingController _controller = TextEditingController(text: priceFieldText(widget.dish.price));
+  late final TextEditingController _controller = TextEditingController(text: priceFieldText(widget.dish.editPrice));
   String? _error;
+
+  bool get _rejected => widget.dish.status == DishStatus.rejected;
+
+  /// A live dish's price is a request: Kraveo approves it, and the old price stays live until then.
+  bool get _asksApproval => widget.dish.statusKnown && widget.dish.isLive;
+
+  String _helperText() {
+    if (_rejected) return 'Kraveo will check the dish again.\nKraveo इसे दोबारा जाँचेगा।';
+    if (_asksApproval) return 'The new price is sent to Kraveo. The old price stays live until it is approved.\nनया दाम Kraveo को जाएगा। मंज़ूरी तक पुराना दाम चलेगा।';
+    if (widget.dish.statusKnown) return 'This dish is still waiting for approval, so the price changes at once.\nमंज़ूरी से पहले दाम सीधे बदल जाएगा।';
+    return 'The price you receive for each portion.\nहर प्लेट पर आपको मिलने वाला दाम।';
+  }
 
   @override
   void dispose() {
@@ -248,7 +361,8 @@ class _PriceEditSheetState extends State<_PriceEditSheet> {
       setState(() => _error = 'Enter a price from ₹1 to ₹10,000, like 120 or 49.50.\nसही दाम डालें, जैसे 120 या 49.50');
       return;
     }
-    if (parsed != widget.dish.price) widget.onSave(parsed);
+    // A rejected dish is sent again even with the same price; otherwise only a real change is saved.
+    if (_rejected || parsed != widget.dish.editPrice) widget.onSave(parsed);
     Navigator.pop(context);
   }
 
@@ -258,11 +372,20 @@ class _PriceEditSheetState extends State<_PriceEditSheet> {
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 20 + MediaQuery.viewInsetsOf(context).bottom),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text('Change price', style: KraveoType.headline.copyWith(color: k.ink)),
-        Text('दाम बदलें', style: KraveoType.titleLg.copyWith(color: k.inkMuted)),
+        Text(_rejected ? 'Fix price, send again' : 'Change price', style: KraveoType.headline.copyWith(color: k.ink)),
+        Text(_rejected ? 'दाम ठीक करके फिर भेजें' : 'दाम बदलें', style: KraveoType.titleLg.copyWith(color: k.inkMuted)),
         const SizedBox(height: 6),
         Text(widget.dish.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 16)),
+        const SizedBox(height: 6),
+        Text(_helperText(), key: const ValueKey('price-helper'), style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
         const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 6),
+          child: Text.rich(TextSpan(children: [
+            TextSpan(text: 'Your price', style: KraveoType.titleMd.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
+            TextSpan(text: '   आपका दाम', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
+          ])),
+        ),
         TextField(
           key: const ValueKey('price-field'),
           controller: _controller,
@@ -285,7 +408,13 @@ class _PriceEditSheetState extends State<_PriceEditSheet> {
           ),
         ),
         const SizedBox(height: 20),
-        KButton(label: 'Save price', sublabel: 'दाम सेव करें', icon: LucideIcons.check, large: true, onPressed: _save),
+        KButton(
+          label: _rejected ? 'Send for approval' : (_asksApproval ? 'Send for approval' : 'Save price'),
+          sublabel: _rejected || _asksApproval ? 'मंज़ूरी के लिए भेजें' : 'दाम सेव करें',
+          icon: _rejected || _asksApproval ? LucideIcons.send : LucideIcons.check,
+          large: true,
+          onPressed: _save,
+        ),
       ]),
     );
   }

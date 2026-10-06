@@ -105,13 +105,17 @@ abstract class VendorBackend {
   /// `PATCH /vendors/:id/status` `{isAcceptingOrders}` -> the value the server saved.
   Future<ApiResult<bool>> setStoreOpen(String vendorId, bool open);
 
-  /// `GET /menus/:vendorId`.
+  /// `GET /vendors/:id/menu-manage` (every dish with its approval status and the restaurant's own price). A server
+  /// that does not have it yet (404) is the OLD server: the app falls back to `GET /menus/:vendorId` and every
+  /// dish counts as live.
   Future<ApiResult<List<DishModel>>> fetchMenu(String vendorId);
 
-  /// `POST /vendors/:id/items`.
+  /// `POST /vendors/:id/items` (a new dish; a current server answers with status PENDING).
   Future<ApiResult<DishModel>> addDish(String vendorId, {required String name, required String category, required double price, bool isVeg = true});
 
-  /// `PATCH /vendors/items/:itemId` `{isAvailable?, price?}`.
+  /// `PATCH /vendors/items/:itemId` `{isAvailable?, price?}`. On a current server a price on a live dish is a
+  /// request for approval (the answer then carries `pendingPrice`), on a pending dish it edits it, on a rejected dish
+  /// it sends it again.
   Future<ApiResult<DishModel>> updateDish(String itemId, {bool? isAvailable, double? price});
 }
 
@@ -261,9 +265,7 @@ class HttpVendorBackend implements VendorBackend {
     return ApiResult.success(saved is bool ? saved : open);
   }
 
-  @override
-  Future<ApiResult<List<DishModel>>> fetchMenu(String vendorId) async {
-    final res = await _send('GET', '/menus/${Uri.encodeComponent(vendorId)}');
+  static ApiResult<List<DishModel>> _menuFrom(ApiResult<Object?> res) {
     if (!res.ok) return res.cast();
     final json = res.data;
     final List<dynamic>? raw = json is List ? json : (json is Map && json['data'] is List ? json['data'] as List : null);
@@ -272,6 +274,17 @@ class HttpVendorBackend implements VendorBackend {
       for (final it in raw)
         if (DishModel.fromJson(it) case final DishModel d) d,
     ]);
+  }
+
+  @override
+  Future<ApiResult<List<DishModel>>> fetchMenu(String vendorId) async {
+    final id = Uri.encodeComponent(vendorId);
+    final managed = await _send('GET', '/vendors/$id/menu-manage');
+    // Only "this route does not exist" (an old server) falls back; every other answer (offline, 401, 403, 5xx ...) is real.
+    if (!managed.ok && managed.failure == ApiFailure.notFound) {
+      return _menuFrom(await _send('GET', '/menus/$id'));
+    }
+    return _menuFrom(managed);
   }
 
   @override
@@ -292,6 +305,6 @@ class HttpVendorBackend implements VendorBackend {
     });
     if (!res.ok) return res.cast();
     final json = res.data;
-    return ApiResult.success(DishModel.fromJson(json is Map ? (json['item'] ?? json['data']) : null));
+    return ApiResult.success(DishModel.fromJson(json is Map ? (json['item'] ?? json['data'] ?? json) : null));
   }
 }

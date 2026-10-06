@@ -43,7 +43,7 @@ class SalesAnalyticsScreen extends StatelessWidget {
     final counted = orders.where(_counts).toList();
     final today = counted.where((o) => !o.createdAt.isBefore(startOfToday)).toList();
     final cancelledToday = orders.where((o) => o.status == OrderStatus.cancelled && !o.createdAt.isBefore(startOfToday)).length;
-    final totalSales = today.fold<double>(0, (sum, o) => sum + o.foodValue);
+    final totalSales = today.fold<double>(0, (sum, o) => sum + o.earned);
     final totalOrdersCount = today.length;
 
     if (counted.isEmpty) {
@@ -142,7 +142,7 @@ class SalesAnalyticsScreen extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
-            child: Text('Food items of today\'s paid orders (since midnight), before Kraveo fees.  ·  सिर्फ खाने का दाम', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 13)),
+            child: Text('What you earned from today\'s accepted orders (since midnight), at your prices.  ·  आज की आपकी कमाई', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 13)),
           ),
           const SizedBox(height: 12),
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [

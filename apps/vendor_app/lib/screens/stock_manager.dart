@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
+import '../models/dish_model.dart';
 import '../widgets/stock_card.dart';
 import '../widgets/add_dish_modal.dart';
 import '../widgets/ui/ui.dart';
 import '../services/failure_messages.dart';
 import '../services/menu_stock_controller.dart';
 
-/// The Menu tab: the restaurant's real menu from Kraveo. Sold-out switches and prices save to the server
-/// and roll back (with a message) if saving fails.
+/// The Menu tab: the restaurant's real menu from Kraveo, each dish with its approval status and the restaurant's OWN
+/// price (never a customer price). Sold-out switches (live dishes only) save at once; a new dish and a price change on a
+/// live dish go to Kraveo for approval. Failed saves roll back with a message.
 class StockManagerScreen extends StatefulWidget {
   final MenuStockController controller;
 
@@ -18,7 +20,7 @@ class StockManagerScreen extends StatefulWidget {
   State<StockManagerScreen> createState() => _StockManagerScreenState();
 }
 
-enum _StockFilter { all, inStock, soldOut }
+enum _StockFilter { all, inStock, soldOut, needsAttention }
 
 class _StockManagerScreenState extends State<StockManagerScreen> {
   String _selectedCategory = 'All';
@@ -55,8 +57,12 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
           onSubmit: (name, category, price, inStock, {bool isVeg = true}) async {
             final problem = await _c.addDish(name: name, category: category, price: price, inStock: inStock, isVeg: isVeg);
             if (problem == null && mounted) {
+              final pending = _c.lastAdded?.status == DishStatus.pending;
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('$name added to menu!  ·  मेनू में जुड़ गया')),
+                SnackBar(
+                  content: Text(pending ? '$name: Sent to Kraveo for approval  ·  मंज़ूरी के लिए भेजा' : '$name added to menu!  ·  मेनू में जुड़ गया'),
+                  duration: const Duration(seconds: 4),
+                ),
               );
             }
             return problem;
@@ -89,8 +95,12 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
     }
 
     final totalDishes = dishes.length;
-    final inStockCount = dishes.where((d) => d.inStock).length;
-    final soldOutCount = dishes.where((d) => !d.inStock).length;
+    // In stock / sold out only count dishes customers can see; the rest are shown under "needs attention".
+    final inStockCount = dishes.where((d) => d.isLive && d.inStock).length;
+    final soldOutCount = dishes.where((d) => d.isLive && !d.inStock).length;
+    final waitingCount = _c.waitingCount;
+    final rejectedCount = _c.rejectedCount;
+    final liveCount = dishes.where((d) => d.isLive).length;
     final categories = ['All', ...{for (final d in dishes) d.category}];
     if (!categories.contains(_selectedCategory)) _selectedCategory = 'All';
 
@@ -99,8 +109,9 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
       final matchesSearch = _searchQuery.isEmpty || dish.name.toLowerCase().contains(_searchQuery.toLowerCase());
       final matchesStock = switch (_stockFilter) {
         _StockFilter.all => true,
-        _StockFilter.inStock => dish.inStock,
-        _StockFilter.soldOut => !dish.inStock,
+        _StockFilter.inStock => dish.isLive && dish.inStock,
+        _StockFilter.soldOut => dish.isLive && !dish.inStock,
+        _StockFilter.needsAttention => dish.status != DishStatus.live,
       };
       return matchesCategory && matchesSearch && matchesStock;
     }).toList();
@@ -148,6 +159,16 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
                 ),
               ),
             ]),
+            if (waitingCount > 0 || rejectedCount > 0) ...[
+              const SizedBox(height: 12),
+              _ApprovalBanner(
+                waiting: waitingCount,
+                rejected: rejectedCount,
+                noLiveDish: liveCount == 0,
+                selected: _stockFilter == _StockFilter.needsAttention,
+                onTap: () => setState(() => _stockFilter = _stockFilter == _StockFilter.needsAttention ? _StockFilter.all : _StockFilter.needsAttention),
+              ),
+            ],
             const SizedBox(height: 14),
 
             Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
@@ -190,10 +211,12 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
                 padding: const EdgeInsets.only(top: 12),
                 child: KEmptyState(
                   icon: LucideIcons.utensils,
-                  title: dishes.isEmpty ? 'Your menu is empty' : 'No dishes found',
+                  title: dishes.isEmpty ? 'Your menu is empty' : (_stockFilter == _StockFilter.needsAttention ? 'Nothing waiting for approval' : 'No dishes found'),
                   message: dishes.isEmpty
-                      ? 'Tap the yellow + button to add your first dish.\nपहला व्यंजन जोड़ने के लिए पीला + दबाएं।'
-                      : 'Try another search, or tap the yellow + button.\nदूसरा नाम खोजें या पीला + दबाएं।',
+                      ? 'Tap the yellow + button to add your first dish. Kraveo checks every new dish, then customers can see it.\nपहला व्यंजन जोड़ने के लिए पीला + दबाएं। Kraveo जाँचेगा, फिर ग्राहकों को दिखेगा।'
+                      : (_stockFilter == _StockFilter.needsAttention
+                          ? 'All your dishes are live.\nआपके सभी व्यंजन चालू हैं।'
+                          : 'Try another search, or tap the yellow + button.\nदूसरा नाम खोजें या पीला + दबाएं।'),
                 ),
               )
             else
@@ -207,11 +230,68 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
                       dish: filteredDishes[i],
                       onToggleStock: () => _c.toggleStock(filteredDishes[i]),
                       onUpdatePrice: (newPrice) => _c.changePrice(filteredDishes[i], newPrice),
+                      onResubmit: (price) => _c.resubmit(filteredDishes[i], price),
                     ),
                   ),
                 ),
           ],
         ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "2 waiting for approval · 1 rejected": tap to show only those dishes.
+class _ApprovalBanner extends StatelessWidget {
+  const _ApprovalBanner({required this.waiting, required this.rejected, required this.noLiveDish, required this.selected, required this.onTap});
+  final int waiting;
+  final int rejected;
+  final bool noLiveDish;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final parts = <String>[
+      if (waiting > 0) '$waiting waiting for approval',
+      if (rejected > 0) '$rejected not approved',
+    ];
+    final headline = parts.join(' · ');
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '$headline. Tap to show only these.',
+      excludeSemantics: true,
+      onTap: onTap,
+      child: KPressable(
+        onTap: onTap,
+        child: Container(
+          key: const ValueKey('approval-banner'),
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Color.alphaBlend(KraveoPalette.warning.withValues(alpha: selected ? 0.26 : 0.14), k.surface),
+            borderRadius: BorderRadius.circular(KRadius.lg),
+            border: Border.all(color: selected ? KraveoPalette.warning : Colors.transparent, width: 1.5),
+          ),
+          child: Row(children: [
+            Icon(LucideIcons.clock, size: 24, color: k.ink),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(headline, style: KraveoType.titleMd.copyWith(color: k.ink, fontWeight: FontWeight.w800, fontSize: 16)),
+                Text(
+                  noLiveDish
+                      ? 'Customers will see your menu once Kraveo approves a dish.\nजब Kraveo एक व्यंजन मंज़ूर करेगा, तब ग्राहकों को मेनू दिखेगा।'
+                      : 'Tap to see them.  ·  देखने के लिए दबाएं',
+                  style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 13.5),
+                ),
+              ]),
+            ),
+            Icon(LucideIcons.chevronRight, size: 22, color: k.inkFaint),
+          ]),
         ),
       ),
     );
