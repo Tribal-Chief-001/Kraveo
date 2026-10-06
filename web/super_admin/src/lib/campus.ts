@@ -73,14 +73,34 @@ const AT = new RegExp(String.raw`@(${NUM}),(${NUM})`);
 const BANG = new RegExp(String.raw`!3d(${NUM})!4d(${NUM})`);
 const QUERY = new RegExp(String.raw`[?&](?:q|ll|query|destination)=(${NUM})(?:,|%2C)(${NUM})`, 'i');
 
+// Degrees-minutes-seconds as Google Maps shows them when you copy a place: 23°04'53.4"N 76°50'35.0"E
+const DMS_ONE = String.raw`(\d{1,3})\s*°\s*(\d{1,2})\s*['’′]\s*(\d{1,2}(?:\.\d+)?)\s*(?:["”″]|'')?\s*([NSEW])`;
+const DMS = new RegExp(String.raw`^\s*${DMS_ONE}\s*[,;]?\s*${DMS_ONE}\s*$`, 'i');
+const fromDms = (d: string, m: string, sec: string, hemi: string): number => {
+  const v = Number(d) + Number(m) / 60 + Number(sec) / 3600;
+  return /[SW]/i.test(hemi) ? -v : v;
+};
+
 /**
  * Turns what an admin pastes from Google Maps into coordinates: "23.0745, 76.8590" (right-click -> first line),
- * "23.0745 76.8590", or a maps link containing `@lat,lng`, `!3dlat!4dlng` or `?q=lat,lng`. Checks ranges and that the
+ * "23.0745 76.8590", degrees-minutes-seconds like 23°04'53.4"N 76°50'35.0"E, or a maps link containing `@lat,lng`, `!3dlat!4dlng` or `?q=lat,lng`. Checks ranges and that the
  * point is on campus, with a message that says what to fix. The server validates again.
  */
 export const parseLocationInput = (raw: string, center: LatLng = campusCenter()): LocationParse => {
   const text = raw.trim().replace(/ /g, ' ');
   if (!text) return { ok: false, message: 'Paste the coordinates from Google Maps, for example 23.0745, 76.8590.' };
+  const dms = DMS.exec(text);
+  if (dms) {
+    const a = { v: fromDms(dms[1], dms[2], dms[3], dms[4]), h: dms[4].toUpperCase() };
+    const b = { v: fromDms(dms[5], dms[6], dms[7], dms[8]), h: dms[8].toUpperCase() };
+    if (/[NS]/.test(a.h) === /[NS]/.test(b.h)) return { ok: false, message: 'Use one north/south value and one east/west value, like 23°04\'53.4"N 76°50\'35.0"E.' };
+    // The latitude is the N/S one, the longitude the E/W one, in either order.
+    const lat = /[NS]/.test(a.h) ? a.v : b.v;
+    const lng = /[EW]/.test(a.h) ? a.v : b.v;
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return { ok: false, message: 'Those degrees are out of range. Check the numbers.' };
+    if (!isNearCampus(lat, lng, center)) return { ok: false, message: `That point is more than ${NEAR_CAMPUS_KM} km from the campus. Check the numbers (latitude first).` };
+    return { ok: true, lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6 };
+  }
   const m = PAIR.exec(text) ?? BANG.exec(text) ?? AT.exec(text) ?? QUERY.exec(text);
   if (!m) return { ok: false, message: 'Could not read that. Use two numbers like 23.0745, 76.8590 (latitude, longitude).' };
   const lat = Number(m[1]);

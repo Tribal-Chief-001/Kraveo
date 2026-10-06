@@ -175,3 +175,24 @@ describe('campus helpers', () => {
     expect(formatLatLng(23.0745, 76.859)).toBe('23.07450, 76.85900');
   });
 });
+
+describe('parseLocationInput: degrees-minutes-seconds', () => {
+  it('reads the format Google Maps shows when you copy a place', () => {
+    const r = parseLocationInput('23°04\'53.4"N 76°50\'35.0"E');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.lat).toBeCloseTo(23.0815, 5);
+      expect(r.lng).toBeCloseTo(76.843056, 5);
+    }
+  });
+  it('accepts either order, and a comma', () => {
+    const a = parseLocationInput('23°04\'53.4"N 76°50\'35.0"E');
+    expect(parseLocationInput('76°50\'35.0"E, 23°04\'53.4"N')).toEqual(a);
+    expect(parseLocationInput('23°04\'53.4"N, 76°50\'35.0"E')).toEqual(a);
+  });
+  it('rejects two latitudes and far-away points; decimals still work', () => {
+    expect(parseLocationInput('23°04\'53.4"N 23°04\'53.4"N').ok).toBe(false);
+    expect(parseLocationInput('28°04\'53.4"N 77°50\'35.0"E').ok).toBe(false);
+    expect(parseLocationInput('23.0745, 76.8590')).toEqual({ ok: true, lat: 23.0745, lng: 76.859 });
+  });
+});
