@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../models/order.dart';
 import '../../providers/cart_provider.dart';
 import 'format.dart';
+import 'money_text.dart';
 
 /// Transparent bill: every line that moves the total, then a bold "To pay".
 /// Built either from the server's order ([BillBreakdown.order], authoritative) or from the cart
@@ -74,7 +75,7 @@ class BillBreakdown extends StatelessWidget {
         ),
         Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           Expanded(child: Text('To pay', style: KraveoType.titleLg.copyWith(color: k.ink))),
-          KAnimatedNumber(value: total, prefix: '₹', style: KraveoType.numeric.copyWith(color: k.ink, fontSize: 30)),
+          KMoneyText(value: total, style: KraveoType.numeric.copyWith(color: k.ink, fontSize: 30)),
         ]),
         if (estimate) ...[
           const SizedBox(height: 6),

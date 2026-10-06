@@ -23,6 +23,7 @@ import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:provider/provider.dart';
 
 import 'support/order_fakes.dart';
+import 'support/sample_catalog.dart';
 
 /// Renders screens on the smallest supported phone (360x640) at 1.3x system text scale.
 /// Any RenderFlex overflow or build error surfaces as a test exception.
@@ -127,8 +128,9 @@ void main() {
   testWidgets('HomeScreen renders header, promo, chips and kitchens without overflow', (tester) async {
     final session = SessionProvider(initial: SessionStatus.checking)
       ..beginForTest({'id': 'u', 'name': 'Aarav Sharma', 'role': 'STUDENT', 'isStudent': true, 'hostelBlock': 'Block 1', 'avatarId': 2});
-    await pumpScreen(tester, const HomeScreen(), session: session);
-    // Let the skeleton grace period elapse.
+    // A student with no earlier order sees the first-order promo (it is hidden otherwise).
+    final orders = fakeOrders(FakeOrderApi())..beginSession('u');
+    await pumpScreen(tester, const HomeScreen(), session: session, dhabas: sampleCatalogProvider(), orders: orders);
     await tester.pump(const Duration(seconds: 5));
     await tester.pump(const Duration(milliseconds: 800));
 
@@ -156,7 +158,7 @@ void main() {
   });
 
   testWidgets('HomeScreen shows an explanatory empty state for no search matches', (tester) async {
-    final dhabas = DhabaProvider()..setSearchQuery('zzzz-no-such-dish');
+    final dhabas = sampleCatalogProvider()..setSearchQuery('zzzz-no-such-dish');
     await pumpScreen(tester, const HomeScreen(), dhabas: dhabas);
     await tester.pump(const Duration(seconds: 5));
     await tester.pump(const Duration(milliseconds: 800));
@@ -167,7 +169,7 @@ void main() {
   });
 
   testWidgets('Menu: ADD morphs to a stepper and the cart bar appears', (tester) async {
-    final dhabas = DhabaProvider();
+    final dhabas = sampleCatalogProvider();
     final cart = CartProvider();
     final dhaba = dhabas.dhabas.firstWhere((d) => d.id == 'ven-2');
     await pumpScreen(tester, DhabaMenuScreen(dhaba: dhaba, selectedHostel: 'Block 2'), dhabas: dhabas, cart: cart);
@@ -351,7 +353,7 @@ void main() {
 
 /// Serves a fixed menu for every kitchen so item states can be tested.
 class _MenuStubProvider extends DhabaProvider {
-  _MenuStubProvider(this._menu);
+  _MenuStubProvider(this._menu) : super(dhabas: sampleDhabas());
   final List<MenuItemModel> _menu;
 
   @override

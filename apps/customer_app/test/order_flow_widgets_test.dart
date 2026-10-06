@@ -274,7 +274,7 @@ void main() {
       expect(find.text('Order journey'), findsNothing, reason: 'no progress is shown for an unpaid order');
 
       await tapButton(tester, 'Cancel order');
-      expect(find.textContaining('Nothing has been paid'), findsOneWidget);
+      expect(find.textContaining('nothing is charged'), findsOneWidget);
       await tester.tap(find.descendant(of: find.byType(KButton), matching: find.text('Cancel order')).last);
       await settle(tester);
       expect(api.cancels, ['u-1']);

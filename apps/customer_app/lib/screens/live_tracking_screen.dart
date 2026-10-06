@@ -5,7 +5,6 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 import '../models/order.dart';
 import '../providers/cart_provider.dart';
-import '../providers/dhaba_provider.dart';
 import '../providers/order_provider.dart';
 import '../providers/session_provider.dart';
 import '../services/order_api.dart';
@@ -15,12 +14,15 @@ import '../widgets/push_permission.dart';
 import '../widgets/review_modal.dart';
 import '../widgets/split_bill_modal.dart';
 import '../widgets/ui/format.dart';
-import '../widgets/ui/info_chip.dart';
 import '../widgets/ui/k_icon_button.dart';
 import '../widgets/ui/scroll_empty.dart';
 import '../widgets/ui/sheet_chrome.dart';
 import '../widgets/ui/snack.dart';
 import '../widgets/ui/status_map.dart';
+import '../widgets/ui/support_contact.dart';
+import '../widgets/reorder.dart';
+import '../services/external_links.dart';
+import '../models/drop_point.dart';
 
 /// Live tracking of one real order. Everything comes from the server: `GET /orders/:id` when
 /// shown, every 15 s while visible (polling), and `order_updated` / `rider_location` on the
@@ -55,6 +57,19 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
 
   /// The order picked from the switcher when several are live (Track tab only).
   String? _picked;
+
+  /// "Try again" on the can't-load state is running.
+  bool _retrying = false;
+
+  Future<void> _retryLoad(String id) async {
+    if (_retrying) return;
+    setState(() => _retrying = true);
+    try {
+      await _orders?.refreshOrder(id);
+    } finally {
+      if (mounted) setState(() => _retrying = false);
+    }
+  }
 
   @override
   void didChangeDependencies() {
@@ -108,7 +123,7 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
       title: 'Cancel this order?',
       message: order.isPaid
           ? 'The restaurant has not accepted it yet. Your ${rupee(order.totalAmount)} will be refunded to your account.'
-          : 'Nothing has been paid for this order, so nothing is charged.',
+          : 'You have not completed a payment for this order, so nothing is charged. If your bank did take money, Kraveo refunds it automatically.',
       confirmLabel: 'Cancel order',
       cancelLabel: 'Keep it',
       danger: true,
@@ -165,7 +180,32 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
 
     if (order == null) {
       final Widget body;
-      if (id != null || (orders.isLoadingActive && !orders.hasLoadedActive)) {
+      final loadError = id == null ? null : orders.loadErrorFor(id);
+      if (id != null && loadError != null && !_retrying) {
+        // The order cannot be loaded (someone else's, deleted, offline): say so instead of
+        // spinning forever, and let the student retry or leave.
+        final missing = loadError.kind == OrderErrorKind.notFound || loadError.kind == OrderErrorKind.forbidden;
+        final orderId = id;
+        body = RefreshIndicator(
+          onRefresh: () => _retryLoad(orderId),
+          child: KEmptyScroll(
+            bottomInset: bottomInset,
+            child: KEmptyState(
+              icon: missing ? LucideIcons.searchX : LucideIcons.wifiOff,
+              title: missing ? 'We couldn\'t find this order' : 'Couldn\'t load this order',
+              message: missing
+                  ? 'It may belong to a different account, or it is no longer available. Check Your orders, or email $kSupportEmail if you think this is a mistake.'
+                  : orderErrorMessage(loadError, action: 'load this order'),
+              action: Column(mainAxisSize: MainAxisSize.min, children: [
+                if (!missing) KButton(label: 'Try again', icon: LucideIcons.rotateCcw, kind: KButtonKind.tonal, expand: false, onPressed: () => _retryLoad(orderId)),
+                if (missing) KButton(label: 'Check again', icon: LucideIcons.rotateCcw, kind: KButtonKind.ghost, expand: false, onPressed: () => _retryLoad(orderId)),
+                const SizedBox(height: 4),
+                if (canPop) KButton(label: 'Go back', kind: KButtonKind.ghost, expand: false, onPressed: () => Navigator.of(context).maybePop()),
+              ]),
+            ),
+          ),
+        );
+      } else if (id != null || (orders.isLoadingActive && !orders.hasLoadedActive)) {
         body = const Center(child: SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 3)));
       } else if (orders.activeError != null && !orders.hasLoadedActive) {
         body = KEmptyScroll(
@@ -214,6 +254,7 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
           children: [
             if (widget.orderId == null && live.length > 1) ...[
               SizedBox(
+                key: const ValueKey('order-switcher'),
                 height: 48,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
@@ -228,11 +269,12 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
               ),
               const SizedBox(height: 10),
             ],
-            const NotificationsOffHint(),
-            KReveal(child: _StatusHero(order: order, confirming: confirming)),
+            const NotificationsOffHint(key: ValueKey('notifications-hint')),
+            KReveal(key: const ValueKey('hero'), child: _StatusHero(order: order, confirming: confirming)),
             const SizedBox(height: 14),
             if (order.awaitsPayment) ...[
               KReveal(
+                key: const ValueKey('payment'),
                 index: 1,
                 child: _PaymentCard(
                   order: order,
@@ -247,13 +289,22 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
               const SizedBox(height: 14),
             ],
             if (status == OrderProgressStatus.arrivedAtGate) ...[
-              KReveal(index: 1, child: _OtpCard(order: order)),
+              KReveal(key: const ValueKey('otp'), index: 1, child: _OtpCard(order: order)),
               const SizedBox(height: 14),
             ],
             if (status == OrderProgressStatus.cancelled)
-              KReveal(index: 1, child: _CancelledCard(order: order, onAgain: _explore))
-            else if (!order.awaitsPayment) ...[
               KReveal(
+                key: const ValueKey('cancelled'),
+                index: 1,
+                child: _CancelledCard(
+                  order: order,
+                  onAgain: () => reorderOrder(context, order, selectedHostel: context.read<SessionProvider>().deliveryPoint),
+                ),
+              )
+            else if (!order.awaitsPayment) ...[
+              // Keyed so the map (a platform view) survives cards appearing above it, e.g. the OTP.
+              KReveal(
+                key: const ValueKey('map'),
                 index: 2,
                 child: TrackingMap(
                   key: ValueKey('tracking-map-${order.id}'),
@@ -263,13 +314,14 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
                 ),
               ),
               const SizedBox(height: 14),
-              KReveal(index: 3, child: _TimelineCard(status: status)),
+              KReveal(key: const ValueKey('timeline'), index: 3, child: _TimelineCard(status: status)),
             ],
             const SizedBox(height: 14),
             if (order.rider != null && status != OrderProgressStatus.cancelled)
-              KReveal(index: 4, child: _RunnerCard(rider: order.rider!))
+              KReveal(key: const ValueKey('runner'), index: 4, child: _RunnerCard(rider: order.rider!))
             else if (paidAndLive)
               KReveal(
+                key: const ValueKey('runner'),
                 index: 4,
                 child: Container(
                   padding: const EdgeInsets.all(16),
@@ -326,7 +378,7 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
   }
 }
 
-/// Current status, what happens next, and honest context (placed time, kitchen's usual ETA).
+/// Current status, what happens next, and honest context (placed time, drop point, total).
 class _StatusHero extends StatelessWidget {
   const _StatusHero({required this.order, required this.confirming});
 
@@ -338,8 +390,6 @@ class _StatusHero extends StatelessWidget {
     final k = context.k;
     final status = order.status;
     final color = status.kStatus.color;
-    final dhabas = Provider.of<DhabaProvider>(context, listen: false).dhabas.where((d) => d.id == order.vendorId);
-    final usualEta = dhabas.isEmpty ? null : dhabas.first.eta;
     final unpaid = order.awaitsPayment;
     final String hint;
     if (unpaid) {
@@ -377,12 +427,8 @@ class _StatusHero extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 16),
-        if (status.isLive && !unpaid && usualEta != null) ...[
-          KInfoChip(icon: LucideIcons.timer, label: 'Kitchen usually delivers in $usualEta'),
-          const SizedBox(height: 12),
-        ],
         Text(
-          '${order.vendorName} · ${order.dropoffHostel.isEmpty ? 'Campus gate' : order.dropoffHostel} · ${rupee(order.totalAmount)}',
+          '${order.vendorName} · ${order.dropoffHostel.isEmpty ? 'Campus gate' : displayDropPoint(order.dropoffHostel)} · ${rupee(order.totalAmount)}',
           style: KraveoType.bodySm.copyWith(color: k.ink, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 2),
@@ -553,6 +599,10 @@ class _CancelledCard extends StatelessWidget {
         Text(_why, style: KraveoType.body.copyWith(color: k.ink)),
         const SizedBox(height: 6),
         Text(_money, style: KraveoType.body.copyWith(color: k.inkMuted)),
+        // A paid order that is not refunded yet (or whose refund failed), or one Kraveo cancelled:
+        // tell the student how to reach a person.
+        if (order.isPaid || order.refundStatus == RefundStatus.failed || order.cancelledBy == CancelledBy.admin)
+          SupportEmailLine(subject: 'Order ${orderRef(order.id)}'),
         const SizedBox(height: 14),
         KButton(label: 'Order again', icon: LucideIcons.utensils, kind: KButtonKind.tonal, expand: false, onPressed: onAgain),
       ]),
@@ -762,15 +812,14 @@ class _RunnerCard extends StatelessWidget {
           const SizedBox(width: 10),
           KIconButton(
             icon: LucideIcons.phone,
-            semanticLabel: 'Copy ${rider.name}’s number',
+            semanticLabel: 'Call ${rider.name}',
             color: k.onBrand,
             background: k.brand,
             bordered: false,
             size: 48,
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: phone));
-              showKSnack(context, '${rider.name}’s number ($phone) copied. Paste it in your dialer.', icon: LucideIcons.phone);
-            },
+            // Opens the phone's dialer with the number filled in; if that is not possible the number
+            // is copied instead and the student is told.
+            onTap: () => callNumber(context, name: rider.name, phone: phone),
           ),
         ],
       ]),

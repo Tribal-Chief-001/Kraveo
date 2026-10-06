@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/order.dart';
 import 'customer_api_service.dart';
+import 'external_links.dart';
 
 /// What went wrong with an order/payment call, already classified for the UI.
 enum OrderErrorKind {
@@ -330,6 +331,7 @@ class _Maybe<T> {
 String orderErrorMessage(OrderApiError error, {String action = 'do that'}) {
   final byCode = _codeMessages[error.code];
   if (byCode != null) return byCode;
+  if (error.code == 'INVALID_ITEMS') return invalidItemsMessage(error.message);
   switch (error.kind) {
     case OrderErrorKind.offline:
       return 'No internet connection. We couldn\'t $action. Check your connection and try again.';
@@ -354,6 +356,20 @@ String orderErrorMessage(OrderApiError error, {String action = 'do that'}) {
   }
 }
 
+/// `INVALID_ITEMS` carries server text that can hold internal ids ("Invalid quantity '21' for item
+/// 9f3c...", "Item '9f3c...' is not available at this dhaba."). Only the sold-out sentence names a
+/// dish, so only that one is passed on; everything else becomes plain wording.
+String invalidItemsMessage(String? serverMessage) {
+  final m = serverMessage ?? '';
+  if (m.contains('SOLD OUT')) {
+    final name = RegExp(r"^Item '(.+)' is currently SOLD OUT").firstMatch(m)?.group(1);
+    final isId = name != null && RegExp(r'^[0-9a-fA-F-]{20,}$').hasMatch(name);
+    if (name != null && !isId) return 'Item \'$name\' is currently SOLD OUT. We refreshed the menu: please remove it from your cart and try again.';
+  }
+  if (m.contains('Invalid quantity')) return 'You can order at most 20 of one dish. Please lower the quantity and try again.';
+  return 'Something in your cart is no longer available. We refreshed the menu: please check your cart and try again.';
+}
+
 /// Customer-facing wording for the backend's error codes (backend/src/services/orderFlow.ts,
 /// routes/orders.ts). Codes that only partners/admins can get fall back to the server message.
 const Map<String, String> _codeMessages = {
@@ -361,14 +377,15 @@ const Map<String, String> _codeMessages = {
   'ALREADY_PAID': 'This order is already paid.',
   'PAYMENT_WINDOW_EXPIRED': 'The 15 minutes to pay for this order are over. Please place the order again.',
   'ORDER_CANCELLED': 'This order was cancelled before your payment arrived. The money is refunded to you automatically.',
-  'PAYMENT_AMOUNT_MISMATCH': 'The amount paid doesn\'t match this order, so it wasn\'t accepted. Kraveo support will contact you about the money.',
-  'DUPLICATE_PAYMENT': 'This order was already paid. Your extra payment will be refunded by Kraveo support.',
+  'PAYMENT_AMOUNT_MISMATCH': 'The amount paid doesn\'t match this order, so it wasn\'t accepted. Kraveo support will contact you about the money; you can also write to $kSupportEmail.',
+  'DUPLICATE_PAYMENT': 'This order was already paid. Your extra payment will be refunded by Kraveo support. Questions: $kSupportEmail.',
   'BAD_SIGNATURE': 'We couldn\'t verify this payment. If money left your account, Kraveo confirms or refunds it automatically.',
-  'CANNOT_CANCEL': 'The restaurant has already accepted this order, so it can\'t be cancelled in the app. Please contact Kraveo support.',
+  'CANNOT_CANCEL': 'The restaurant has already accepted this order, so it can\'t be cancelled in the app. Please contact Kraveo support at $kSupportEmail.',
   'ORDER_CLOSED': 'This order is already finished or cancelled.',
   'ROLE_NOT_ALLOWED': 'This account can\'t do that in the Kraveo app.',
   'PARTNER_NOT_APPROVED': 'Partner accounts can\'t order in the customer app.',
   'VENDOR_CLOSED': 'This restaurant is closed for new orders right now.',
+  'CLIENT_REQUEST_MISMATCH': 'Your order changed while it was being sent. Please tap the button again to place it.',
   'VENDOR_UNAVAILABLE': 'This restaurant isn\'t available right now.',
   'AMOUNT_TOO_SMALL': 'The order total must be at least ₹1.',
   'PROVIDER_UNAVAILABLE': 'The payment service is not responding right now. Please try again in a minute.',

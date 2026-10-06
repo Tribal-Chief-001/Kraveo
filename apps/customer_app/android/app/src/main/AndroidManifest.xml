@@ -7,7 +7,9 @@
     <application
         android:label="Kraveo"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules">
 
         <!-- Google Maps key, injected at build time from Gradle property MAPS_API_KEY or env
              KRAVEO_MAPS_API_KEY (see app/build.gradle.kts). Never put a literal key here. Empty
@@ -52,6 +54,18 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- MainActivity.mapsAvailable() must see Google Play services on Android 11+. -->
+        <package android:name="com.google.android.gms"/>
+        <!-- "Call" the rider (tel:) and "Email support" (mailto:) through url_launcher; Android 11+
+             package visibility needs these declared. -->
+        <intent>
+            <action android:name="android.intent.action.DIAL"/>
+            <data android:scheme="tel"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO"/>
+            <data android:scheme="mailto"/>
         </intent>
     </queries>
 </manifest>

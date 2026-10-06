@@ -50,13 +50,16 @@ class CheckoutDraft {
 }
 
 class _CheckoutAttempt {
-  _CheckoutAttempt(this.cartKey, this.clientRequestId, this.dropoffHostel);
+  _CheckoutAttempt(this.cartKey, this.clientRequestId, this.dropoffHostel, this.dropoffNotes);
   final String cartKey;
   final String clientRequestId;
 
-  /// The drop point this attempt was sent with. A request that has not produced an order yet
-  /// must not be retried with the same idempotency key for a different point.
+  /// The drop point and delivery note this attempt was sent with. A request that has not
+  /// produced an order yet must not be retried with the same idempotency key for a different
+  /// point or note: the server treats the pair (key, request body) as one order and answers
+  /// 409 CLIENT_REQUEST_MISMATCH otherwise.
   final String dropoffHostel;
+  final String dropoffNotes;
   String? orderId;
 }
 
@@ -125,6 +128,10 @@ class OrderProvider with ChangeNotifier {
   /// (with slack) so an older backend that ignores `scope` cannot resurrect old orders.
   static const Duration recentlyFinished = Duration(minutes: 12);
 
+  /// A cancelled, paid order keeps being polled / listened to for this long after its last
+  /// update, so the screen can turn "refund is being processed" into "refunded" by itself.
+  static const Duration refundWatchWindow = Duration(minutes: 10);
+
   static const int pageSize = 20;
 
   // ---- state ---------------------------------------------------------------------------------
@@ -162,6 +169,9 @@ class OrderProvider with ChangeNotifier {
   final Map<String, Future<PaymentOutcome>> _paying = {};
   final Set<String> _cancelling = {};
   final Map<String, Future<OrderModel?>> _refreshing = {};
+
+  /// Why the last `GET /orders/:id` for an order we do not hold failed (cleared once it loads).
+  final Map<String, OrderApiError> _loadErrors = {};
 
   final Map<String, int> _watchers = {};
   Timer? _pollTimer;
@@ -210,6 +220,15 @@ class OrderProvider with ChangeNotifier {
   /// Alias kept for screens/tests written against the previous API.
   List<OrderModel> get orderHistory => history;
 
+  /// True only when the student's orders are loaded and none of them counts as an earlier order
+  /// for the first-order coupon (the server ignores cancelled ones). False while unknown, so the
+  /// VITFIRST promo never shows to someone it would be refused for.
+  bool get isFirstTimeCustomer {
+    if (!_historyLoaded || !_activeLoaded) return false;
+    if (_orders.values.any((o) => o.status != OrderProgressStatus.cancelled)) return false;
+    return !_historyHasMore; // more history pages might hold a delivered order
+  }
+
   bool get isLoadingActive => _activeLoading;
   bool get hasLoadedActive => _activeLoaded;
   OrderApiError? get activeError => _activeError;
@@ -223,6 +242,23 @@ class OrderProvider with ChangeNotifier {
   bool get isPlacingOrder => _placing != null;
   bool isPaying(String orderId) => _paying.containsKey(orderId);
   bool isCancelling(String orderId) => _cancelling.contains(orderId);
+
+  /// A `GET /orders/:id` for [orderId] is running.
+  bool isRefreshing(String orderId) => _refreshing.containsKey(orderId);
+
+  /// Why [orderId] could not be loaded (it is not in memory and the server refused or did not
+  /// answer), or null. Lets the tracking screen show an error with Retry instead of a spinner.
+  OrderApiError? loadErrorFor(String orderId) => _orders.containsKey(orderId) ? null : _loadErrors[orderId];
+
+  /// True when the server said this order is not ours / does not exist: no point polling it.
+  bool _isGone(String id) {
+    final e = _loadErrors[id];
+    return !_orders.containsKey(id) && e != null && (e.kind == OrderErrorKind.notFound || e.kind == OrderErrorKind.forbidden);
+  }
+
+  /// Whether [o] still needs live updates: it is in progress, or it was cancelled after payment
+  /// and its refund result has not arrived yet (for [refundWatchWindow] after its last update).
+  bool _needsUpdates(OrderModel o) => o.isLive || (o.isRefundInProgress && _clock().toUtc().difference(o.updatedAt) <= refundWatchWindow);
   bool hasReviewed(String orderId) => _reviewed.contains(orderId) || (_orders[orderId]?.isReviewed ?? false);
   RiderLocation? riderLocation(String orderId) => _riderLocations[orderId];
 
@@ -319,6 +355,7 @@ class OrderProvider with ChangeNotifier {
     _paying.clear();
     _cancelling.clear();
     _refreshing.clear();
+    _loadErrors.clear();
   }
 
   /// App came back to the foreground: catch up on anything missed while in the background.
@@ -415,8 +452,24 @@ class OrderProvider with ChangeNotifier {
     final r = await _api.fetchOrder(orderId);
     if (gen != _generation) return null;
     final o = r.value;
-    if (o == null) return _orders[orderId];
+    if (o == null) {
+      final error = r.error;
+      if (error != null && !_orders.containsKey(orderId)) {
+        final changed = _loadErrors[orderId]?.kind != error.kind;
+        _loadErrors[orderId] = error;
+        if (changed) {
+          _notify();
+          if (_isGone(orderId)) {
+            _ensurePolling();
+            unawaited(_syncRealtime());
+          }
+        }
+      }
+      return _orders[orderId];
+    }
+    final hadError = _loadErrors.remove(orderId) != null;
     _ingest(o);
+    if (hadError) _ensurePolling(); // polling was switched off for a missing order: it exists now
     return _orders[orderId];
   }
 
@@ -474,24 +527,25 @@ class OrderProvider with ChangeNotifier {
       if (existing != null && existing.isLive) return OrderResult.ok(existing);
       attempt = null; // that order is finished (expired / cancelled): a new order needs a new key
     }
-    if (attempt != null && attempt.orderId == null && attempt.dropoffHostel != draft.dropoffHostel) {
-      attempt = null; // no order exists yet and the drop point changed: a new key for the new point
+    if (attempt != null && attempt.orderId == null && (attempt.dropoffHostel != draft.dropoffHostel || attempt.dropoffNotes != draft.dropoffNotes)) {
+      attempt = null; // no order exists yet and the drop point or note changed: a new key for the new request
     }
     if (attempt == null || attempt.cartKey != draft.cartKey) {
-      attempt = _CheckoutAttempt(draft.cartKey, newClientRequestId(), draft.dropoffHostel);
+      attempt = _CheckoutAttempt(draft.cartKey, newClientRequestId(), draft.dropoffHostel, draft.dropoffNotes);
     }
     _attempt = attempt;
     final gen = _generation;
     _notify();
-    final r = await _api.createOrder(CreateOrderRequest(
-      vendorId: draft.vendorId,
-      items: draft.items,
-      dropoffHostel: draft.dropoffHostel,
-      dropoffNotes: draft.dropoffNotes,
-      couponCode: draft.couponCode,
-      clientRequestId: attempt.clientRequestId,
-    ));
+    var r = await _createOrder(draft, attempt);
     if (gen != _generation) return const OrderResult.fail(OrderApiError(OrderErrorKind.unauthorized));
+    if (r.error?.code == 'CLIENT_REQUEST_MISMATCH') {
+      // The key was already used for a different body (should not happen after the re-key above,
+      // but a lost response plus an edit elsewhere could): start a fresh checkout id and retry once.
+      attempt = _CheckoutAttempt(draft.cartKey, newClientRequestId(), draft.dropoffHostel, draft.dropoffNotes);
+      _attempt = attempt;
+      r = await _createOrder(draft, attempt);
+      if (gen != _generation) return const OrderResult.fail(OrderApiError(OrderErrorKind.unauthorized));
+    }
     final order = r.value;
     if (order != null) {
       attempt.orderId = order.id;
@@ -500,6 +554,15 @@ class OrderProvider with ChangeNotifier {
     }
     return r;
   }
+
+  Future<OrderResult<OrderModel>> _createOrder(CheckoutDraft draft, _CheckoutAttempt attempt) => _api.createOrder(CreateOrderRequest(
+        vendorId: draft.vendorId,
+        items: draft.items,
+        dropoffHostel: draft.dropoffHostel,
+        dropoffNotes: draft.dropoffNotes,
+        couponCode: draft.couponCode,
+        clientRequestId: attempt.clientRequestId,
+      ));
 
   /// Forget the checkout attempt (after a successful payment, or when the student cancels the
   /// unpaid order). The next checkout gets a fresh idempotency key.
@@ -682,7 +745,7 @@ class OrderProvider with ChangeNotifier {
   /// Whether a tracking screen is currently showing [orderId] (used to avoid a duplicate push banner).
   bool isWatching(String orderId) => _watchers.containsKey(orderId);
 
-  Iterable<String> get _pollIds => _watchers.keys.where((id) => _orders[id]?.isTerminal != true);
+  Iterable<String> get _pollIds => _watchers.keys.where(_isWatchedAndWanted);
 
   void _ensurePolling() {
     if (_pollIds.isEmpty) {
@@ -716,10 +779,16 @@ class OrderProvider with ChangeNotifier {
 
   Set<String> get _wantedRooms => {
         for (final id in _activeIds)
-          if (_orders[id]?.isLive == true) id,
+          if (_orders[id] != null && _needsUpdates(_orders[id]!)) id,
         for (final id in _watchers.keys)
-          if (_orders[id]?.isTerminal != true) id,
+          if (_isWatchedAndWanted(id)) id,
       };
+
+  /// A watched order (loaded, or not loaded yet but not known to be missing) that still needs updates.
+  bool _isWatchedAndWanted(String id) {
+    final o = _orders[id];
+    return o == null ? !_isGone(id) : _needsUpdates(o);
+  }
 
   bool get isSocketOpen => _realtime != null;
 
@@ -737,9 +806,17 @@ class OrderProvider with ChangeNotifier {
       if (_connecting) return;
       _connecting = true;
       final gen = _generation;
-      final token = await _tokenProvider();
+      final String? token;
+      try {
+        token = await _tokenProvider();
+      } catch (e) {
+        debugPrint('[Orders] could not read the session token for the socket: ${e.runtimeType}');
+        return; // polling still covers the watched orders; the next sync tries again
+      } finally {
+        // (After a logout `_reset` already cleared the flag for the new session; leave it alone.)
+        if (gen == _generation) _connecting = false;
+      }
       if (gen != _generation || _disposed) return;
-      _connecting = false;
       if (token == null || token.isEmpty || _realtime != null) return;
       final created = _realtimeFactory();
       _realtime = created;

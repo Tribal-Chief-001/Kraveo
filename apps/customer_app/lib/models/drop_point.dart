@@ -85,3 +85,7 @@ String? normalizeDropPoint(String? raw) {
   }
   return null;
 }
+
+/// How to show a stored drop point: the canonical name when it can be recognised ("Block 3" ->
+/// "BH3"), otherwise the stored text as is.
+String displayDropPoint(String? raw) => normalizeDropPoint(raw) ?? (raw ?? '').trim();

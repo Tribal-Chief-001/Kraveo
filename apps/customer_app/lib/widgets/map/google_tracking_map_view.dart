@@ -84,7 +84,7 @@ class _GoogleTrackingMapViewState extends State<GoogleTrackingMapView> {
     }
   }
 
-  Set<Marker> _markers(GeoPoint? rider) {
+  Set<Marker> _markers(GeoPoint? rider, {bool stale = false}) {
     final spec = widget.spec;
     return {
       Marker(
@@ -104,8 +104,9 @@ class _GoogleTrackingMapViewState extends State<GoogleTrackingMapView> {
         Marker(
           markerId: const MarkerId('rider'),
           position: _ll(rider),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
-          infoWindow: const InfoWindow(title: 'Your rider'),
+          icon: BitmapDescriptor.defaultMarkerWithHue(stale ? BitmapDescriptor.hueAzure : BitmapDescriptor.hueOrange),
+          infoWindow: InfoWindow(title: stale ? 'Your rider (location not updating)' : 'Your rider'),
+          alpha: stale ? 0.6 : 1,
           zIndexInt: 2,
           anchor: const Offset(0.5, 1),
         ),
@@ -115,29 +116,33 @@ class _GoogleTrackingMapViewState extends State<GoogleTrackingMapView> {
   @override
   Widget build(BuildContext context) {
     final spec = widget.spec;
-    return ValueListenableBuilder<GeoPoint?>(
-      valueListenable: spec.rider,
-      builder: (context, rider, _) => GoogleMap(
-        initialCameraPosition: CameraPosition(target: _ll(spec.dropoff), zoom: 16),
-        markers: _markers(rider),
-        onMapCreated: (c) {
-          _controller = c;
-          _hadRider = spec.rider.value != null;
-          spec.onReady();
-          _fit();
-        },
-        // Nothing here needs the phone's own location: no permission is requested.
-        myLocationEnabled: false,
-        myLocationButtonEnabled: false,
-        zoomControlsEnabled: false,
-        mapToolbarEnabled: false,
-        compassEnabled: false,
-        rotateGesturesEnabled: false,
-        tiltGesturesEnabled: false,
-        buildingsEnabled: false,
-        indoorViewEnabled: false,
-        trafficEnabled: false,
-      ),
+    return ListenableBuilder(
+      listenable: Listenable.merge([spec.rider, if (spec.riderStale != null) spec.riderStale!]),
+      builder: (context, _) => _map(spec, spec.rider.value, stale: spec.riderStale?.value ?? false),
+    );
+  }
+
+  Widget _map(MapViewSpec spec, GeoPoint? rider, {required bool stale}) {
+    return GoogleMap(
+      initialCameraPosition: CameraPosition(target: _ll(spec.dropoff), zoom: 16),
+      markers: _markers(rider, stale: stale),
+      onMapCreated: (c) {
+        _controller = c;
+        _hadRider = spec.rider.value != null;
+        spec.onReady();
+        _fit();
+      },
+      // Nothing here needs the phone's own location: no permission is requested.
+      myLocationEnabled: false,
+      myLocationButtonEnabled: false,
+      zoomControlsEnabled: false,
+      mapToolbarEnabled: false,
+      compassEnabled: false,
+      rotateGesturesEnabled: false,
+      tiltGesturesEnabled: false,
+      buildingsEnabled: false,
+      indoorViewEnabled: false,
+      trafficEnabled: false,
     );
   }
 }

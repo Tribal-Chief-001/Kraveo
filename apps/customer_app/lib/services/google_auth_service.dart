@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:google_sign_in/google_sign_in.dart';
 import '../config/api_config.dart';
+import 'external_links.dart';
 
 /// What the Google account picker handed back: enough to call POST /auth/google and to
 /// pre-fill the sign-up form.
@@ -58,7 +59,7 @@ String? googleFailureMessage(GoogleAuthFailure failure) {
     case GoogleAuthFailure.playServices:
       return 'Google Play services is missing or needs an update on this phone. Update it from the Play Store and try again.';
     case GoogleAuthFailure.notConfigured:
-      return 'Google sign-in isn\'t set up correctly in this build. Please update the app or contact Kraveo support.';
+      return 'Google sign-in isn\'t set up correctly in this build. Please update the app or contact Kraveo support at $kSupportEmail.';
     case GoogleAuthFailure.other:
       return 'Google sign-in didn\'t work. Please try again.';
   }

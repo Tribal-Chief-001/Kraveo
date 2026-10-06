@@ -11,18 +11,24 @@ import '../widgets/ui/hostel_pill.dart';
 import '../widgets/ui/k_icon_button.dart';
 import '../widgets/ui/phone_input.dart';
 
-/// Name rule shared with the backend (2-60 characters).
+/// Name rule shared with the backend (`backend/src/utils/names.ts`): 2-60 characters, the first a
+/// letter in any script, then letters, combining marks (Devanagari vowel signs), digits (Google
+/// names such as "RAHUL SHARMA 22BCE10123"), spaces, dots, apostrophes (straight or curly) and hyphens.
 const int kNameMinLength = 2;
 const int kNameMaxLength = 60;
+
+final RegExp _nameFirstChar = RegExp(r'^\p{L}', unicode: true);
+final RegExp _nameChars = RegExp(r"^[\p{L}\p{M}\p{Nd} .'\u2019\-]+$", unicode: true);
 
 /// Returns a user-facing problem with [raw], or null when it is an acceptable name.
 String? validateFullName(String raw) {
   final name = raw.trim().replaceAll(RegExp(r'\s+'), ' ');
   if (name.isEmpty) return 'Tell us your name so the runner knows who to look for.';
-  if (name.length < kNameMinLength) return 'Your name needs at least $kNameMinLength letters.';
-  if (name.length > kNameMaxLength) return 'Keep your name under $kNameMaxLength characters.';
-  if (!RegExp(r'\p{L}', unicode: true).hasMatch(name)) return 'Your name needs at least one letter.';
-  if (!RegExp(r"^[\p{L}\p{M} .'\-]+$", unicode: true).hasMatch(name)) return 'Use letters only (spaces, dots, apostrophes and hyphens are fine).';
+  final length = name.runes.length; // characters, as the server counts them
+  if (length < kNameMinLength) return 'Your name needs at least $kNameMinLength letters.';
+  if (length > kNameMaxLength) return 'Keep your name under $kNameMaxLength characters.';
+  if (!_nameFirstChar.hasMatch(name)) return 'Your name has to start with a letter.';
+  if (!_nameChars.hasMatch(name)) return 'Use letters and digits only (spaces, dots, apostrophes and hyphens are fine).';
   return null;
 }
 
@@ -212,7 +218,9 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     final email = context.select<SessionProvider, String?>((s) => s.user?.email);
     final last = _step == _steps - 1;
     return PopScope(
-      canPop: false,
+      // Step 1 has no earlier step: back leaves the app like anywhere else (the half-finished
+      // sign-up is still here next time). Later steps go back one step; nothing while saving.
+      canPop: _step == 0 && !_saving,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _back();
       },

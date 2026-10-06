@@ -13,6 +13,7 @@ class MapViewSpec {
     required this.onError,
     this.restaurant,
     this.restaurantName = '',
+    this.riderStale,
   });
 
   /// The delivery point pin (always present).
@@ -26,6 +27,10 @@ class MapViewSpec {
   /// The rider marker position, already interpolated between GPS fixes (null = no marker).
   /// Changes at most ~12 times a second and rebuilds only the map, never the screen.
   final ValueListenable<GeoPoint?> rider;
+
+  /// True while the rider has stopped reporting (the last fix is old): the marker then shows the
+  /// last known position, marked as such. Null = never stale (tests, old callers).
+  final ValueListenable<bool>? riderStale;
 
   /// The map is created and drawing. Until this is called the stylised map stays visible.
   final VoidCallback onReady;

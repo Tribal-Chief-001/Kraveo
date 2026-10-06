@@ -280,15 +280,24 @@ void main() {
       expect(validateIndianMobile('98765'), contains('10-digit'));
     });
 
-    test('name validation follows the 2-60 letters contract', () {
+    test('name validation follows the server rule (backend/src/utils/names.ts): any-script letters, marks, digits, space . \' ’ -, 2-60 chars, first a letter', () {
       expect(validateFullName(''), isNotNull);
       expect(validateFullName(' A '), isNotNull);
-      expect(validateFullName('12'), isNotNull);
+      expect(validateFullName('12'), isNotNull, reason: 'must start with a letter');
+      expect(validateFullName('2Pac'), isNotNull);
       expect(validateFullName('Al'), isNull);
       expect(validateFullName('Aarav Sharma'), isNull);
       expect(validateFullName("Mary-Jane O'Neil Jr."), isNull);
-      expect(validateFullName('Aarav 2'), contains('letters only'));
-      expect(validateFullName('Aarav<script>'), contains('letters only'));
+      // what the server accepts and Google fills in
+      expect(validateFullName('Aarav 2'), isNull, reason: 'digits are allowed');
+      expect(validateFullName('RAHUL SHARMA 22BCE10123'), isNull);
+      expect(validateFullName('Joan D\u2019Souza'), isNull, reason: 'curly apostrophe');
+      expect(validateFullName('राहुल शर्मा'), isNull, reason: 'Devanagari letters and vowel marks');
+      expect(validateFullName('  Aarav    Sharma  '), isNull, reason: 'whitespace is collapsed first');
+      expect(validateFullName('Aarav<script>'), contains('Use letters'));
+      expect(validateFullName('Aarav 😀'), contains('Use letters'));
+      expect(validateFullName('Aarav_Kumar'), contains('Use letters'));
+      expect(validateFullName('x' * 60), isNull);
       expect(validateFullName('x' * 61), isNotNull);
     });
 
@@ -720,11 +729,11 @@ void main() {
       expect(find.textContaining('at least 2'), findsOneWidget);
       expect(find.textContaining('start with 6, 7, 8 or 9'), findsOneWidget);
 
-      await tester.enterText(find.byKey(const ValueKey('name-field')), 'Aarav 2');
+      await tester.enterText(find.byKey(const ValueKey('name-field')), 'Aarav <b>');
       await tester.enterText(find.byKey(const ValueKey('phone-field')), '98765');
       await tester.tap(find.text('Continue'));
       await settle(tester);
-      expect(find.textContaining('letters only'), findsOneWidget);
+      expect(find.textContaining('Use letters'), findsOneWidget);
       expect(find.text('Enter your 10-digit Indian mobile number.'), findsOneWidget);
 
       expect(find.text('Are you a\nstudent?'), findsNothing, reason: 'still on step 1');

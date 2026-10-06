@@ -374,6 +374,11 @@ class OrderModel {
   /// (older backend) createdAt + 15 minutes.
   DateTime get paymentDeadline => payBy ?? createdAt.add(kPaymentWindow);
 
+  /// A cancelled order that was paid and whose refund has neither finished nor failed yet: the
+  /// server publishes the refund result as a second event shortly after the cancellation.
+  bool get isRefundInProgress =>
+      status == OrderProgressStatus.cancelled && paymentStatus == PaymentStatus.paid && refundStatus != RefundStatus.failed && refundStatus != RefundStatus.done;
+
   bool get isPaymentNotCompletedCancel => status == OrderProgressStatus.cancelled && cancelReason == kReasonPaymentNotCompleted;
 
   int get itemCount => items.fold(0, (sum, i) => sum + i.quantity);

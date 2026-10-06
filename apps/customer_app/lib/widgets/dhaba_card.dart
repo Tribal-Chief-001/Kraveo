@@ -111,7 +111,7 @@ class DhabaCard extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'Min ${rupee(dhaba.minOrder)} · Delivery ${rupee(dhaba.deliveryFee)}',
+                    'Delivery ${rupee(dhaba.deliveryFee)}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.end,

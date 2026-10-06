@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -16,6 +18,7 @@ import '../widgets/ui/format.dart';
 import '../widgets/ui/info_chip.dart';
 import '../widgets/ui/k_icon_button.dart';
 import '../widgets/ui/k_image.dart';
+import '../widgets/ui/money_text.dart';
 import '../widgets/ui/sheet_chrome.dart';
 import '../widgets/ui/snack.dart';
 import '../widgets/ui/veg_mark.dart';
@@ -41,6 +44,19 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
   String _selectedCategory = 'All';
 
   @override
+  void initState() {
+    super.initState();
+    // Opening a menu refreshes the catalog: open / closed and sold-out dishes may have changed
+    // since Home last loaded it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(context.read<DhabaProvider>().loadCatalog());
+    });
+  }
+
+  /// The kitchen as the catalog says right now (it may have closed since the card was tapped).
+  Dhaba get _dhaba => context.read<DhabaProvider>().byId(widget.dhaba.id) ?? widget.dhaba;
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
@@ -49,11 +65,16 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
   /// Adds an item, asking first when it would replace a cart from another kitchen,
   /// and routing customisable dishes through the customisation sheet.
   Future<void> _addItem(CartProvider cart, MenuItemModel item) async {
-    if (!widget.dhaba.isAcceptingOrders) {
-      showKSnack(context, '${widget.dhaba.name} is not taking orders right now.', error: true, icon: LucideIcons.moon);
+    final dhaba = _dhaba;
+    if (!dhaba.isAcceptingOrders) {
+      showKSnack(context, '${dhaba.name} is not taking orders right now.', error: true, icon: LucideIcons.moon);
       return;
     }
-    if (cart.items.isNotEmpty && cart.dhabaId != null && cart.dhabaId != widget.dhaba.id) {
+    if (!cart.canAddMore(item.id) && cart.dhabaId == dhaba.id) {
+      showKSnack(context, CartProvider.maxQuantityMessage, icon: LucideIcons.info);
+      return;
+    }
+    if (cart.items.isNotEmpty && cart.dhabaId != null && cart.dhabaId != dhaba.id) {
       final replace = await showKConfirm(
         context,
         title: 'Start a new cart?',
@@ -70,15 +91,15 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
         onAddToCart: (selectedOptions, notes) {
           cart.addItem(
             item: item,
-            dhabaId: widget.dhaba.id,
-            dhabaName: widget.dhaba.name,
+            dhabaId: dhaba.id,
+            dhabaName: dhaba.name,
             selectedOptions: selectedOptions,
             specialInstructions: notes,
           );
         },
       );
     } else {
-      cart.addItem(item: item, dhabaId: widget.dhaba.id, dhabaName: widget.dhaba.name);
+      cart.addItem(item: item, dhabaId: dhaba.id, dhabaName: dhaba.name);
     }
   }
 
@@ -92,8 +113,9 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
     final k = context.k;
     final dhabaProvider = Provider.of<DhabaProvider>(context);
     final cart = Provider.of<CartProvider>(context);
-    final List<MenuItemModel> allItems = dhabaProvider.getMenuItemsForDhaba(widget.dhaba.id);
-    final open = widget.dhaba.isAcceptingOrders;
+    final dhaba = dhabaProvider.byId(widget.dhaba.id) ?? widget.dhaba;
+    final List<MenuItemModel> allItems = dhabaProvider.getMenuItemsForDhaba(dhaba.id);
+    final open = dhaba.isAcceptingOrders;
 
     // Unique categories from menu items
     final categories = ['All', ...allItems.map((i) => i.category).toSet()];
@@ -135,24 +157,23 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
                   ),
                 ),
               ),
-              flexibleSpace: _MenuHeader(dhaba: widget.dhaba),
+              flexibleSpace: _MenuHeader(dhaba: dhaba),
             ),
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(KSpace.gutter, 4, KSpace.gutter, 8),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Wrap(spacing: 8, runSpacing: 8, children: [
-                    KInfoChip(icon: LucideIcons.star, label: widget.dhaba.rating.toStringAsFixed(1), iconColor: kStarColor),
-                    KInfoChip(icon: LucideIcons.clock, label: widget.dhaba.eta),
-                    KInfoChip(icon: LucideIcons.wallet, label: 'Min ${rupee(widget.dhaba.minOrder)}'),
+                    KInfoChip(icon: LucideIcons.star, label: dhaba.rating.toStringAsFixed(1), iconColor: kStarColor),
+                    KInfoChip(icon: LucideIcons.clock, label: dhaba.eta),
                     KInfoChip(icon: LucideIcons.mapPin, label: widget.selectedHostel == null ? 'Pick drop-off at checkout' : 'To ${widget.selectedHostel}', iconColor: k.brand),
                   ]),
-                  if (widget.dhaba.address.isNotEmpty) ...[
+                  if (dhaba.address.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Padding(padding: const EdgeInsets.only(top: 2), child: Icon(LucideIcons.store, size: 15, color: k.inkFaint)),
                       const SizedBox(width: 8),
-                      Expanded(child: Text(widget.dhaba.address, style: KraveoType.bodySm.copyWith(color: k.inkMuted))),
+                      Expanded(child: Text(dhaba.address, style: KraveoType.bodySm.copyWith(color: k.inkMuted))),
                     ]),
                   ],
                   if (!open) ...[
@@ -261,7 +282,7 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
           bottom: safeBottom + 12,
           child: KBarSwitcher(
             visible: showCartBar,
-            child: showCartBar ? _CartBar(cart: cart, kitchenName: widget.dhaba.name, onTap: () => CartSheet.show(context, selectedHostel: widget.selectedHostel)) : const SizedBox.shrink(),
+            child: showCartBar ? _CartBar(cart: cart, kitchenName: dhaba.name, onTap: () => CartSheet.show(context, selectedHostel: widget.selectedHostel)) : const SizedBox.shrink(),
           ),
         ),
       ]),
@@ -498,7 +519,7 @@ class _CartBar extends StatelessWidget {
           child: Text('$count', key: ValueKey(count), style: KraveoType.numericSm.copyWith(color: k.onBrand, fontSize: 19)),
         ),
       ),
-      title: KAnimatedNumber(value: cart.subtotal, prefix: '₹', style: KraveoType.numericSm.copyWith(color: k.onBrand, fontSize: 21)),
+      title: KMoneyText(value: cart.subtotal, style: KraveoType.numericSm.copyWith(color: k.onBrand, fontSize: 21)),
       subtitle: fromOther ? 'From ${cart.dhabaName}' : '${count == 1 ? '1 item' : '$count items'} · plus fees',
       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
         Text('View cart', style: KraveoType.button.copyWith(color: k.onBrand, fontSize: 14)),

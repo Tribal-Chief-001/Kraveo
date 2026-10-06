@@ -4,6 +4,12 @@ import '../models/cart_item.dart';
 import '../models/customization.dart';
 
 class CartProvider with ChangeNotifier {
+  /// The server refuses more than this many of one dish in an order (`MAX_ITEM_QUANTITY`).
+  static const int maxQuantityPerDish = 20;
+
+  /// Friendly text for the snackbar shown when a dish is already at [maxQuantityPerDish].
+  static const String maxQuantityMessage = 'You can order at most 20 of one dish at a time.';
+
   String? _dhabaId;
   String? _dhabaName;
   final List<CartItem> _items = [];
@@ -41,7 +47,13 @@ class CartProvider with ChangeNotifier {
     return total < 0 ? 0.0 : total;
   }
 
-  void addItem({
+  /// True when one more of [itemId] fits under [maxQuantityPerDish] (all option variants of the
+  /// dish count together, because the order sums them up).
+  bool canAddMore(String itemId) => getItemQuantityInCart(itemId) < maxQuantityPerDish;
+
+  /// Adds one of [item]. Returns false (and changes nothing) when the dish is already at
+  /// [maxQuantityPerDish].
+  bool addItem({
     required MenuItemModel item,
     required String dhabaId,
     required String dhabaName,
@@ -52,6 +64,7 @@ class CartProvider with ChangeNotifier {
     if (_dhabaId != null && _dhabaId != dhabaId) {
       clearCart();
     }
+    if (!canAddMore(item.id)) return false;
     _dhabaId = dhabaId;
     _dhabaName = dhabaName;
 
@@ -82,15 +95,18 @@ class CartProvider with ChangeNotifier {
 
     _recalculateDiscount();
     notifyListeners();
+    return true;
   }
 
-  void incrementItem(String cartItemId) {
+  /// One more of a cart line. Returns false when its dish is already at [maxQuantityPerDish].
+  bool incrementItem(String cartItemId) {
     final index = _items.indexWhere((i) => i.cartItemId == cartItemId);
-    if (index >= 0) {
-      _items[index].quantity += 1;
-      _recalculateDiscount();
-      notifyListeners();
-    }
+    if (index < 0) return false;
+    if (!canAddMore(_items[index].item.id)) return false;
+    _items[index].quantity += 1;
+    _recalculateDiscount();
+    notifyListeners();
+    return true;
   }
 
   void decrementItem(String cartItemId) {
@@ -145,18 +161,6 @@ class CartProvider with ChangeNotifier {
       _couponDiscountAmount = (subtotal * 0.20).clamp(0.0, 50.0);
       notifyListeners();
       return true;
-    } else if (cleanCode == 'KRAVEO20') {
-      if (subtotal < 80) {
-        _appliedCouponCode = null;
-        _couponDiscountAmount = 0.0;
-        _couponError = 'Minimum subtotal of ₹80 required for KRAVEO20';
-        notifyListeners();
-        return false;
-      }
-      _appliedCouponCode = 'KRAVEO20';
-      _couponDiscountAmount = 20.0;
-      notifyListeners();
-      return true;
     } else if (cleanCode == 'KRAVEO50') {
       if (subtotal < 150) {
         _appliedCouponCode = null;
@@ -172,7 +176,7 @@ class CartProvider with ChangeNotifier {
     } else {
       _appliedCouponCode = null;
       _couponDiscountAmount = 0.0;
-      _couponError = 'Invalid code. Try "VITFIRST" or "KRAVEO20" for OFF!';
+      _couponError = 'That code isn\'t valid.';
       notifyListeners();
       return false;
     }

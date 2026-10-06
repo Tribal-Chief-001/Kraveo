@@ -14,12 +14,16 @@ class AnimatedRiderMap extends StatefulWidget {
   final String dhabaName;
   final RiderLocation? liveLocation;
 
+  /// "Now" for the GPS age label (a test can pass a fake clock).
+  final DateTime Function() clock;
+
   const AnimatedRiderMap({
     super.key,
     required this.status,
     required this.hostel,
     required this.dhabaName,
     this.liveLocation,
+    this.clock = DateTime.now,
   });
 
   @override
@@ -73,8 +77,8 @@ class _AnimatedRiderMapState extends State<AnimatedRiderMap> with SingleTickerPr
         OrderProgressStatus.cancelled => 'Cancelled',
       };
 
-  static String _liveLabel(RiderLocation loc) {
-    final age = DateTime.now().difference(loc.receivedAt);
+  static String _liveLabel(RiderLocation loc, DateTime now) {
+    final age = now.difference(loc.receivedAt);
     if (age.inSeconds < 60) return 'GPS live';
     return 'GPS ${age.inMinutes} min ago';
   }
@@ -121,7 +125,7 @@ class _AnimatedRiderMapState extends State<AnimatedRiderMap> with SingleTickerPr
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                     decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(KRadius.pill)),
-                    child: Text(_liveLabel(widget.liveLocation!), style: KraveoType.label.copyWith(color: Colors.white, fontSize: 11.5)),
+                    child: Text(_liveLabel(widget.liveLocation!, widget.clock()), style: KraveoType.label.copyWith(color: Colors.white, fontSize: 11.5)),
                   ),
                 ),
               // Start pin: kitchen

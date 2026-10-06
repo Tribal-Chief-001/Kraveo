@@ -3,6 +3,7 @@ import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 import '../providers/cart_provider.dart';
+import '../providers/order_provider.dart';
 import 'ui/format.dart';
 
 /// Coupon entry: an applied "ticket" when a code is active, otherwise a code field with a one-tap suggestion.
@@ -105,6 +106,7 @@ class _CouponBoxState extends State<CouponBox> {
             Expanded(child: Text(cart.couponError!, style: KraveoType.bodySm.copyWith(color: kDangerInk, fontWeight: FontWeight.w600))),
           ]),
         ],
+        if (context.select<OrderProvider, bool>((o) => o.isFirstTimeCustomer)) ...[
         const SizedBox(height: 10),
         KPressable(
           semanticLabel: 'Apply coupon VITFIRST',
@@ -124,6 +126,7 @@ class _CouponBoxState extends State<CouponBox> {
             ]),
           ),
         ),
+        ],
       ],
     );
   }

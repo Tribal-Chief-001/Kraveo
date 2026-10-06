@@ -30,28 +30,33 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentTab = 0;
 
-  /// Catch up on order changes when the app returns to the foreground (contract 3).
+  /// Catch up on order changes and the kitchen catalog (open / closed, sold out, new kitchens)
+  /// when the app returns to the foreground (contract 3).
   late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () {
-    if (mounted) context.read<OrderProvider>().onAppResumed();
+    if (!mounted) return;
+    context.read<OrderProvider>().onAppResumed();
+    unawaited(context.read<DhabaProvider>().loadCatalog());
   });
   final TextEditingController _searchController = TextEditingController();
-
-  /// True until the live catalog answers (or a short grace period passes), so users see
-  /// skeletons instead of a flash of placeholder kitchens.
-  bool _loadingCatalog = true;
-
-  static const Duration _skeletonGrace = Duration(seconds: 4);
 
   @override
   void initState() {
     super.initState();
     _lifecycle; // start listening
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final load = Provider.of<DhabaProvider>(context, listen: false).loadCatalog();
-      await Future.any<void>([load, Future<void>.delayed(_skeletonGrace)]);
-      if (mounted) setState(() => _loadingCatalog = false);
+      unawaited(Provider.of<DhabaProvider>(context, listen: false).loadCatalog());
     });
+  }
+
+  /// Pull-to-refresh on Home: kitchens and orders. Says so when the kitchens could not be refreshed.
+  Future<void> _refreshHome() async {
+    final orders = context.read<OrderProvider>();
+    final dhabas = context.read<DhabaProvider>();
+    unawaited(orders.refreshActive());
+    final ok = await dhabas.loadCatalog();
+    if (!mounted || ok) return;
+    showKSnack(context, 'Couldn\'t refresh the kitchens. Check your connection and try again.', error: true);
   }
 
   final List<String> hostelBlocks = kHostelBlocks;
@@ -81,6 +86,17 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final k = context.k;
     final selectedHostel = context.select<SessionProvider, String?>((s) => s.deliveryPoint);
+    // Back on Orders / Track / Me returns to the Home tab first; only Home itself leaves the app.
+    return PopScope(
+      canPop: _currentTab == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _currentTab != 0) _goToTab(0);
+      },
+      child: _buildScaffold(context, k, selectedHostel),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context, KraveoTokens k, String? selectedHostel) {
     return Scaffold(
       backgroundColor: k.bg,
       extendBody: true,
@@ -128,6 +144,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final activeOrder = orderProvider.activeOrder;
     final showActiveBar = activeOrder != null && activeOrder.status.isLive;
     final dhabas = dhabaProvider.dhabas;
+    final catalogLoading = dhabaProvider.isCatalogLoading;
+    final catalogFailed = dhabaProvider.hasCatalogFailed;
+    final noKitchens = dhabaProvider.allDhabas.isEmpty;
+    final chips = dhabaProvider.categories;
     final filtering = dhabaProvider.searchQuery.trim().isNotEmpty || dhabaProvider.selectedCategoryIndex != 0 || dhabaProvider.showFavoritesOnly;
     // With extendBody the scaffold reports the floating nav's height as bottom padding.
     final navInset = MediaQuery.paddingOf(context).bottom;
@@ -135,7 +155,11 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: k.bg,
       body: Stack(children: [
-        CustomScrollView(
+        RefreshIndicator(
+          onRefresh: _refreshHome,
+          edgeOffset: 76,
+          child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
             SliverAppBar(
               pinned: true,
@@ -202,28 +226,32 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
-                if (filtering) const SizedBox(height: 16) else const KReveal(index: 2, child: _PromoCard()),
-                KReveal(
-                  index: 3,
-                  child: SizedBox(
-                    height: 52,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: KSpace.gutter, vertical: 4),
-                      itemCount: dhabaProvider.categories.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 8),
-                      itemBuilder: (context, index) {
-                        final label = dhabaProvider.categories[index];
-                        return KChoiceChip(
-                          label: label,
-                          icon: _categoryIcon(label),
-                          selected: dhabaProvider.selectedCategoryIndex == index,
-                          onTap: () => dhabaProvider.setSelectedCategoryIndex(index),
-                        );
-                      },
+                // The first-order promo is only shown to a student who has no earlier order (the
+                // server refuses VITFIRST otherwise); while that is unknown it stays hidden.
+                if (!filtering && orderProvider.isFirstTimeCustomer) const KReveal(index: 2, child: _PromoCard()) else const SizedBox(height: 16),
+                // Chips come from the live menus; with nothing to choose between there is no row.
+                if (chips.length > 1)
+                  KReveal(
+                    index: 3,
+                    child: SizedBox(
+                      height: 52,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: KSpace.gutter, vertical: 4),
+                        itemCount: chips.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 8),
+                        itemBuilder: (context, index) {
+                          final label = chips[index];
+                          return KChoiceChip(
+                            label: label,
+                            icon: _categoryIcon(label),
+                            selected: dhabaProvider.selectedCategoryIndex == index,
+                            onTap: () => dhabaProvider.setSelectedCategoryIndex(index),
+                          );
+                        },
+                      ),
                     ),
                   ),
-                ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(KSpace.gutter, 22, KSpace.gutter, 14),
                   child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
@@ -233,14 +261,44 @@ class _HomeScreenState extends State<HomeScreen> {
                         style: KraveoType.headlineSm.copyWith(color: k.ink),
                       ),
                     ),
-                    if (!_loadingCatalog)
+                    if (!catalogLoading && !catalogFailed)
                       Text(dhabas.length == 1 ? '1 place' : '${dhabas.length} places', style: KraveoType.label.copyWith(color: k.inkMuted, fontSize: 13)),
                   ]),
                 ),
               ]),
             ),
-            if (_loadingCatalog)
+            if (catalogLoading)
               const SliverPadding(padding: EdgeInsets.symmetric(horizontal: KSpace.gutter), sliver: _SkeletonList())
+            else if (catalogFailed && noKitchens)
+              SliverToBoxAdapter(
+                child: KEmptyState(
+                  icon: LucideIcons.wifiOff,
+                  title: 'Can\'t load kitchens',
+                  message: 'Check your connection, then try again. Pull down to refresh also works.',
+                  action: KButton(
+                    label: 'Try again',
+                    kind: KButtonKind.tonal,
+                    expand: false,
+                    icon: LucideIcons.rotateCcw,
+                    onPressed: () => unawaited(dhabaProvider.loadCatalog()),
+                  ),
+                ),
+              )
+            else if (noKitchens)
+              SliverToBoxAdapter(
+                child: KEmptyState(
+                  icon: LucideIcons.store,
+                  title: 'No kitchens are open right now',
+                  message: 'Kitchens near campus will show up here as soon as they open. Pull down to check again.',
+                  action: KButton(
+                    label: 'Refresh',
+                    kind: KButtonKind.tonal,
+                    expand: false,
+                    icon: LucideIcons.rotateCcw,
+                    onPressed: _refreshHome,
+                  ),
+                ),
+              )
             else if (dhabas.isEmpty)
               SliverToBoxAdapter(
                 child: KEmptyState(
@@ -296,6 +354,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             SliverToBoxAdapter(child: SizedBox(height: navInset + (showActiveBar ? 96 : 24))),
           ],
+          ),
         ),
         Positioned(
           left: 0,

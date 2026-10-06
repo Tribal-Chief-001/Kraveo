@@ -109,7 +109,15 @@ class SessionProvider with ChangeNotifier {
       return;
     }
     if (!result.success || result.user == null) {
-      // 401 or an unusable answer: the saved token is no good.
+      // Only an answer that says "this token / account is no good" ends the session. Anything else
+      // (429, 5xx, an HTML error page from a proxy, an unparseable body) means Kraveo is having
+      // trouble, not that the student is signed out: keep the token and offer a retry.
+      final code = result.statusCode;
+      if (code != 401 && code != 403 && code != 404) {
+        _status = SessionStatus.unreachable;
+        notifyListeners();
+        return;
+      }
       await CustomerApiService.clearToken();
       return _endSession();
     }

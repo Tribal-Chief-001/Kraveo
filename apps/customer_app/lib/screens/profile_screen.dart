@@ -16,6 +16,8 @@ import '../widgets/ui/profile_sheets.dart';
 import '../widgets/ui/sheet_chrome.dart';
 import '../widgets/ui/snack.dart';
 import '../widgets/ui/status_map.dart';
+import '../widgets/ui/support_contact.dart';
+import '../services/external_links.dart';
 
 /// "Me" tab: avatar, name, e-mail, mobile, student status, drop-off point, coins, order summary
 /// and the account actions (log out, delete account).
@@ -146,6 +148,19 @@ class ProfileScreen extends StatelessWidget {
                 ),
                 const _SectionLabel('ORDERS'),
                 KReveal(index: 3, child: _OrdersCard(orders: orders, onOpen: onOpenOrders, onTrack: onTrackOrder)),
+                const _SectionLabel('HELP'),
+                KReveal(
+                  index: 4,
+                  child: KCard(
+                    padding: EdgeInsets.zero,
+                    child: _SettingsRow(
+                      icon: LucideIcons.mail,
+                      title: 'Contact Kraveo support',
+                      subtitle: kSupportEmail,
+                      onTap: () => emailSupport(context, subject: 'Kraveo customer app help'),
+                    ),
+                  ),
+                ),
                 const _SectionLabel('ACCOUNT'),
                 KReveal(
                   index: 4,
@@ -255,7 +270,7 @@ class _IdentityCard extends StatelessWidget {
             const SizedBox(height: 18),
             Semantics(
               container: true,
-              label: '$coins Kraveo Coins. 50 coins equals ${rupee(20)} off',
+              label: '$coins Kraveo Coins. Redeeming coins is coming soon',
               child: ExcludeSemantics(
                 child: Container(
                   padding: const EdgeInsets.fromLTRB(14, 12, 16, 12),
@@ -272,7 +287,7 @@ class _IdentityCard extends StatelessWidget {
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         Text('Kraveo Coins', style: KraveoType.titleMd.copyWith(color: k.onBrand)),
                         const SizedBox(height: 2),
-                        Text('50 coins = ${rupee(20)} off', style: KraveoType.bodySm.copyWith(color: k.onBrand.withValues(alpha: 0.8))),
+                        Text('Redeeming soon', style: KraveoType.bodySm.copyWith(color: k.onBrand.withValues(alpha: 0.8))),
                       ]),
                     ),
                     const SizedBox(width: 8),

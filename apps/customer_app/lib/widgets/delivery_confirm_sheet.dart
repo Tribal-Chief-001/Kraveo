@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import '../models/drop_point.dart';
@@ -27,6 +29,28 @@ class _ConfirmDeliveryBody extends StatefulWidget {
 class _ConfirmDeliveryBodyState extends State<_ConfirmDeliveryBody> {
   late String _selected = widget.current;
 
+  /// How long the primary button stays disabled after the sheet opens. A double tap on "Pay"
+  /// would otherwise land on this button (it slides up under the finger) and confirm a delivery
+  /// point the student never read.
+  static const Duration armDelay = Duration(milliseconds: 400);
+
+  bool _armed = false;
+  Timer? _armTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _armTimer = Timer(armDelay, () {
+      if (mounted) setState(() => _armed = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _armTimer?.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.k;
@@ -34,7 +58,7 @@ class _ConfirmDeliveryBodyState extends State<_ConfirmDeliveryBody> {
       title: 'Confirm your delivery point',
       subtitle: Text('Your runner meets you at this gate.', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
       footer: Column(mainAxisSize: MainAxisSize.min, children: [
-        KButton(label: 'Confirm and pay', onPressed: () => Navigator.of(context).pop(_selected)),
+        KButton(label: 'Confirm and pay', onPressed: _armed ? () => Navigator.of(context).pop(_selected) : null),
         const SizedBox(height: 4),
         KPressable(
           semanticLabel: 'Cancel. Do not place the order',

@@ -12,6 +12,7 @@ import 'ui/bill_breakdown.dart';
 import 'ui/coins_toggle.dart';
 import 'ui/format.dart';
 import 'ui/sheet_chrome.dart';
+import 'ui/snack.dart';
 import 'ui/veg_mark.dart';
 
 class CartSheet extends StatelessWidget {
@@ -111,6 +112,11 @@ class _CartLine extends StatelessWidget {
             ],
             const SizedBox(height: 4),
             Text(rupee(cartItem.totalPrice), style: KraveoType.numericSm.copyWith(color: k.ink, fontSize: 19)),
+            // Visible inside the sheet (a snackbar would sit behind it).
+            if (!cart.canAddMore(cartItem.item.id)) ...[
+              const SizedBox(height: 4),
+              Text('Maximum ${CartProvider.maxQuantityPerDish} of one dish', style: KraveoType.caption.copyWith(color: k.inkMuted)),
+            ],
           ]),
         ),
         const SizedBox(width: 12),
@@ -119,7 +125,9 @@ class _CartLine extends StatelessWidget {
           child: KAddButton(
             quantity: cartItem.quantity,
             itemName: cartItem.item.name,
-            onAdd: () => cart.incrementItem(cartItem.cartItemId),
+            onAdd: () {
+              if (!cart.incrementItem(cartItem.cartItemId)) showKSnack(context, CartProvider.maxQuantityMessage, icon: LucideIcons.info);
+            },
             onRemove: () => cart.decrementItem(cartItem.cartItemId),
           ),
         ),

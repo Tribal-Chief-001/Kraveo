@@ -6,6 +6,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../models/geo.dart';
+import '../../models/drop_point.dart';
 import '../../models/order.dart';
 import '../animated_rider_map.dart';
 import '../ui/status_map.dart';
@@ -18,6 +19,10 @@ const Duration kMapReadyTimeout = Duration(seconds: 6);
 
 /// A rider fix older than this is not used for "about N min".
 const Duration kStaleFix = Duration(minutes: 2);
+
+/// How often an old rider fix is noticed even when no new fix arrives (the staleness rule would
+/// otherwise only run when something else rebuilds the map).
+const Duration kStaleCheckInterval = Duration(seconds: 15);
 
 const double kTrackingMapHeight = 220;
 
@@ -37,6 +42,7 @@ class TrackingMap extends StatefulWidget {
     this.factory,
     this.readyTimeout = kMapReadyTimeout,
     this.clock = DateTime.now,
+    this.staleCheckInterval = kStaleCheckInterval,
   });
 
   final OrderModel order;
@@ -49,6 +55,9 @@ class TrackingMap extends StatefulWidget {
   final Duration readyTimeout;
   final DateTime Function() clock;
 
+  /// How often the age of the last rider fix is re-checked while nothing new arrives.
+  final Duration staleCheckInterval;
+
   @override
   State<TrackingMap> createState() => _TrackingMapState();
 }
@@ -60,6 +69,13 @@ class _TrackingMapState extends State<TrackingMap> with SingleTickerProviderStat
   _Mode _mode = _Mode.checking;
   Timer? _timeout;
   MapViewSpec? _spec;
+
+  /// Bumped by the age check; only the small widgets that read the fix's age listen to it.
+  final ValueNotifier<int> _tick = ValueNotifier<int>(0);
+
+  /// The rider has not reported for [kStaleFix]: the marker is shown as "last known".
+  final ValueNotifier<bool> _stale = ValueNotifier<bool>(false);
+  Timer? _staleTimer;
   GeoPoint? _specDropoff;
   GeoPoint? _specRestaurant;
 
@@ -138,6 +154,25 @@ class _TrackingMapState extends State<TrackingMap> with SingleTickerProviderStat
     } else if (fix == null || !_riderPhase) {
       _animator.clear();
     }
+    _recheckAge();
+  }
+
+  bool _isStale(RiderLocation? loc) => loc != null && widget.clock().difference(loc.receivedAt) > kStaleFix;
+
+  /// Re-evaluates how old the last fix is (on a new fix, a status change and every
+  /// [TrackingMap.staleCheckInterval]) and repaints only the ETA line, the strip's GPS chip and
+  /// the marker style. The timer only runs while a rider position is on screen.
+  void _recheckAge() {
+    final loc = widget.rider.value;
+    _stale.value = _riderPhase && _isStale(loc);
+    _tick.value++;
+    final needed = _riderPhase && loc != null;
+    if (needed && _staleTimer == null) {
+      _staleTimer = Timer.periodic(widget.staleCheckInterval, (_) => _recheckAge());
+    } else if (!needed) {
+      _staleTimer?.cancel();
+      _staleTimer = null;
+    }
   }
 
   @override
@@ -154,8 +189,11 @@ class _TrackingMapState extends State<TrackingMap> with SingleTickerProviderStat
   @override
   void dispose() {
     _timeout?.cancel();
+    _staleTimer?.cancel();
     widget.rider.removeListener(_onFix);
     _animator.dispose();
+    _tick.dispose();
+    _stale.dispose();
     super.dispose();
   }
 
@@ -172,18 +210,21 @@ class _TrackingMapState extends State<TrackingMap> with SingleTickerProviderStat
       restaurant: restaurant,
       restaurantName: widget.order.vendorName,
       rider: _animator.position,
+      riderStale: _stale,
       onReady: _ready,
       onError: _fail,
     );
   }
 
-  Widget _stylised() => ValueListenableBuilder<RiderLocation?>(
-        valueListenable: widget.rider,
-        builder: (context, loc, _) => AnimatedRiderMap(
+  Widget _stylised() => ListenableBuilder(
+        listenable: Listenable.merge([widget.rider, _tick]),
+        builder: (context, _) => AnimatedRiderMap(
           status: widget.order.status,
-          hostel: widget.order.dropoffHostel.isEmpty ? 'Campus gate' : widget.order.dropoffHostel,
+          hostel: widget.order.dropoffHostel.isEmpty ? 'Campus gate' : displayDropPoint(widget.order.dropoffHostel),
           dhabaName: widget.order.vendorName,
-          liveLocation: loc,
+          // The GPS chip only makes sense while the rider carries the food to the student.
+          liveLocation: _riderPhase ? widget.rider.value : null,
+          clock: widget.clock,
         ),
       );
 
@@ -243,12 +284,16 @@ class _TrackingMapState extends State<TrackingMap> with SingleTickerProviderStat
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       area,
-      ValueListenableBuilder<RiderLocation?>(
-        valueListenable: widget.rider,
-        builder: (context, loc, _) {
+      ListenableBuilder(
+        listenable: Listenable.merge([widget.rider, _tick]),
+        builder: (context, _) {
+          final loc = widget.rider.value;
           final minutes = _etaMinutes(loc);
-          if (minutes == null) return const SizedBox.shrink();
-          return Padding(padding: const EdgeInsets.only(top: 10), child: EtaLine(minutes: minutes));
+          if (minutes != null) return Padding(padding: const EdgeInsets.only(top: 10), child: EtaLine(minutes: minutes));
+          if (loc != null && widget.order.status == OrderProgressStatus.pickedUp && _isStale(loc)) {
+            return const Padding(padding: EdgeInsets.only(top: 10), child: StaleRiderLine());
+          }
+          return const SizedBox.shrink();
         },
       ),
     ]);
@@ -260,6 +305,33 @@ class _TrackingMapState extends State<TrackingMap> with SingleTickerProviderStat
     if (loc == null || widget.order.status != OrderProgressStatus.pickedUp) return null;
     if (widget.clock().difference(loc.receivedAt) > kStaleFix) return null;
     return approxMinutes(GeoPoint(loc.lat, loc.lng), _dropoff);
+  }
+}
+
+/// Shown instead of the ETA when the rider's phone has not reported for a while.
+class StaleRiderLine extends StatelessWidget {
+  const StaleRiderLine({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(color: k.surfaceAlt, borderRadius: BorderRadius.circular(KRadius.lg)),
+        child: Row(children: [
+          Icon(LucideIcons.clock, size: 18, color: k.inkMuted),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Rider\'s location isn\'t updating', style: KraveoType.titleMd.copyWith(color: k.ink)),
+              Text('The map shows where they were last seen. Your order is still on its way.', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+            ]),
+          ),
+        ]),
+      ),
+    );
   }
 }
 

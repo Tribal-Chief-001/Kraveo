@@ -4,16 +4,14 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 import '../models/order.dart';
 import '../providers/cart_provider.dart';
-import '../providers/dhaba_provider.dart';
 import '../providers/order_provider.dart';
-import '../widgets/cart_sheet.dart';
+import '../models/drop_point.dart';
+import '../widgets/reorder.dart';
 import '../widgets/review_modal.dart';
 import '../widgets/ui/format.dart';
 import '../widgets/ui/scroll_empty.dart';
-import '../widgets/ui/snack.dart';
 import '../services/order_api.dart';
 import '../widgets/ui/status_map.dart';
-import 'dhaba_menu_screen.dart';
 import 'live_tracking_screen.dart';
 
 class OrderHistoryScreen extends StatelessWidget {
@@ -52,7 +50,6 @@ class OrderHistoryScreen extends StatelessWidget {
     final k = context.k;
     final orderProvider = Provider.of<OrderProvider>(context);
     final cart = Provider.of<CartProvider>(context, listen: false);
-    final dhabaProvider = Provider.of<DhabaProvider>(context, listen: false);
     final live = orderProvider.liveOrders;
     final liveIds = live.map((o) => o.id).toSet();
     final history = orderProvider.history.where((o) => !liveIds.contains(o.id)).toList();
@@ -120,7 +117,7 @@ class OrderHistoryScreen extends StatelessWidget {
                   whenLabel: _when(order.createdAt.toLocal()),
                   reviewed: orderProvider.hasReviewed(order.id),
                   onTrack: () => Navigator.push(context, MaterialPageRoute(builder: (_) => LiveTrackingScreen(orderId: order.id))),
-                  onReorder: () => _reorder(context, order, cart, dhabaProvider),
+                  onReorder: () => reorderOrder(context, order, selectedHostel: selectedHostel),
                   onRate: () => ReviewModal.show(context, order: order, onReviewed: (r) {
                     if (r.totalCoins != null) cart.setKraveoCoins(r.totalCoins!);
                   }),
@@ -142,39 +139,6 @@ class OrderHistoryScreen extends StatelessWidget {
       ),
       body: body,
     );
-  }
-
-  /// Rebuilds the cart from the dishes of a past order that are still on the kitchen's live
-  /// menu (by menu item id). Dishes that are gone or sold out are skipped and the student is told.
-  void _reorder(BuildContext context, OrderModel order, CartProvider cart, DhabaProvider dhabaProvider) {
-    final kitchens = dhabaProvider.dhabas.where((d) => d.id == order.vendorId).toList();
-    final menu = {for (final m in dhabaProvider.getMenuItemsForDhaba(order.vendorId)) m.id: m};
-    final hostel = selectedHostel ?? order.dropoffHostel;
-    if (kitchens.isEmpty || !dhabaProvider.isLiveVendor(order.vendorId)) {
-      showKSnack(context, '${order.vendorName} isn\'t taking orders in the app right now.', error: true);
-      return;
-    }
-    var added = 0;
-    var skipped = 0;
-    cart.clearCart();
-    for (final line in order.items) {
-      final item = menu[line.menuItemId];
-      if (item == null || !item.isAvailable) {
-        skipped++;
-        continue;
-      }
-      for (var i = 0; i < line.quantity; i++) {
-        cart.addItem(item: item, dhabaId: order.vendorId, dhabaName: kitchens.first.name);
-      }
-      added++;
-    }
-    if (added > 0) {
-      if (skipped > 0) showKSnack(context, '$skipped ${skipped == 1 ? 'dish is' : 'dishes are'} no longer available and ${skipped == 1 ? 'was' : 'were'} left out.', icon: LucideIcons.info);
-      CartSheet.show(context, selectedHostel: hostel);
-      return;
-    }
-    showKSnack(context, 'These dishes aren\'t available now. Pick something from ${order.vendorName}.', icon: LucideIcons.utensils);
-    Navigator.push(context, MaterialPageRoute(builder: (_) => DhabaMenuScreen(dhaba: kitchens.first, selectedHostel: hostel)));
   }
 }
 
@@ -261,7 +225,7 @@ class _OrderCard extends StatelessWidget {
             KStatusPill(status: status.kStatus, label: pillLabel, compact: true),
           ]),
           const SizedBox(height: 4),
-          Text('$whenLabel · ${order.dropoffHostel}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+          Text('$whenLabel · ${displayDropPoint(order.dropoffHostel)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
           const SizedBox(height: 12),
           Text(_summary, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 14)),
           const SizedBox(height: 14),
@@ -291,9 +255,9 @@ class _OrderCard extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 10),
               child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Icon(LucideIcons.coins, size: 14, color: k.brand),
+                Icon(LucideIcons.star, size: 14, color: k.brand),
                 const SizedBox(width: 6),
-                Flexible(child: Text('Rate this order to earn Kraveo Coins', textAlign: TextAlign.center, style: KraveoType.caption.copyWith(color: k.inkMuted))),
+                Flexible(child: Text('Tell us how this order went', textAlign: TextAlign.center, style: KraveoType.caption.copyWith(color: k.inkMuted))),
               ]),
             ),
         ]),

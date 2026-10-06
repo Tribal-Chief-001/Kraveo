@@ -51,7 +51,8 @@ class KAddButton extends StatelessWidget {
           ])
         : KPressable(
             key: const ValueKey('add'),
-            onTap: enabled ? onAdd : null,
+            // Always tappable: a closed kitchen explains itself in a snackbar (the dimmed look only hints at it).
+            onTap: onAdd,
             semanticLabel: 'Add $itemName',
             child: SizedBox(
               height: _height,

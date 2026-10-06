@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -45,7 +47,7 @@ class CheckoutScreen extends StatefulWidget {
 class _CheckoutScreenState extends State<CheckoutScreen> {
   String? _currentHostel;
   final TextEditingController _deliveryNoteController = TextEditingController();
-  String _selectedPaymentMethod = 'UPI via Razorpay';
+  String _selectedPaymentMethod = 'Pay online via Razorpay';
 
   /// A request (place, pay or cancel) is running: buttons show progress, back is blocked.
   bool _busy = false;
@@ -60,11 +62,19 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   String? _notice;
   bool _paymentAttempted = false;
 
+  /// A tap on the primary button is being handled (delivery-point sheet, order, payment). Further
+  /// taps are ignored until it finishes: a double tap on "Pay" must not stack a second sheet or
+  /// confirm the delivery point by accident.
+  bool _handlingTap = false;
+
+  /// The drop-off picker is open.
+  bool _pickerOpen = false;
+
   final List<Map<String, dynamic>> _paymentOptions = [
     {
-      'name': 'UPI via Razorpay',
+      'name': 'Pay online via Razorpay',
       'icon': LucideIcons.smartphone,
-      'sub': 'Google Pay, PhonePe, Paytm and more',
+      'sub': 'UPI, cards and more',
     },
   ];
 
@@ -101,7 +111,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   Future<void> _onPrimary(CartProvider cart, OrderProvider orders) async {
-    if (_busy) return;
+    if (_busy || _handlingTap) return;
+    _handlingTap = true; // set before the first await: the second tap of a double tap sees it
+    try {
+      await _handlePrimary(cart, orders);
+    } finally {
+      _handlingTap = false;
+    }
+  }
+
+  Future<void> _handlePrimary(CartProvider cart, OrderProvider orders) async {
     final existing = _orderId == null ? null : orders.orderById(_orderId!);
     if (existing != null && existing.isTerminal) {
       // Expired / cancelled: start over with a fresh order (new idempotency key).
@@ -168,6 +187,19 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       var message = orderErrorMessage(error, action: 'place your order');
       if (error.isNetwork) message += ' Trying again is safe: you won\'t get a duplicate order.';
       _setBusy(false);
+      switch (error.code) {
+        case 'COUPON_NOT_APPLICABLE':
+          // The server will not take this coupon for this student: drop it, keep checkout open and
+          // say why and what the total is now (the next tap places the order without it).
+          cart.removeCoupon();
+          final reason = error.message ?? 'It can\'t be used on this order.';
+          message = 'Coupon removed. $reason Your total is now ${rupee(cart.grandTotal)}.';
+        case 'INVALID_ITEMS':
+        case 'VENDOR_CLOSED':
+        case 'VENDOR_UNAVAILABLE':
+          // The menu or the kitchen's open state changed since this phone last looked.
+          unawaited(context.read<DhabaProvider>().loadCatalog());
+      }
       _showError(message);
       return null;
     }
@@ -230,7 +262,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final ok = await showKConfirm(
       context,
       title: 'Cancel this order?',
-      message: 'Nothing has been paid for this order. Your cart stays as it is, so you can change it and order again.',
+      message: _paymentAttempted
+          ? 'If your bank already took money for this order, Kraveo refunds it automatically. Your cart stays as it is, so you can change it and order again.'
+          : 'You have not completed a payment for this order, so nothing is charged. Your cart stays as it is, so you can change it and order again.',
       confirmLabel: 'Cancel order',
       cancelLabel: 'Keep it',
       danger: true,
@@ -303,6 +337,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final orders = Provider.of<OrderProvider>(context);
     final order = _orderId == null ? null : orders.orderById(_orderId!);
     final busy = _busy || (order != null && orders.isPaying(order.id));
+    // With the keyboard up on a small phone the footer (notice + button + caption) would leave
+    // almost no room for the form: it shrinks to the button, and the notice moves into the list.
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
 
     final Widget body;
     final Widget? footer;
@@ -321,8 +358,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       footer = null;
     } else {
       body = ListView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.fromLTRB(KSpace.gutter, 8, KSpace.gutter, 24),
         children: [
+          if (keyboardOpen && _notice != null) _NoticeLine(message: _notice!, error: true),
           KReveal(child: _SectionCard(title: 'Drop-off', icon: LucideIcons.mapPin, child: _buildDropoff(context, k))),
           const SizedBox(height: 14),
           KReveal(index: 1, child: _SectionCard(title: cart.dhabaName ?? 'Your order', icon: LucideIcons.receiptText, child: _buildSummary(context, k, cart))),
@@ -337,7 +376,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       footer = KSheetFooter(
         floating: true,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (_notice != null) _NoticeLine(message: _notice!, error: true),
+          if (_notice != null && !keyboardOpen) _NoticeLine(message: _notice!, error: true),
           KButton(
             label: _currentHostel == null ? 'Choose drop-off' : 'Pay ${rupee(cart.grandTotal)}',
             icon: _currentHostel == null ? LucideIcons.mapPin : LucideIcons.lock,
@@ -345,14 +384,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             loading: busy,
             onPressed: busy ? null : () => _onPrimary(cart, orders),
           ),
-          const SizedBox(height: 8),
-          Text(
-            busy
-                ? 'Placing your order. Please do not close the app.'
-                : (_currentHostel == null ? 'Tell us where to deliver first. Payment opens right after.' : 'Next: Kraveo confirms the price, then you pay by UPI.'),
-            textAlign: TextAlign.center,
-            style: KraveoType.caption.copyWith(color: k.inkFaint, fontSize: 12),
-          ),
+          if (!keyboardOpen) ...[
+            const SizedBox(height: 8),
+            Text(
+              busy
+                  ? 'Placing your order. Please do not close the app.'
+                  : (_currentHostel == null ? 'Tell us where to deliver first. Payment opens right after.' : 'Next: Kraveo confirms the price, then you pay online.'),
+              textAlign: TextAlign.center,
+              style: KraveoType.caption.copyWith(color: k.inkFaint, fontSize: 12),
+            ),
+          ],
         ]),
       );
     }
@@ -378,7 +419,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           title: const Text('Checkout'),
         ),
         body: body,
-        bottomNavigationBar: footer,
+        // A Scaffold keeps its bottom bar at the very bottom of the screen, i.e. UNDER the keyboard:
+        // lift it by the keyboard height so "Pay" stays reachable while the note is being typed.
+        bottomNavigationBar: footer == null ? null : Padding(padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom), child: footer),
       ),
     );
   }
@@ -416,7 +459,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           title: 'Drop-off',
           icon: LucideIcons.mapPin,
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(order.dropoffHostel.isEmpty ? 'Campus gate' : order.dropoffHostel, style: KraveoType.titleLg.copyWith(color: k.ink)),
+            Text(order.dropoffHostel.isEmpty ? 'Campus gate' : displayDropPoint(order.dropoffHostel), style: KraveoType.titleLg.copyWith(color: k.ink)),
             if (order.dropoffNotes.isNotEmpty) ...[
               const SizedBox(height: 4),
               Text(order.dropoffNotes, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
@@ -481,8 +524,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   /// Opens the picker. Students keep their saved default; everyone else's choice is remembered
   /// for this session so the next checkout is pre-filled.
   Future<void> _chooseDropoff() async {
-    final picked = await showHostelPicker(context, blocks: kHostelBlocks, selected: _currentHostel ?? '');
-    if (picked != null) _setDropoff(picked);
+    if (_pickerOpen) return;
+    _pickerOpen = true;
+    try {
+      final picked = await showHostelPicker(context, blocks: kHostelBlocks, selected: _currentHostel ?? '');
+      if (picked != null) _setDropoff(picked);
+    } finally {
+      _pickerOpen = false;
+    }
   }
 
   void _setDropoff(String block) {

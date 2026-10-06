@@ -12,6 +12,13 @@ import 'ui/sheet_chrome.dart';
 import 'ui/star_glyph.dart';
 import 'ui/snack.dart';
 
+/// The server accepts at most this many characters per review note (`MAX_REVIEW_TEXT`).
+const int kReviewNoteMaxLength = 300;
+
+/// The note typed for the kitchen may use at most this much: the chosen tags are sent in front of
+/// it in the same 300-character field (all 4 tags are about 62 characters).
+const int kReviewKitchenNoteMaxLength = 200;
+
 /// Rating sheet for a real, delivered order. Coins are credited only when the server accepts
 /// the review (`POST /reviews`); nothing is awarded locally.
 class ReviewModal extends StatefulWidget {
@@ -96,7 +103,7 @@ class _ReviewModalState extends State<ReviewModal> {
       driverTags: widget.order.rider == null ? const [] : _selectedDriverTags.toList(),
       driverNotes: _driverNotesController.text.trim(),
       dishRatings: Map.of(_dishRatings),
-      dhabaNotes: [..._selectedDishTags, if (_dhabaNotesController.text.trim().isNotEmpty) _dhabaNotesController.text.trim()].join('. '),
+      dhabaNotes: _kitchenNotes(),
     ));
     if (!mounted) return;
     final receipt = result.value;
@@ -126,15 +133,21 @@ class _ReviewModalState extends State<ReviewModal> {
     });
   }
 
+  /// Tags and note as one text for the server, never longer than [kReviewNoteMaxLength].
+  String _kitchenNotes() {
+    final text = [..._selectedDishTags, if (_dhabaNotesController.text.trim().isNotEmpty) _dhabaNotesController.text.trim()].join('. ');
+    return text.length <= kReviewNoteMaxLength ? text : text.substring(0, kReviewNoteMaxLength);
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.k;
     return KSheetFrame(
       title: 'Rate ${widget.order.vendorName}',
       subtitle: Row(children: [
-        Icon(LucideIcons.coins, size: 15, color: k.brand),
+        Icon(LucideIcons.star, size: 15, color: k.brand),
         const SizedBox(width: 6),
-        Flexible(child: Text('Earn Kraveo Coins for your feedback', style: KraveoType.bodySm.copyWith(color: k.brand, fontWeight: FontWeight.w700))),
+        Flexible(child: Text('Your feedback helps other students', style: KraveoType.bodySm.copyWith(color: k.brand, fontWeight: FontWeight.w700))),
       ]),
       children: [
         if (widget.order.rider != null) ...[
@@ -146,6 +159,7 @@ class _ReviewModalState extends State<ReviewModal> {
           const SizedBox(height: 12),
           TextField(
             controller: _driverNotesController,
+            maxLength: kReviewNoteMaxLength,
             decoration: const InputDecoration(hintText: 'Private note for Kraveo (optional)'),
           ),
           const SizedBox(height: 22),
@@ -168,6 +182,7 @@ class _ReviewModalState extends State<ReviewModal> {
         const SizedBox(height: 12),
         TextField(
           controller: _dhabaNotesController,
+          maxLength: kReviewKitchenNoteMaxLength,
           decoration: const InputDecoration(hintText: 'A note for the kitchen (optional)'),
         ),
         KErrorLine(message: _error),
