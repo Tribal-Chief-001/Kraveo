@@ -9,6 +9,9 @@ import { DriverManager } from './components/DriverManager';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { ApplicationsPanel } from './components/ApplicationsPanel';
 import { CustomersPanel } from './components/CustomersPanel';
+import { CatalogPanel } from './components/CatalogPanel';
+import { SettingsPanel } from './components/SettingsPanel';
+import type { PendingCounts, VendorCommission } from './lib/catalogParse';
 import { AdminProfile, AttentionEntry, DriverPartner, DriverPin, Order, OrderStatus, TabType, Vendor, normalizeDriverPin, normalizeOrderPartial } from './types';
 import { ApiError, apiService, clearAuthToken, getAuthToken, isAuthenticated as hasSession, SOCKET_URL } from './services/api';
 import { LoginScreen } from './components/LoginScreen';
@@ -58,6 +61,7 @@ export const App: React.FC = () => {
   const [driverPartners, setDriverPartners] = useState<DriverPartner[]>([]);
   const [drivers, setDrivers] = useState<DriverPin[]>([]);
   const [pendingApplications, setPendingApplications] = useState(0);
+  const [pendingDishes, setPendingDishes] = useState<PendingCounts>({ pending: 0, changePending: 0, total: 0 });
   const [applicationsKey, setApplicationsKey] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   // The stored session could not be checked because the server was unreachable (the token is kept and the check retried).
@@ -110,6 +114,16 @@ export const App: React.FC = () => {
     } catch { /* the badge is a nicety; the Applications tab shows real errors */ }
   }, []);
 
+  // Dishes waiting for approval (sidebar badge). Quiet on failure: the Catalog tab shows real errors.
+  const refreshPendingDishes = useCallback(async () => {
+    if (!getAuthToken()) return;
+    try {
+      const counts = await apiService.fetchCatalogPendingCounts();
+      // Same numbers = same object, so the Catalog tab does not re-render on every poll.
+      setPendingDishes((current) => (current.pending === counts.pending && current.changePending === counts.changePending && current.total === counts.total ? current : counts));
+    } catch { /* the badge is a nicety */ }
+  }, []);
+
   const loadAttention = useCallback(async () => {
     if (!getAuthToken()) return;
     setAttention((current) => ({ ...current, loading: true }));
@@ -148,8 +162,9 @@ export const App: React.FC = () => {
       .catch(() => { /* the next poll catches up */ });
     // Rider positions too: after a missed socket event the next poll puts every marker right again (no change = no re-render).
     apiService.fetchDriverLocations().then((fresh) => setDrivers((current) => replaceRiderPins(current, fresh))).catch(() => { /* the live socket or the next poll catches up */ });
+    refreshPendingDishes();
     loadAttention();
-  }, [handleSessionError, loadAttention]);
+  }, [handleSessionError, loadAttention, refreshPendingDishes]);
 
   const fetchBackendData = useCallback(async () => {
     if (!getAuthToken()) return;
@@ -173,8 +188,9 @@ export const App: React.FC = () => {
     if (firstError) handleAuthFailure(firstError.reason);
     setIsLoading(false);
     refreshPendingCount();
+    refreshPendingDishes();
     loadAttention();
-  }, [handleAuthFailure, refreshPendingCount, loadAttention]);
+  }, [handleAuthFailure, refreshPendingCount, refreshPendingDishes, loadAttention]);
 
   // Check the stored session. Only a rejected token (401/403) ends it; if the server or network is down the token is
   // kept and the check retries with a growing delay, so a blip never throws away a valid 30-day session.
@@ -512,6 +528,10 @@ export const App: React.FC = () => {
     setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, lat: saved.lat, lng: saved.lng, hasLocation: saved.hasLocation, locationSource: saved.locationSource, locationSetAt: saved.locationSetAt, locationAccuracyM: saved.locationAccuracyM } : vendor));
   }, []);
 
+  const handleVendorCommissionSaved = useCallback((vendorId: string, commission: VendorCommission) => {
+    setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, commissionType: commission.type, commissionValue: commission.value } : vendor));
+  }, []);
+
   const handleLogout = () => {
     clearAuthToken();
     setIsAuth(false);
@@ -521,6 +541,7 @@ export const App: React.FC = () => {
     setDriverPartners([]);
     setDrivers([]);
     setPendingApplications(0);
+    setPendingDishes({ pending: 0, changePending: 0, total: 0 });
     olderLoadedRef.current = false;
     setHasMoreOrders(false);
     setAttention({ available: null, entries: [], loading: false, error: '', checkedAt: null });
@@ -533,6 +554,7 @@ export const App: React.FC = () => {
     setActiveTab(tab);
     setSearchQuery('');
   }, []);
+  const clearQuery = useCallback(() => setSearchQuery(''), []);
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
 
   // Server list when available; otherwise what the dashboard can detect itself (clearly labelled in the panel).
@@ -564,7 +586,6 @@ export const App: React.FC = () => {
   }
 
   const activeOrderCount = orders.filter((order) => order.status !== 'DELIVERED' && order.status !== 'CANCELLED').length;
-  const clearQuery = () => setSearchQuery('');
 
   return (
     <div className="min-h-screen bg-kraveo-night text-kraveo-ink lg:flex">
@@ -575,7 +596,7 @@ export const App: React.FC = () => {
         isLiveConnected={isLiveConnected}
         mobileOpen={mobileNavOpen}
         onCloseMobile={closeMobileNav}
-        badges={{ orders: activeOrderCount, attention: attentionEntries.length + locationGaps.length, applications: pendingApplications }}
+        badges={{ orders: activeOrderCount, attention: attentionEntries.length + locationGaps.length, applications: pendingApplications, catalog: pendingDishes.total }}
         alertBadges={{ attention: true }}
       />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -621,9 +642,11 @@ export const App: React.FC = () => {
               />
             )}
             {activeTab === 'applications' && <ApplicationsPanel refreshKey={applicationsKey} query={searchQuery} onChanged={fetchBackendData} onAuthError={handleSessionError} onLocationSaved={handleVendorLocationSaved} />}
-            {activeTab === 'vendors' && <VendorManager vendors={vendors} orders={orders} busyVendorIds={busyVendorIds} onToggleVendor={handleToggleVendor} onLocationSaved={handleVendorLocationSaved} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'vendors' && <VendorManager vendors={vendors} orders={orders} busyVendorIds={busyVendorIds} onToggleVendor={handleToggleVendor} onLocationSaved={handleVendorLocationSaved} onCommissionSaved={handleVendorCommissionSaved} onAuthError={handleSessionError} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'drivers' && <DriverManager drivers={driverPartners} orders={orders} now={now} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'customers' && <CustomersPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} />}
+            {activeTab === 'catalog' && <CatalogPanel vendors={vendors} query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} pendingCounts={pendingDishes} onPendingChanged={refreshPendingDishes} />}
+            {activeTab === 'settings' && <SettingsPanel onAuthError={handleSessionError} />}
             {activeTab === 'analytics' && <AnalyticsPanel />}
           </div>
         </main>

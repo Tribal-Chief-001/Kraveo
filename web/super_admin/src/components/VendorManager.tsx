@@ -4,6 +4,8 @@ import { Order, Vendor } from '../types';
 import { activeOrderCountByVendor } from '../lib/dashboardStats';
 import type { SavedPin } from '../lib/vendorLocation';
 import { VendorLocationEditor } from './VendorLocationEditor';
+import { CommissionEditor } from './CommissionEditor';
+import type { VendorCommission } from '../lib/catalogParse';
 import { AddPartnerDrawer } from './AddPartnerDrawer';
 import { ApprovalPill } from './ui/ApprovalPill';
 import { Avatar } from './ui/Avatar';
@@ -22,6 +24,10 @@ interface VendorManagerProps {
   onCreated?: () => void;
   /** Called after an admin saved a restaurant's map pin, so the list (and the live map) use it at once. */
   onLocationSaved?: (vendorId: string, saved: SavedPin) => void;
+  /** Called after an admin saved a restaurant's commission, so the list uses it at once. */
+  onCommissionSaved?: (vendorId: string, commission: VendorCommission) => void;
+  /** Session errors from the commission save (logs out on 401/403). */
+  onAuthError?: (error: unknown) => void;
   loading?: boolean;
   query?: string;
   onClearQuery?: () => void;
@@ -32,7 +38,7 @@ type VendorFilter = 'ALL' | 'OPEN' | 'CLOSED';
 const NO_ORDERS: Order[] = [];
 const NOT_BUSY: ReadonlySet<string> = new Set();
 
-export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, orders = NO_ORDERS, busyVendorIds = NOT_BUSY, onToggleVendor, onCreated, onLocationSaved, loading = false, query = '', onClearQuery }) => {
+export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, orders = NO_ORDERS, busyVendorIds = NOT_BUSY, onToggleVendor, onCreated, onLocationSaved, onCommissionSaved, onAuthError, loading = false, query = '', onClearQuery }) => {
   const [showDrawer, setShowDrawer] = useState(false);
   const [filter, setFilter] = useState<VendorFilter>('ALL');
 
@@ -114,6 +120,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, orders = 
             </div>
 
             <VendorLocationEditor id={v.id} name={v.name} pin={v} onSaved={onLocationSaved} />
+            {onCommissionSaved && <CommissionEditor id={v.id} name={v.name} commissionType={v.commissionType} commissionValue={v.commissionValue} onSaved={onCommissionSaved} onAuthError={onAuthError} />}
 
             <div className="mt-4 flex items-center justify-between gap-3 border-t border-kraveo-line pt-4">
               <div className="flex items-center gap-2">

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bike, ClipboardCheck, MapPinned, PanelLeftClose, PanelLeftOpen, ShoppingBag, Store, TrendingUp, TriangleAlert, Users, X } from 'lucide-react';
+import { Bike, ClipboardCheck, MapPinned, PanelLeftClose, PanelLeftOpen, ShoppingBag, SlidersHorizontal, Store, TrendingUp, TriangleAlert, Users, UtensilsCrossed, X } from 'lucide-react';
 import { TabType } from '../types';
 import { LogoBadge, LogoMark } from './ui/Logo';
 
@@ -21,9 +21,11 @@ const NAV_ITEMS: Array<{ id: TabType; label: string; hint: string; icon: React.E
   { id: 'attention', label: 'Needs attention', hint: 'Failed refunds, locked OTPs, stuck orders', icon: TriangleAlert },
   { id: 'applications', label: 'Applications', hint: 'Approve new restaurants and riders', icon: ClipboardCheck },
   { id: 'vendors', label: 'Vendors', hint: 'Dhabas and availability', icon: Store },
+  { id: 'catalog', label: 'Catalog', hint: 'Approve dishes, prices and commission', icon: UtensilsCrossed },
   { id: 'drivers', label: 'Drivers', hint: 'Runner partners and duty', icon: Bike },
   { id: 'customers', label: 'Customers', hint: 'Everyone who ordered', icon: Users },
   { id: 'analytics', label: 'Analytics', hint: 'Campus delivery numbers', icon: TrendingUp },
+  { id: 'settings', label: 'Settings', hint: 'Fees, commission and rounding', icon: SlidersHorizontal },
 ];
 
 const COLLAPSE_KEY = 'kraveo_admin_sidebar_collapsed';

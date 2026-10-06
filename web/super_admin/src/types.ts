@@ -1,6 +1,6 @@
 import { readPin } from './lib/vendorLocation';
 
-export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'drivers' | 'customers' | 'analytics';
+export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'drivers' | 'customers' | 'analytics' | 'catalog' | 'settings';
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED';
 export type PartnerKind = 'VENDOR' | 'DRIVER';
@@ -118,6 +118,12 @@ export interface Vendor {
   activeOrdersCount: number;
   menuItems?: MenuItem[];
   approvalStatus?: ApprovalStatus;
+  /**
+   * The restaurant's own commission (Docs/21). `undefined` = the server did not send the field (unknown),
+   * `null` = the restaurant inherits the global default.
+   */
+  commissionType?: 'PERCENT' | 'FLAT' | null;
+  commissionValue?: number | null;
 }
 
 export interface MenuItem {
@@ -387,6 +393,12 @@ export const normalizeVendor = (raw: any): Vendor => ({
   activeOrdersCount: asNumber(raw?.activeOrdersCount ?? raw?._count?.orders),
   menuItems: Array.isArray(raw?.menuItems) ? raw.menuItems : undefined,
   approvalStatus: raw?.approvalStatus,
+  ...(raw && typeof raw === 'object' && 'commissionType' in raw
+    ? {
+      commissionType: raw.commissionType === 'PERCENT' || raw.commissionType === 'FLAT' ? raw.commissionType : null,
+      commissionValue: raw.commissionType === 'PERCENT' || raw.commissionType === 'FLAT' ? asNumber(raw.commissionValue, 0) : null,
+    }
+    : {}),
 });
 
 export const normalizeDriver = (raw: any): DriverPartner => ({
