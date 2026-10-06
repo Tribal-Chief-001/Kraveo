@@ -5,6 +5,7 @@ import { runRefund, refundExtraPayment } from './refundService';
 import { createBreaker, runPool } from './providerPool';
 import { reconcilePendingPayments } from './paymentReconcile';
 import { runPushMaintenance, pruneOldPushData } from './push/pushService';
+import { runDailySettlementJob } from './settlement';
 
 const SYSTEM = { id: 'system', role: 'SYSTEM' };
 const BATCH = 100;
@@ -135,6 +136,16 @@ export const runOrderMaintenance = async (now: Date = new Date()) => {
     }
   } catch (err) {
     console.error('maintenance: push retry/prune failed:', (err as Error)?.name ?? 'error');
+  }
+  // Docs/21 phase 2: the daily restaurant settlement (once per IST day after settlement.time). Idempotent and race-safe, never affects the rest of the tick.
+  // Not run by the order-flow test suites (they call this function with real clocks and must not see settlements appear); settlement.test.ts opts in.
+  if (process.env.NODE_ENV !== 'test' || process.env.SETTLEMENT_JOB_IN_TEST === '1') {
+    try {
+      const r = await runDailySettlementJob(now);
+      if (r && r.created.length > 0) console.log(`daily settlement: ${r.created.length} settlement(s), ${r.orderCount} order(s)`);
+    } catch (err) {
+      console.error('maintenance: daily settlement failed:', (err as Error)?.message ?? 'error');
+    }
   }
   summary.providerPhaseStopped = breaker.open;
   if (breaker.open) console.warn('order maintenance: payment provider phase stopped after repeated provider failures; the next tick tries again.');

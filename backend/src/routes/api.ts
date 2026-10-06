@@ -14,6 +14,7 @@ import { startOfIstDay, istHour } from '../utils/time';
 import { dropFromPartnerRooms } from '../realtime';
 import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem, vendorMenuItemView, isCustomerVisible } from '../utils/catalog';
 import { catalogRouter } from './catalog';
+import { financeRouter } from './finance';
 import { createDish, vendorEditDish, toggleAvailability, adminDishView, DishRow } from '../services/catalog';
 import { getSettings } from '../services/settings';
 import { verifyGoogleIdToken, GoogleAuthError } from '../services/googleAuth';
@@ -36,6 +37,8 @@ apiRouter.use(orderRouter);
 apiRouter.use(deviceRouter);
 // Pricing, catalog approval and settings (Docs/21): restaurant menu-manage, /admin/catalog*, /admin/settings*, /admin/vendors/:id/commission.
 apiRouter.use(catalogRouter);
+// Payout details, settlements, finance analytics and the rider payout ledger (Docs/21 phase 2).
+apiRouter.use(financeRouter);
 
 // Admin passcode: only WRONG passcodes count, per client IP (nginx sets X-Forwarded-For, `trust proxy` = 1).
 const adminLoginFailures = new FailureLimiter({ maxFails: 5, windowMs: 15 * 60 * 1000 });

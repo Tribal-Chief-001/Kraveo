@@ -114,6 +114,17 @@ const RULES: Rule[] = [
   },
   { name: 'ADMIN_RECALCULATE', scope: 'user', max: 20, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/catalog/recalculate', message: 'Too many price recalculations. Please wait a few minutes.' },
   { name: 'ADMIN_SETTINGS_WRITE', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => r.method === 'PUT' && /^\/admin\/settings\/[^/]+$/.test(p), message: 'Too many settings changes. Please wait a few minutes.' },
+  // Docs/21 phase 2: payout details, settlement actions and the rider ledger. Money endpoints: tight enough that a stuck loop or a
+  // script cannot hammer them, loose enough for a real end-of-day session (many restaurants to mark paid).
+  { name: 'PARTNER_PAYOUT_WRITE', scope: 'user', max: 10, windowMs: 10 * MIN, applies: (r, p) => r.method === 'PUT' && p === '/partner/payout-account', message: 'You changed the payout details too many times. Please wait a few minutes.' },
+  { name: 'ADMIN_PAYOUT_WRITE', scope: 'user', max: 60, windowMs: 10 * MIN, applies: (r, p) => (r.method === 'PUT' || r.method === 'PATCH') && /^\/admin\/partners\/[^/]+\/payout-account(\/verify)?$/.test(p), message: 'Too many payout detail changes. Please wait a few minutes.' },
+  { name: 'ADMIN_PAYOUT_REVEAL', scope: 'user', max: 20, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && /^\/admin\/partners\/[^/]+\/payout-account\/reveal$/.test(p), message: 'Too many account number reveals. Please wait a few minutes.' },
+  { name: 'ADMIN_SETTLEMENT_RUN', scope: 'user', max: 10, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/settlements/run', message: 'Too many settlement runs. Please wait a few minutes.' },
+  {
+    name: 'ADMIN_SETTLEMENT_WRITE', scope: 'user', max: 120, windowMs: 10 * MIN,
+    applies: (r, p) => r.method === 'POST' && (/^\/admin\/settlements\/[^/]+\/(mark-paid|hold|release|adjustments|cancel)$/.test(p) || p === '/admin/rider-payouts'),
+    message: 'Too many settlement changes. Please wait a few minutes.',
+  },
   {
     name: 'VENDOR_CATALOG_WRITE', scope: 'user', max: 60, windowMs: 10 * MIN,
     applies: (r, p) => (r.method === 'POST' && /^\/vendors\/[^/]+\/items$/.test(p)) || (r.method === 'PATCH' && /^\/vendors\/items\/[^/]+$/.test(p) && r.body?.price !== undefined),

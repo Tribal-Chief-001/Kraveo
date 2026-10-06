@@ -84,6 +84,7 @@ model User {
   reviewsGiven    ReviewRecord[] @relation("CustomerReviews")
   reviewsReceived ReviewRecord[] @relation("DriverReviews")
   deviceTokens    DeviceToken[]
+  payoutAccount   PayoutAccount?
 }
 
 model Vendor {
@@ -119,6 +120,7 @@ model Vendor {
   menuItems MenuItem[]
   orders    Order[]
   reviews   ReviewRecord[]
+  settlements Settlement[]
 
   @@index([approvalStatus])
 }
@@ -212,12 +214,14 @@ model Order {
   vendorSubtotal   Float     @default(0)
   commissionTotal  Float     @default(0)
   feeBreakdown     Json?
-  // Phase 2 (settlements) fills this; no table or foreign key yet.
+  // Docs/21 phase 2: the daily settlement batch this order was paid out in (null = not settled yet). An order belongs to at most
+  // one settlement (set by a conditional update); deleting a settlement row frees its orders (ON DELETE SET NULL).
   settlementId     String?
 
   customer User          @relation("CustomerOrders", fields: [customerId], references: [id])
   vendor   Vendor        @relation(fields: [vendorId], references: [id])
   driver   User?         @relation("DriverOrders", fields: [driverId], references: [id])
+  settlement Settlement? @relation(fields: [settlementId], references: [id], onDelete: SetNull)
   items    OrderItem[]
   payments Payment[]
   review   ReviewRecord?
@@ -231,6 +235,8 @@ model Order {
   @@index([status, driverId, paymentStatus])
   @@index([paymentStatus, createdAt])
   @@index([refundStatus])
+  @@index([settlementId])
+  @@index([status, deliveredAt])
 }
 
 model OrderItem {
@@ -386,4 +392,109 @@ model AppSetting {
   value     Json
   updatedAt DateTime @default(now()) @updatedAt
   updatedBy String?
+}
+
+enum SettlementStatus {
+  PENDING
+  ON_HOLD
+  PAID
+  CANCELLED
+}
+
+// Docs/21 section 2 (phase 2). Where a restaurant or rider is paid. One row per user. The full bank account number is only ever
+// stored encrypted (AES-256-GCM, src/services/payoutCrypto.ts); every API answer carries `accountLast4` only, except the one
+// audited admin "reveal" endpoint.
+model PayoutAccount {
+  id               String    @id @default(uuid())
+  userId           String    @unique
+  partnerType      String // VENDOR | DRIVER
+  method           String // UPI | BANK
+  upiId            String?
+  accountHolder    String?
+  accountNumberEnc String?
+  accountLast4     String?
+  ifsc             String?
+  bankName         String?
+  // Set by an admin once the details were checked (a test transfer, a name match). Any change of details clears it.
+  verifiedAt       DateTime?
+  verifiedBy       String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// One payout batch for one restaurant. `batchKey` is the IST date (YYYY-MM-DD) for the automatic daily batch, so the daily job can
+// never create two for the same restaurant and day; a manual "run now" uses a unique key (M-...). Money is Float rounded to 2
+// decimals (all sums are done in integer paise).
+model Settlement {
+  id               String           @id @default(uuid())
+  vendorId         String
+  batchKey         String
+  // The delivery window covered: first delivery in the batch .. the cut-off instant.
+  periodStart      DateTime
+  periodEnd        DateTime
+  status           SettlementStatus @default(PENDING)
+  orderCount       Int
+  // Customer food total of the orders (analytics only: never shown to the restaurant).
+  foodGross        Float
+  // What the restaurant earns: sum of Order.vendorSubtotal.
+  vendorAmount     Float
+  commissionAmount Float
+  adjustmentTotal  Float            @default(0)
+  // vendorAmount + adjustmentTotal: what Kraveo pays out.
+  netPayable       Float
+  // Payout method and MASKED destination at creation time (null = the restaurant had no payout details).
+  payoutSnapshot   Json?
+  paidAt           DateTime?
+  paymentReference String?
+  paidBy           String?
+  note             String?
+  createdBy        String // AUTO | admin user id
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @default(now()) @updatedAt
+
+  vendor      Vendor                 @relation(fields: [vendorId], references: [id])
+  orders      Order[]
+  adjustments SettlementAdjustment[]
+
+  @@unique([vendorId, batchKey])
+  @@index([status, createdAt])
+  @@index([vendorId, createdAt])
+  @@index([createdAt])
+}
+
+model SettlementAdjustment {
+  id           String   @id @default(uuid())
+  settlementId String
+  // Signed rupees: + pays the restaurant more, - deducts.
+  amount       Float
+  reason       String
+  // Optional client key: the same key twice on one settlement is the same adjustment (double click).
+  requestId    String?
+  createdBy    String
+  createdAt    DateTime @default(now())
+
+  settlement Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  @@unique([settlementId, requestId])
+  @@index([settlementId])
+}
+
+// Ledger of what Kraveo paid a rider (riders are not settled daily: Kraveo only keeps the records).
+model RiderPayout {
+  id           String    @id @default(uuid())
+  driverUserId String
+  amount       Float
+  method       String // UPI | BANK | CASH
+  reference    String?
+  periodStart  DateTime?
+  periodEnd    DateTime?
+  note         String?
+  createdBy    String
+  createdAt    DateTime  @default(now())
+
+  @@unique([driverUserId, reference])
+  @@index([driverUserId, createdAt])
+  @@index([createdAt])
 }
