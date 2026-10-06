@@ -1,5 +1,5 @@
 import { prisma } from '../../db';
-import { ACTIVE_RIDER_STATUSES, OrderWithRelations, isPoolEligible, isVendorVisible } from '../orderView';
+import { ACTIVE_RIDER_STATUSES, OrderWithRelations, isPoolEligible, isVendorVisible, vendorEarnTotal } from '../orderView';
 import { PushApp, PushEvent, PushOptions } from './types';
 
 /**
@@ -56,11 +56,12 @@ export const buildCopy = (event: PushEvent, o: OrderWithRelations): { title: str
   switch (event) {
     case 'NEW_ORDER': {
       const n = o.items.reduce((sum, i) => sum + i.quantity, 0);
-      return { title: 'New order', body: `${n} item${n === 1 ? '' : 's'} - Rs ${rupees(o.totalAmount)}. Tap to accept.` };
+      // Docs/21: the restaurant is told what it earns, never the customer's total.
+      return { title: 'New order', body: `${n} item${n === 1 ? '' : 's'} - You earn Rs ${rupees(vendorEarnTotal(o))}. Tap to accept.` };
     }
     case 'NEW_ORDER_REMINDER': {
       const n = o.items.reduce((sum, i) => sum + i.quantity, 0);
-      return { title: 'Order waiting - accept it now', body: `${n} item${n === 1 ? '' : 's'} - Rs ${rupees(o.totalAmount)}. The customer is waiting.` };
+      return { title: 'Order waiting - accept it now', body: `${n} item${n === 1 ? '' : 's'} - You earn Rs ${rupees(vendorEarnTotal(o))}. The customer is waiting.` };
     }
     case 'ORDER_CANCELLED_VENDOR':
       return { title: 'Order cancelled', body: `Order ${orderRef(o.id)} was cancelled.` };

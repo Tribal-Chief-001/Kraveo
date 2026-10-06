@@ -68,7 +68,7 @@ export const createWorld = async (prefix: string, digit: string, size: { custome
     await prisma.vendor.create({ data: { id: vendorId, userId: u.id, name: `Kitchen ${i}`, category: 'Test', address: `Gate ${i}`, bannerImage: '', isAcceptingOrders: true, approvalStatus: 'APPROVED' } });
     const items = [{ id: `${vendorId}-i1`, price: 180 }, { id: `${vendorId}-i2`, price: 90 }];
     for (const it of items) {
-      await prisma.menuItem.create({ data: { id: it.id, vendorId, name: `Item ${it.price}`, price: it.price, category: 'Test', description: 'd', imageUrl: '', isAvailable: true } });
+      await prisma.menuItem.create({ data: { id: it.id, vendorId, name: `Item ${it.price}`, price: it.price, vendorPrice: it.price, category: 'Test', description: 'd', imageUrl: '', isAvailable: true } });
     }
     world.vendors.push({ ...u, vendorId, items });
   }

@@ -12,7 +12,10 @@ import { errSummary } from '../utils/log';
 import { NAME_RE } from '../utils/names';
 import { startOfIstDay, istHour } from '../utils/time';
 import { dropFromPartnerRooms } from '../realtime';
-import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem } from '../utils/catalog';
+import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem, vendorMenuItemView, isCustomerVisible } from '../utils/catalog';
+import { catalogRouter } from './catalog';
+import { createDish, vendorEditDish, toggleAvailability, adminDishView, DishRow } from '../services/catalog';
+import { getSettings } from '../services/settings';
 import { verifyGoogleIdToken, GoogleAuthError } from '../services/googleAuth';
 import { timingSafeEqual } from 'crypto';
 import { orderRouter } from './orders';
@@ -31,6 +34,8 @@ apiRouter.use(partnerRouter);
 apiRouter.use(orderRouter);
 // Push device tokens (POST/DELETE /api/devices).
 apiRouter.use(deviceRouter);
+// Pricing, catalog approval and settings (Docs/21): restaurant menu-manage, /admin/catalog*, /admin/settings*, /admin/vendors/:id/commission.
+apiRouter.use(catalogRouter);
 
 // Admin passcode: only WRONG passcodes count, per client IP (nginx sets X-Forwarded-For, `trust proxy` = 1).
 const adminLoginFailures = new FailureLimiter({ maxFails: 5, windowMs: 15 * 60 * 1000 });
@@ -576,13 +581,24 @@ apiRouter.post('/notifications/register-token', requireAuth, async (req: Authent
 // ----------------------------------------------------
 // Customers get the public shape (no owner id, FSSAI number, review state, timestamps). Admins and the owning
 // restaurant keep the full row.
-const fullVendorView = (v: any, viewer: { id: string; role: Role } | null) =>
-  viewer?.role === Role.ADMIN || (viewer?.role === Role.VENDOR && !!v.userId && v.userId === viewer.id) ? { ...v, hasLocation: vendorHasLocation(v.lat, v.lng) } : null;
+// Docs/21: the owning restaurant sees its dishes with ITS price and a status (never the customer price) and never its own commission.
+// An admin keeps the whole row.
+const withoutCommission = <T extends { commissionType?: unknown; commissionValue?: unknown }>(v: T): Omit<T, 'commissionType' | 'commissionValue'> => {
+  const { commissionType: _t, commissionValue: _v, ...rest } = v;
+  return rest;
+};
+const fullVendorView = (v: any, viewer: { id: string; role: Role } | null) => {
+  if (viewer?.role === Role.ADMIN) return { ...v, hasLocation: vendorHasLocation(v.lat, v.lng) };
+  if (viewer?.role === Role.VENDOR && !!v.userId && v.userId === viewer.id) {
+    return { ...withoutCommission(v), menuItems: (v.menuItems ?? []).map(vendorMenuItemView), hasLocation: vendorHasLocation(v.lat, v.lng) };
+  }
+  return null;
+};
 
 apiRouter.get('/vendors', async (req: Request, res: Response) => {
   try {
     const viewer = await optionalViewer(req);
-    const dbVendors = await prisma.vendor.findMany({ include: { menuItems: true } });
+    const dbVendors = await prisma.vendor.findMany({ include: { menuItems: { where: { deletedAt: null } } } });
     const visible = dbVendors.filter((v) => canSeeVendor(v, viewer)).map((v) => fullVendorView(v, viewer) ?? publicVendorView(v));
     return res.json({ success: true, count: visible.length, data: visible });
   } catch (err: any) {
@@ -594,7 +610,7 @@ apiRouter.get('/vendors/:id', validParams('id'), async (req: Request, res: Respo
   try {
     const dbVendor = await prisma.vendor.findUnique({
       where: { id: req.params.id },
-      include: { menuItems: true }
+      include: { menuItems: { where: { deletedAt: null } } }
     });
     const viewer = await optionalViewer(req);
     if (!dbVendor || !canSeeVendor(dbVendor, viewer)) return res.status(404).json({ success: false, message: 'Vendor not found' });
@@ -674,7 +690,7 @@ apiRouter.patch('/vendors/:id/status', requireAuth, validParams('id'), requireRo
       where: { id: req.params.id },
       data: { isAcceptingOrders: newStatus }
     });
-    return res.json({ success: true, isAcceptingOrders: updated.isAcceptingOrders, data: updated });
+    return res.json({ success: true, isAcceptingOrders: updated.isAcceptingOrders, data: req.user?.role === Role.ADMIN ? updated : withoutCommission(updated) });
   } catch (err: any) {
     return fail(res, err, 'Error updating vendor status');
   }
@@ -696,6 +712,11 @@ apiRouter.patch('/vendors/:id/toggle', requireAuth, validParams('id'), requireRo
   }
 });
 
+/** A dish as the caller may see it: a restaurant never gets the customer price or the commission. */
+const dishForViewer = (row: DishRow, role: string) => (role === Role.ADMIN ? { ...row, vendor: undefined } : vendorMenuItemView(row));
+
+// A restaurant's new dish is PENDING (its own price, hidden from customers) until an admin approves it; an admin-created dish is live at once.
+// The `price` in the body is always the RESTAURANT's price (Docs/21 section 4).
 apiRouter.post('/vendors/:id/items', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, validParams('id'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const v = validateMenuItemFields(req.body);
@@ -703,20 +724,20 @@ apiRouter.post('/vendors/:id/items', requireAuth, requireRole('VENDOR', 'ADMIN')
     if (!(await canManageVendor(req.params.id, req.user))) return res.status(403).json({ success: false, message: 'Forbidden. You do not own this vendor.' });
     if (!(await prisma.vendor.findUnique({ where: { id: req.params.id }, select: { id: true } }))) return res.status(404).json({ success: false, message: 'Vendor not found' });
 
-    const newItem = await prisma.menuItem.create({
-      data: {
-        vendorId: req.params.id,
-        name: v.data.name,
-        price: v.data.price,
-        category: v.data.category,
-        description: v.data.description,
-        isVeg: v.data.isVeg,
-        imageUrl: v.data.imageUrl || 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400',
-        isAvailable: true,
-      }
+    const created = await createDish(req.params.id, {
+      name: v.data.name,
+      price: v.data.price,
+      category: v.data.category,
+      description: v.data.description,
+      imageUrl: v.data.imageUrl || 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400',
+      isVeg: v.data.isVeg,
+    }, { id: req.user!.id, role: req.user!.role });
+    const isAdmin = req.user!.role === Role.ADMIN;
+    return res.status(201).json({
+      success: true,
+      message: isAdmin ? 'Menu item created successfully' : 'Menu item sent for approval',
+      data: isAdmin ? adminDishView(created, await getSettings()) : vendorMenuItemView(created),
     });
-
-    return res.status(201).json({ success: true, message: 'Menu item created successfully', data: newItem });
   } catch (err: any) {
     return fail(res, err, 'Error creating menu item');
   }
@@ -730,9 +751,12 @@ apiRouter.get('/menus/:vendorId', validParams('vendorId'), async (req: Request, 
     const owner = await prisma.vendor.findUnique({ where: { id: req.params.vendorId }, select: { approvalStatus: true, userId: true } });
     const viewer = await optionalViewer(req);
     if (!owner || !canSeeVendor(owner, viewer)) return res.json({ success: true, count: 0, data: [] });
-    const dbItems = await prisma.menuItem.findMany({ where: { vendorId: req.params.vendorId } });
-    const full = viewer?.role === Role.ADMIN || (viewer?.role === Role.VENDOR && owner.userId === viewer.id);
-    const data = full ? dbItems : dbItems.map(publicMenuItem);
+    const dbItems = await prisma.menuItem.findMany({ where: { vendorId: req.params.vendorId, deletedAt: null } });
+    // Customers: approved dishes only. The owning restaurant: its own price + status (pending and rejected included). Admin: everything not deleted.
+    let data: unknown[];
+    if (viewer?.role === Role.ADMIN) data = dbItems;
+    else if (viewer?.role === Role.VENDOR && owner.userId === viewer.id) data = dbItems.map(vendorMenuItemView);
+    else data = dbItems.filter(isCustomerVisible).map(publicMenuItem);
     return res.json({ success: true, count: data.length, data });
   } catch (err: any) {
     return fail(res, err, 'Error fetching menu items');
@@ -741,15 +765,8 @@ apiRouter.get('/menus/:vendorId', validParams('vendorId'), async (req: Request, 
 
 apiRouter.patch('/menus/:itemId/toggle', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, validParams('itemId'), async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const dbItem = await prisma.menuItem.findUnique({ where: { id: req.params.itemId } });
-    if (!dbItem) return res.status(404).json({ success: false, message: 'Menu item not found' });
-    if (!(await canManageVendor(dbItem.vendorId, req.user))) return res.status(403).json({ success: false, message: 'Forbidden. You do not own this vendor.' });
-
-    const updated = await prisma.menuItem.update({
-      where: { id: req.params.itemId },
-      data: { isAvailable: !dbItem.isAvailable }
-    });
-    return res.json({ success: true, item: updated });
+    const updated = await toggleAvailability(req.params.itemId, { id: req.user!.id, role: req.user!.role });
+    return res.json({ success: true, item: dishForViewer(updated, req.user!.role) });
   } catch (err: any) {
     return fail(res, err, 'Error toggling menu item');
   }
@@ -806,30 +823,31 @@ apiRouter.get('/analytics', requireAuth, requireRole('ADMIN'), async (req: Authe
   }
 });
 
-// Update Menu Item Stock Availability & Price (Prisma DB Persistence)
+// Update a dish. Availability is instant. A `price` from a restaurant is the RESTAURANT's price and, on a live dish, a request an admin has to
+// accept (Docs/21 section 4); from an admin it is the restaurant price, applied at once.
 apiRouter.patch('/vendors/items/:itemId', requireAuth, requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, validParams('itemId'), async (req: AuthenticatedRequest, res: Response) => {
   const { isAvailable, price } = req.body ?? {};
 
-  const updateData: any = {};
   if (isAvailable !== undefined && typeof isAvailable !== 'boolean') return res.status(400).json({ success: false, code: 'BAD_REQUEST', field: 'isAvailable', message: 'isAvailable must be true or false.' });
-  if (typeof isAvailable === 'boolean') updateData.isAvailable = isAvailable;
   if (price !== undefined) {
     const problem = priceProblem(price);
     if (problem) return res.status(400).json({ success: false, code: 'BAD_REQUEST', field: 'price', message: problem });
-    updateData.price = price;
   }
-  if (Object.keys(updateData).length === 0) return res.status(400).json({ success: false, code: 'BAD_REQUEST', message: 'Send isAvailable and/or price.' });
+  if (isAvailable === undefined && price === undefined) return res.status(400).json({ success: false, code: 'BAD_REQUEST', message: 'Send isAvailable and/or price.' });
 
   try {
     // A restaurant may only change its own menu (was: any item of any restaurant).
     const item = await prisma.menuItem.findUnique({ where: { id: req.params.itemId }, select: { vendorId: true } });
     if (!item) return res.status(404).json({ success: false, message: 'Menu item not found' });
     if (!(await canManageVendor(item.vendorId, req.user))) return res.status(403).json({ success: false, message: 'Forbidden. You do not own this vendor.' });
-    const updated = await prisma.menuItem.update({
-      where: { id: req.params.itemId },
-      data: updateData
-    });
-    return res.json({ success: true, message: 'Menu item updated successfully.', item: updated });
+    const out = await vendorEditDish(req.params.itemId, { id: req.user!.id, role: req.user!.role }, { isAvailable, price });
+    const message =
+      out.kind === 'CHANGE_REQUESTED' ? 'Price change sent for approval. Customers keep the old price until Kraveo approves it.'
+      : out.kind === 'RESUBMITTED' ? 'Dish sent for approval again.'
+      : out.kind === 'CHANGE_WITHDRAWN' ? 'Price change request withdrawn.'
+      : out.kind === 'EDITED_IN_PLACE' ? 'Menu item updated. It is still waiting for approval.'
+      : 'Menu item updated successfully.';
+    return res.json({ success: true, message, item: dishForViewer(out.item, req.user!.role) });
   } catch (err: any) {
     return fail(res, err, 'Error updating menu item');
   }

@@ -1,6 +1,7 @@
 import { errSummary } from './log';
 import { Request, Response, NextFunction } from 'express';
 import { OrderFlowError } from '../services/orderFlow';
+import { AppError } from './appError';
 
 /** Ids in this system are uuids or short seed/test ids: letters, digits, `_` and `-`. Anything else cannot exist. */
 export const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -12,6 +13,7 @@ export const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
  */
 export const fail = (res: Response, err: unknown, what: string) => {
   if (err instanceof OrderFlowError) return res.status(err.status).json({ success: false, code: err.code, message: err.message, ...err.extra });
+  if (err instanceof AppError) return res.status(err.status).json({ success: false, code: err.code, message: err.message, ...(err.field ? { field: err.field } : {}), ...err.extra });
   console.error(`${what} failed:`, errSummary(err));
   return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
 };

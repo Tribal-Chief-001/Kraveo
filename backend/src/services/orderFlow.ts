@@ -248,6 +248,10 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
             subtotal: priced.calculatedSubtotal,
             deliveryFee: priced.calculatedDeliveryFee,
             taxAndPackaging: priced.calculatedTaxAndPackaging,
+            // Docs/21: what the restaurant earns and what Kraveo keeps, from the dish snapshots; the fee parts for the records.
+            vendorSubtotal: priced.calculatedVendorSubtotal,
+            commissionTotal: priced.calculatedCommissionTotal,
+            feeBreakdown: (priced.feeBreakdown ?? undefined) as Prisma.InputJsonValue | undefined,
             discount: priced.calculatedDiscount,
             couponCode: priced.appliedCoupon ?? null,
             totalAmount: priced.calculatedTotalAmount,
@@ -255,7 +259,7 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
             dropoffNotes: input.dropoffNotes,
             status: 'PLACED',
             paymentStatus: 'PENDING',
-            items: { create: priced.verifiedItems.map((i) => ({ menuItemId: i.itemId, name: i.name, quantity: i.quantity, price: i.price })) },
+            items: { create: priced.verifiedItems.map((i) => ({ menuItemId: i.itemId, name: i.name, quantity: i.quantity, price: i.price, vendorUnitPrice: i.vendorUnitPrice, commissionUnit: i.commissionUnit })) },
           },
           include: ORDER_VIEW_INCLUDE,
         });

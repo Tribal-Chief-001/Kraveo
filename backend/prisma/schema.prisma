@@ -41,6 +41,13 @@ enum ApprovalStatus {
   SUSPENDED
 }
 
+// Dish approval (Docs/21 section 2). Separate from ApprovalStatus (partners) so a dish can never be "SUSPENDED".
+enum MenuApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum DutyStatus {
   ONLINE
   OFFLINE
@@ -102,6 +109,9 @@ model Vendor {
   fssaiNumber       String?
   appliedAt         DateTime?
   reviewedAt        DateTime?
+  // Docs/21: this restaurant's default commission (PERCENT | FLAT). Both null = inherit the global default.
+  commissionType    String?
+  commissionValue   Float?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -117,6 +127,7 @@ model MenuItem {
   id          String   @id @default(uuid())
   vendorId    String
   name        String
+  // The CUSTOMER price (what the apps and the cart read). The restaurant's own price is `vendorPrice`.
   price       Float
   category    String
   description String
@@ -127,8 +138,29 @@ model MenuItem {
   ratingCount Int?     @default(0)
   createdAt   DateTime @default(now())
 
+  // Pricing and catalog approval (Docs/21 sections 2-4). `price` = roundUp(vendorPrice + commission, step), recomputed on every change.
+  // No default on vendorPrice on purpose: a writer that forgets it fails loudly instead of paying a restaurant Rs 0.
+  vendorPrice        Float
+  // Dish-level commission override (PERCENT | FLAT). Both null = inherit the restaurant's, then the global default.
+  commissionType     String?
+  commissionValue    Float?
+  approvalStatus     MenuApprovalStatus @default(APPROVED)
+  // PENDING dish rejected: why. On a LIVE dish: why the last price-change request was declined.
+  rejectionReason    String?
+  // A price change the restaurant asked for on a LIVE dish; the dish keeps selling at the old price until an admin accepts it.
+  pendingVendorPrice Float?
+  // Soft delete: hidden from customers and restaurants, kept so old orders keep their copies.
+  deletedAt          DateTime?
+  reviewedAt         DateTime?
+  reviewedByUserId   String?
+  createdBy          String             @default("VENDOR") // VENDOR | ADMIN
+  updatedAt          DateTime           @default(now()) @updatedAt
+
   vendor     Vendor      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
   orderItems OrderItem[]
+
+  @@index([vendorId, approvalStatus, deletedAt])
+  @@index([approvalStatus, deletedAt])
 }
 
 model Order {
@@ -175,6 +207,14 @@ model Order {
   refundAttempts   Int       @default(0)
   refundLeaseUntil DateTime?
 
+  // Docs/21 section 2. `deliveryFee` now holds the ONE all-in fee and `taxAndPackaging` stays 0 for new orders.
+  // vendorSubtotal = sum(vendorUnitPrice x qty) (what the restaurant earns), commissionTotal = subtotal - vendorSubtotal.
+  vendorSubtotal   Float     @default(0)
+  commissionTotal  Float     @default(0)
+  feeBreakdown     Json?
+  // Phase 2 (settlements) fills this; no table or foreign key yet.
+  settlementId     String?
+
   customer User          @relation("CustomerOrders", fields: [customerId], references: [id])
   vendor   Vendor        @relation(fields: [vendorId], references: [id])
   driver   User?         @relation("DriverOrders", fields: [driverId], references: [id])
@@ -199,7 +239,11 @@ model OrderItem {
   menuItemId String?
   name       String
   quantity   Int
+  // The CUSTOMER unit price at order time.
   price      Float
+  // Snapshots from the dish at order time (Docs/21): what the restaurant earns per unit and what Kraveo keeps per unit.
+  vendorUnitPrice Float @default(0)
+  commissionUnit  Float @default(0)
 
   order    Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
   menuItem MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
@@ -333,4 +377,13 @@ model PushLog {
 
   @@index([status, nextAttemptAt])
   @@index([createdAt])
+}
+
+// Admin-editable settings, one row per group (fees, commission, rounding, settlement), validated on write (Docs/21 section 2).
+// A group with no row uses the defaults in src/services/pricing.ts. Every write is audited (old and new value).
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @default(now()) @updatedAt
+  updatedBy String?
 }

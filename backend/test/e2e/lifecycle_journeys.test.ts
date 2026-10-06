@@ -135,7 +135,7 @@ describe('Lifecycle journeys', () => {
       const placed = await api.place(c1, v1, { clientRequestId: key });
       expect(placed.status).toBe(201);
       const id = placed.body.data.id as string;
-      expect(placed.body.data).toMatchObject({ status: 'PLACED', paymentStatus: 'PENDING', subtotal: 180, deliveryFee: 25, taxAndPackaging: 15, discount: 0, totalAmount: 220, otpCode: null, driver: null, paidAt: null });
+      expect(placed.body.data).toMatchObject({ status: 'PLACED', paymentStatus: 'PENDING', subtotal: 180, deliveryFee: 25, taxAndPackaging: 0, discount: 0, totalAmount: 205, otpCode: null, driver: null, paidAt: null });
       const replay = await api.place(c1, v1, { clientRequestId: key });
       expect(replay.status).toBe(200);
       expect(replay.body).toMatchObject({ idempotentReplay: true, data: { id } });
@@ -157,7 +157,7 @@ describe('Lifecycle journeys', () => {
       expect(paidRow).toMatchObject({ status: 'PLACED', paymentStatus: 'PAID' });
       expect(paidRow.paidAt).not.toBeNull();
       expect(paidRow.payments).toHaveLength(1);
-      expect(paidRow.payments[0]).toMatchObject({ razorpayOrderId: rzp, razorpayPaymentId: payId, status: 'PAID', capturedAmountPaise: 22000 });
+      expect(paidRow.payments[0]).toMatchObject({ razorpayOrderId: rzp, razorpayPaymentId: payId, status: 'PAID', capturedAmountPaise: 20500 });
       expect(wv.count('new_order_alert', id)).toBe(1);
       expect(wa.count('new_order_alert', id)).toBe(1);
       expect(wc.count('new_order_alert', id)).toBe(0);
@@ -278,7 +278,7 @@ describe('Lifecycle journeys', () => {
       for (const k of ['createdAt', 'paidAt', 'acceptedAt', 'pickedUpAt', 'deliveredAt']) expect(done.body.data[k]).toMatch(/Z$/);
       expect(await dutyOf(winner)).toBe('ONLINE');
       expect(await refundsOf(id)).toHaveLength(0);
-      expect(ledger.totalCaptured() - ledger.totalRefunded()).toBe(22000);
+      expect(ledger.totalCaptured() - ledger.totalRefunded()).toBe(20500);
       // Nothing more is forwarded once the order is over; a replay of the OTP changes nothing.
       const before = wc.count('rider_location');
       await api.location(winner, 23.08, 76.85);
@@ -302,9 +302,9 @@ describe('Lifecycle journeys', () => {
       const wv = await watch(v1); const wr = await watch(r1);
       const id = await place(c1, v1);
       const cp = await api.createPayment(c1, id);
-      ledger.capture(cp.body.razorpayOrderId, 'pay_wh_only', 22000);
+      ledger.capture(cp.body.razorpayOrderId, 'pay_wh_only', 20500);
       // The customer app is killed here. Razorpay calls the webhook.
-      const w1 = await api.webhookCaptured(cp.body.razorpayOrderId, 'pay_wh_only', 22000);
+      const w1 = await api.webhookCaptured(cp.body.razorpayOrderId, 'pay_wh_only', 20500);
       expect(w1.body).toMatchObject({ status: 'processed' });
       await flushAll();
       expect(wv.count('new_order_alert', id)).toBe(1);
@@ -321,7 +321,7 @@ describe('Lifecycle journeys', () => {
       expect((await api.otp(r1, id, otp)).body.data.status).toBe('DELIVERED');
       await flushAll();
       expect(wv.count('new_order_alert', id)).toBe(1);
-      expect(ledger.totalCaptured() - ledger.totalRefunded()).toBe(22000);
+      expect(ledger.totalCaptured() - ledger.totalRefunded()).toBe(20500);
       expectHygiene([wv], [wr], []);
     });
 
@@ -332,9 +332,9 @@ describe('Lifecycle journeys', () => {
         const id = await place(c1, v1);
         const cp = await api.createPayment(c1, id);
         const rzp = cp.body.razorpayOrderId; const pid = `pay_race_${round}`;
-        ledger.capture(rzp, pid, 22000);
+        ledger.capture(rzp, pid, 20500);
         const res = await Promise.all([
-          api.verify(c1, rzp, pid), api.webhookCaptured(rzp, pid, 22000), api.verify(c1, rzp, pid), api.webhookCaptured(rzp, pid, 22000, 'order.paid'), api.webhookCaptured(rzp, pid, 22000),
+          api.verify(c1, rzp, pid), api.webhookCaptured(rzp, pid, 20500), api.verify(c1, rzp, pid), api.webhookCaptured(rzp, pid, 20500, 'order.paid'), api.webhookCaptured(rzp, pid, 20500),
         ]);
         expect(res.map((r) => r.status)).toEqual([200, 200, 200, 200, 200]);
         await flushAll();
@@ -343,7 +343,7 @@ describe('Lifecycle journeys', () => {
         expect(o.payments).toHaveLength(1);
         expect(o.payments[0]).toMatchObject({ status: 'PAID', razorpayPaymentId: pid });
         const firstPaid = o.paidAt!.getTime();
-        await api.webhookCaptured(rzp, pid, 22000);
+        await api.webhookCaptured(rzp, pid, 20500);
         expect((await row(id)).paidAt!.getTime()).toBe(firstPaid);
         expect(await refundsOf(id)).toHaveLength(0);
         wv.disconnect();
@@ -363,7 +363,7 @@ describe('Lifecycle journeys', () => {
       await wc.join(`order_${id}`);
       const cp = await api.createPayment(c1, id);
       const rzp = cp.body.razorpayOrderId;
-      expect((await api.webhookFailed(rzp, 'pay_try1', 22000)).status).toBe(200);
+      expect((await api.webhookFailed(rzp, 'pay_try1', 20500)).status).toBe(200);
       await flushAll();
       expect((await api.get(c1, id)).body.data).toMatchObject({ status: 'PLACED', paymentStatus: 'FAILED' });
       expect(wc.last('order_updated', id)).toMatchObject({ paymentStatus: 'FAILED' });
@@ -384,14 +384,14 @@ describe('Lifecycle journeys', () => {
       // Retry: same Razorpay order, second attempt succeeds.
       const again = await api.createPayment(c1, id);
       expect(again.body.razorpayOrderId).toBe(rzp);
-      ledger.capture(rzp, 'pay_try2', 22000);
+      ledger.capture(rzp, 'pay_try2', 20500);
       expect((await api.verify(c1, rzp, 'pay_try2')).status).toBe(200);
       await flushAll();
       expect((await row(id))).toMatchObject({ paymentStatus: 'PAID' });
       expect(wv.count('new_order_alert', id)).toBe(1);
       expect(await prisma.payment.count({ where: { orderId: id } })).toBe(1);
       // A late "payment.failed" for the first attempt (webhooks can arrive out of order) must not undo the payment.
-      await api.webhookFailed(rzp, 'pay_try1', 22000);
+      await api.webhookFailed(rzp, 'pay_try1', 20500);
       expect((await row(id))).toMatchObject({ paymentStatus: 'PAID' });
       expect((await row(id)).payments[0].status).toBe('PAID');
     });
@@ -427,15 +427,15 @@ describe('Lifecycle journeys', () => {
       const cp = await api.createPayment(c1, id);
       const rzp = cp.body.razorpayOrderId; const pid = `pay_late_${path}`;
       await runOrderMaintenance(minutesFromNow(16));
-      ledger.capture(rzp, pid, 22000);
-      if (path === 'webhook') expect((await api.webhookCaptured(rzp, pid, 22000)).body.status).toBe('processed');
+      ledger.capture(rzp, pid, 20500);
+      if (path === 'webhook') expect((await api.webhookCaptured(rzp, pid, 20500)).body.status).toBe('processed');
       if (path === 'verify') {
         const v = await api.verify(c1, rzp, pid);
         expect(v.status).toBe(409);
         expect(v.body.code).toBe('ORDER_CANCELLED');
       }
       if (path === 'concurrent') {
-        const rs = await Promise.all([api.verify(c1, rzp, pid), api.webhookCaptured(rzp, pid, 22000), api.verify(c1, rzp, pid), api.webhookCaptured(rzp, pid, 22000)]);
+        const rs = await Promise.all([api.verify(c1, rzp, pid), api.webhookCaptured(rzp, pid, 20500), api.verify(c1, rzp, pid), api.webhookCaptured(rzp, pid, 20500)]);
         expect(rs.map((r) => r.status).sort()).toEqual([200, 200, 409, 409]);
       }
       await flushAll();
@@ -450,7 +450,7 @@ describe('Lifecycle journeys', () => {
       expect((await api.list(v1)).body.data.map((x: any) => x.id)).not.toContain(id);
       expect(wv.count('order_updated', id) + wv.count('new_order_alert', id) + wr.count('order_available', id)).toBe(0);
       // Replays change nothing; the job finds nothing to do; the admin has nothing to fix.
-      await api.webhookCaptured(rzp, pid, 22000);
+      await api.webhookCaptured(rzp, pid, 20500);
       await runOrderMaintenance(new Date());
       await __waitForBackgroundWork();
       expect(await refundsOf(id)).toHaveLength(1);
@@ -465,7 +465,7 @@ describe('Lifecycle journeys', () => {
       const id = await place(c1, v1);
       const cp = await api.createPayment(c1, id);
       expect((await api.cancel(c1, id, 'changed my mind')).body.data).toMatchObject({ status: 'CANCELLED', cancelledBy: 'CUSTOMER', paymentStatus: 'PENDING' });
-      ledger.capture(cp.body.razorpayOrderId, 'pay_after_cancel', 22000);
+      ledger.capture(cp.body.razorpayOrderId, 'pay_after_cancel', 20500);
       expect((await api.verify(c1, cp.body.razorpayOrderId, 'pay_after_cancel')).body.code).toBe('ORDER_CANCELLED');
       await flushAll();
       expect(await row(id)).toMatchObject({ status: 'CANCELLED', paymentStatus: 'REFUNDED', refundStatus: 'DONE' });
@@ -1042,7 +1042,7 @@ describe('Lifecycle journeys', () => {
       ledger.mode.createDown = false;
       const up = await api.createPayment(c1, id);
       expect(up.status).toBe(200);
-      ledger.capture(up.body.razorpayOrderId, 'pay_after_outage', 22000);
+      ledger.capture(up.body.razorpayOrderId, 'pay_after_outage', 20500);
       expect((await api.verify(c1, up.body.razorpayOrderId, 'pay_after_outage')).status).toBe(200);
       await flushAll();
       expect(wv.count('new_order_alert', id)).toBe(1);
@@ -1139,8 +1139,8 @@ describe('Lifecycle journeys', () => {
       const cp = await api.createPayment(c1, id);
       await api.cancel(c1, id);
       ledger.mode.refundDown = true;
-      ledger.capture(cp.body.razorpayOrderId, 'pay_late_outage', 22000);
-      const w = await api.webhookCaptured(cp.body.razorpayOrderId, 'pay_late_outage', 22000);
+      ledger.capture(cp.body.razorpayOrderId, 'pay_late_outage', 20500);
+      const w = await api.webhookCaptured(cp.body.razorpayOrderId, 'pay_late_outage', 20500);
       expect(w.status).toBe(200);
       await __waitForBackgroundWork();
       expect(await row(id)).toMatchObject({ status: 'CANCELLED', paymentStatus: 'PAID', refundStatus: 'FAILED' });
@@ -1205,7 +1205,7 @@ describe('Lifecycle journeys', () => {
       const id = await place(c1, v1);
       const cp = await api.createPayment(c1, id);
       await api.cancel(c1, id);
-      await api.webhookFailed(cp.body.razorpayOrderId, 'pay_f', 22000);
+      await api.webhookFailed(cp.body.razorpayOrderId, 'pay_f', 20500);
       await flushAll();
       const o = await row(id);
       expect(o.status).toBe('CANCELLED');

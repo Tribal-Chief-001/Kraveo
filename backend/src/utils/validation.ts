@@ -1,14 +1,26 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import { OrderItem } from '../types';
+import { getSettings } from '../services/settings';
+import { computeFees, FeeBreakdown } from '../services/pricing';
+
+/** What the restaurant earns and Kraveo keeps for one line, copied from the dish at order time (Docs/21 section 2). */
+export type PricedItem = OrderItem & { vendorUnitPrice: number; commissionUnit: number };
 
 export interface OrderValidationResult {
   isValid: boolean;
   errorMessage?: string;
-  verifiedItems: OrderItem[];
+  verifiedItems: PricedItem[];
   calculatedSubtotal: number;
+  /** The ONE all-in fee (Docs/21): delivery + GST + packaging + restaurant charge. Stored in Order.deliveryFee. */
   calculatedDeliveryFee: number;
+  /** Always 0 for new orders (the old separate Rs 15 is gone); the column stays for old orders. */
   calculatedTaxAndPackaging: number;
+  /** sum(vendorUnitPrice x qty): what the restaurant earns. */
+  calculatedVendorSubtotal: number;
+  /** subtotal - vendorSubtotal: what Kraveo keeps (commission and rounding). */
+  calculatedCommissionTotal: number;
+  feeBreakdown: FeeBreakdown | null;
   calculatedDiscount: number;
   calculatedTotalAmount: number;
   /** The normalised code that produced `calculatedDiscount` (null when no coupon was sent or it gave nothing). */
@@ -56,8 +68,7 @@ export const couponEligibilityProblem = async (tx: Prisma.TransactionClient, cus
   return null;
 };
 
-export const DELIVERY_FEE = 25; // ₹25 flat campus drop-off fee
-export const TAX_AND_PACKAGING = 15; // ₹15 packaging & GST fee
+// The fee is no longer a constant: it is the admin setting `fees` (services/settings.ts, defaults in services/pricing.ts).
 export const MAX_ITEM_QUANTITY = 20;
 export const MAX_CART_LINES = 30;
 
@@ -67,28 +78,38 @@ export const validateAndCalculateOrder = async (
   items: { itemId: string; quantity: number }[],
   couponCode?: string
 ): Promise<OrderValidationResult> => {
+  const settings = await getSettings();
+  const invalid = {
+    calculatedSubtotal: 0,
+    calculatedDeliveryFee: settings.fees.baseFee,
+    calculatedTaxAndPackaging: 0,
+    calculatedVendorSubtotal: 0,
+    calculatedCommissionTotal: 0,
+    feeBreakdown: null,
+    calculatedDiscount: 0,
+    calculatedTotalAmount: settings.fees.baseFee,
+  };
   if (!items || !Array.isArray(items) || items.length === 0 || items.length > MAX_CART_LINES) {
     return {
       isValid: false,
       errorMessage: 'Cart items must be a non-empty array.',
       verifiedItems: [],
-      calculatedSubtotal: 0,
-      calculatedDeliveryFee: 25,
-      calculatedTaxAndPackaging: 0,
-      calculatedDiscount: 0,
-      calculatedTotalAmount: 25
+      ...invalid,
     };
   }
 
   const itemIds = items.map((i) => (i && typeof i === 'object' && typeof i.itemId === 'string' ? i.itemId : '')).filter(Boolean);
+  // Only dishes a customer may see: approved and not deleted. A pending, rejected or deleted dish answers exactly like a dish that
+  // does not exist (no hint that it is there).
   const dbMenuItems = await prisma.menuItem.findMany({
-    where: { id: { in: itemIds }, vendorId }
+    where: { id: { in: itemIds }, vendorId, approvalStatus: 'APPROVED', deletedAt: null }
   });
 
   const menuItemMap = new Map(dbMenuItems.map((item) => [item.id, item]));
 
   let subtotal = 0;
-  const verifiedItems: OrderItem[] = [];
+  let vendorSubtotal = 0;
+  const verifiedItems: PricedItem[] = [];
 
   for (const rawItem of items) {
     if (!rawItem || typeof rawItem !== 'object' || !Number.isInteger(rawItem.quantity) || rawItem.quantity <= 0 || rawItem.quantity > MAX_ITEM_QUANTITY) {
@@ -96,11 +117,7 @@ export const validateAndCalculateOrder = async (
         isValid: false,
         errorMessage: `Invalid quantity '${rawItem?.quantity}' for item ${rawItem?.itemId}.`,
         verifiedItems: [],
-        calculatedSubtotal: 0,
-        calculatedDeliveryFee: 25,
-        calculatedTaxAndPackaging: 0,
-        calculatedDiscount: 0,
-        calculatedTotalAmount: 25
+        ...invalid,
       };
     }
 
@@ -111,11 +128,7 @@ export const validateAndCalculateOrder = async (
         isValid: false,
         errorMessage: `Item '${rawItem.itemId}' is not available at this dhaba.`,
         verifiedItems: [],
-        calculatedSubtotal: 0,
-        calculatedDeliveryFee: 25,
-        calculatedTaxAndPackaging: 0,
-        calculatedDiscount: 0,
-        calculatedTotalAmount: 25
+        ...invalid,
       };
     }
 
@@ -124,32 +137,36 @@ export const validateAndCalculateOrder = async (
         isValid: false,
         errorMessage: `Item '${menuItem.name}' is currently SOLD OUT.`,
         verifiedItems: [],
-        calculatedSubtotal: 0,
-        calculatedDeliveryFee: 25,
-        calculatedTaxAndPackaging: 0,
-        calculatedDiscount: 0,
-        calculatedTotalAmount: 25
+        ...invalid,
       };
     }
 
     const itemTotal = menuItem.price * rawItem.quantity;
     subtotal += itemTotal;
+    vendorSubtotal += menuItem.vendorPrice * rawItem.quantity;
 
     verifiedItems.push({
       itemId: menuItem.id,
       name: menuItem.name,
       quantity: rawItem.quantity,
-      price: menuItem.price
+      price: menuItem.price,
+      vendorUnitPrice: menuItem.vendorPrice,
+      // What Kraveo keeps per unit: the stored customer price minus the restaurant's price (commission and rounding).
+      commissionUnit: Math.round((menuItem.price - menuItem.vendorPrice) * 100) / 100,
     });
   }
 
-  const deliveryFee = DELIVERY_FEE;
-  const taxAndPackaging = TAX_AND_PACKAGING;
-
-  // Rupee amounts with paise precision, so total = subtotal + fee + tax - discount exactly in paise.
+  // Rupee amounts with paise precision, so total = subtotal + fee - discount exactly in paise.
   // The subtotal is rounded BEFORE any threshold is compared (0.7 x 14 + 8.2 x 11 is 99.99999999999999 in floats, i.e. Rs 100.00).
   const round2 = (n: number) => Math.round(n * 100) / 100;
   subtotal = round2(subtotal);
+  vendorSubtotal = round2(vendorSubtotal);
+  const commissionTotal = round2(subtotal - vendorSubtotal);
+
+  // The one all-in fee from the admin settings. Thresholds look at the food subtotal BEFORE the coupon (the platform bears coupons).
+  const fee = computeFees(settings.fees, subtotal);
+  const deliveryFee = fee.total;
+  const taxAndPackaging = 0;
 
   let discount = 0;
   let appliedCoupon: string | null = null;
@@ -173,6 +190,9 @@ export const validateAndCalculateOrder = async (
     calculatedSubtotal: subtotal,
     calculatedDeliveryFee: deliveryFee,
     calculatedTaxAndPackaging: taxAndPackaging,
+    calculatedVendorSubtotal: vendorSubtotal,
+    calculatedCommissionTotal: commissionTotal,
+    feeBreakdown: fee.breakdown,
     calculatedDiscount: discount,
     calculatedTotalAmount: totalAmount,
     appliedCoupon,

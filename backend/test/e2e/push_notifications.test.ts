@@ -295,11 +295,14 @@ describe('Push notifications', () => {
       expect(fake.events(id)).toEqual(['NEW_ORDER>VENDOR']);
       const [newOrder] = fake.to(id, 'NEW_ORDER');
       expect(newOrder).toEqual({
-        token: TOK.vendor, title: 'New order', body: expect.stringMatching(/^3 items - Rs \d+(\.\d{2})?\. Tap to accept\.$/),
+        token: TOK.vendor, title: 'New order', body: expect.stringMatching(/^3 items - You earn Rs \d+(\.\d{2})?\. Tap to accept\.$/),
         channelId: 'new_orders', priority: 'high', ttlSeconds: 120, collapseKey: `NEW_ORDER:${id}`, data: { event: 'NEW_ORDER', orderId: id, v: '1' },
       });
-      const total = (await prisma.order.findUniqueOrThrow({ where: { id } })).totalAmount;
-      expect(newOrder.body).toBe(`3 items - Rs ${Number.isInteger(total) ? total : total.toFixed(2)}. Tap to accept.`);
+      // Docs/21: the restaurant is told what IT earns (vendorSubtotal), never the customer's total with the fee.
+      const row = await prisma.order.findUniqueOrThrow({ where: { id } });
+      const earn = row.vendorSubtotal;
+      expect(newOrder.body).toBe(`3 items - You earn Rs ${Number.isInteger(earn) ? earn : earn.toFixed(2)}. Tap to accept.`);
+      expect(earn).toBeLessThan(row.totalAmount);
 
       expect((await setStatus(id, 'ACCEPTED', tVendor)).status).toBe(200);
       await flush();

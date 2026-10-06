@@ -251,11 +251,11 @@ describe('Backend hardening', () => {
       const { validateAndCalculateOrder } = await import('../../src/utils/validation');
       const [v1] = W.vendors;
       await prisma.menuItem.createMany({ data: [
-        { id: 'hd-thr-a', vendorId: v1.vendorId, name: 'thr a', price: 0.7, category: 't', description: '', imageUrl: '' },
-        { id: 'hd-thr-b', vendorId: v1.vendorId, name: 'thr b', price: 8.2, category: 't', description: '', imageUrl: '' },
+        { id: 'hd-thr-a', vendorId: v1.vendorId, name: 'thr a', price: 0.7, vendorPrice: 0.7, category: 't', description: '', imageUrl: '' },
+        { id: 'hd-thr-b', vendorId: v1.vendorId, name: 'thr b', price: 8.2, vendorPrice: 8.2, category: 't', description: '', imageUrl: '' },
       ] });
       const r = await validateAndCalculateOrder(v1.vendorId, [{ itemId: 'hd-thr-a', quantity: 14 }, { itemId: 'hd-thr-b', quantity: 11 }], 'VITFIRST');
-      expect([r.calculatedSubtotal, r.calculatedDiscount, r.calculatedTotalAmount, r.appliedCoupon]).toEqual([100, 20, 120, 'VITFIRST']);
+      expect([r.calculatedSubtotal, r.calculatedDiscount, r.calculatedTotalAmount, r.appliedCoupon]).toEqual([100, 20, 105, 'VITFIRST']);
     });
 
     test('an unknown code or a cart under the minimum is a 400 COUPON_NOT_APPLICABLE with a readable message; no order is created', async () => {
@@ -708,7 +708,9 @@ describe('Backend hardening', () => {
       expect((await patch({})).status).toBe(400);
       expect((await patch({ isAvailable: 'no' })).status).toBe(400);
       expect((await prisma.menuItem.findUniqueOrThrow({ where: { id: itemId } })).price).toBe(180);
-      expect((await patch({ price: 175.5 })).body.item.price).toBe(175.5);
+      // A restaurant's price on a LIVE dish is a request (Docs/21): it shows as the pending price, the price stays and customers keep paying 180.
+      expect((await patch({ price: 175.5 })).body.item).toMatchObject({ price: 180, pendingPrice: 175.5, status: 'CHANGE_PENDING' });
+      expect((await prisma.menuItem.findUniqueOrThrow({ where: { id: itemId } })).price).toBe(180);
       expect((await patch({ isAvailable: false })).body.item.isAvailable).toBe(false);
     });
   });

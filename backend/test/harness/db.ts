@@ -78,12 +78,13 @@ export const seedTestDatabase = async () => {
   // 3. Seed Menu Items
   const menuItem1 = await prisma.menuItem.upsert({
     where: { id: 'item-1' },
-    update: { vendorId: vendor.id, name: 'Special Shahi Paneer Thali', price: 180.0, isAvailable: true },
+    update: { vendorId: vendor.id, name: 'Special Shahi Paneer Thali', price: 180.0, vendorPrice: 180.0, isAvailable: true },
     create: {
       id: 'item-1',
       vendorId: vendor.id,
       name: 'Special Shahi Paneer Thali',
       price: 180.0,
+      vendorPrice: 180.0,
       category: 'Thalis',
       description: 'Paneer, Dal Makhani, 4 Butter Rotis, Rice & Gulab Jamun',
       imageUrl: 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400',
@@ -94,12 +95,13 @@ export const seedTestDatabase = async () => {
 
   const menuItem2 = await prisma.menuItem.upsert({
     where: { id: 'item-2' },
-    update: { vendorId: vendor.id, name: 'Aloo Pyaz Paratha (2 pcs)', price: 90.0, isAvailable: true },
+    update: { vendorId: vendor.id, name: 'Aloo Pyaz Paratha (2 pcs)', price: 90.0, vendorPrice: 90.0, isAvailable: true },
     create: {
       id: 'item-2',
       vendorId: vendor.id,
       name: 'Aloo Pyaz Paratha (2 pcs)',
       price: 90.0,
+      vendorPrice: 90.0,
       category: 'Parathas',
       description: 'Served with fresh curd & white butter',
       imageUrl: 'https://images.unsplash.com/photo-1626777552726-4a6b54c97e46?w=400',

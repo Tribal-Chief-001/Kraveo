@@ -187,11 +187,11 @@ describe('Payments adversarial audit', () => {
   };
   /** Order written straight to the database: optionally paid (captured payment recorded). */
   const mkOrder = async (o: { paid?: boolean; ageMin?: number; paidAgoMin?: number | null; status?: string; total?: number; driverId?: string | null } = {}) => {
-    const total = o.total ?? 220;
+    const total = o.total ?? 205;
     const payId = `pay_adv_${randomUUID().slice(0, 12)}`;
     const created = await prisma.order.create({
       data: {
-        customerId: STUDENT.id, vendorId: 'ven-1', driverId: o.driverId ?? null, totalAmount: total, subtotal: total - 40, deliveryFee: 25, taxAndPackaging: 15,
+        customerId: STUDENT.id, vendorId: 'ven-1', driverId: o.driverId ?? null, totalAmount: total, subtotal: total - 25, deliveryFee: 25, taxAndPackaging: 0,
         dropoffHostel: 'Block 3', status: (o.status ?? 'PLACED') as any, paymentStatus: o.paid ? 'PAID' : 'PENDING',
         createdAt: minutesAgo(o.ageMin ?? 1),
         paidAt: o.paid ? minutesAgo(o.paidAgoMin ?? 1) : null,
@@ -247,7 +247,7 @@ describe('Payments adversarial audit', () => {
       const done = await request.post(`/api/orders/${o.id}/verify-gate-otp`).set(H(tRider)).send({ otpCode: otp });
       expect(done.status).toBe(200);
       // everything an attacker / a buggy client / the job could still try:
-      await webhook(captured(o.rzp, 22000, o.payId));
+      await webhook(captured(o.rzp, 20500, o.payId));
       await verify(o.rzp, o.payId);
       expect((await adminCancel(o.id)).status).toBe(409);
       expect((await customerCancel(o.id)).status).toBe(409);
@@ -278,7 +278,7 @@ describe('Payments adversarial audit', () => {
       await __waitForBackgroundWork();
       // hammer every path that could refund again
       await Promise.all([customerCancel(o.id), adminCancel(o.id), vendorReject(o.id), retryRefund(o.id), runOrderMaintenance(minutesFromNow(30)), executeRefund(o.id), executeRefund(o.id)]);
-      await webhook(captured(o.rzp, 22000, o.payId));
+      await webhook(captured(o.rzp, 20500, o.payId));
       await verify(o.rzp, o.payId);
       const row = await db(o.id);
       expect(row.status).toBe('CANCELLED');
@@ -288,7 +288,7 @@ describe('Payments adversarial audit', () => {
       expect(row.payments[0].razorpayRefundId).toBeTruthy();
       const refunds = await refundsOf(o.id);
       expect(refunds).toHaveLength(1);
-      expect(refunds[0].amountPaise).toBe(22000);
+      expect(refunds[0].amountPaise).toBe(20500);
       expect(P.calls.refund.length).toBe(1);
     });
 
@@ -305,8 +305,8 @@ describe('Payments adversarial audit', () => {
         expect((await db(id)).status).toBe('CANCELLED');
         await Promise.all([
           verify(rzp, payId), verify(rzp, payId),
-          webhook(captured(rzp, 22000, payId)), webhook(captured(rzp, 22000, payId)), webhook(captured(rzp, 22000, payId)),
-          webhook(captured(rzp, 22000, payId, {}, 'order.paid')), webhook(captured(rzp, 22000, payId)), verify(rzp, payId),
+          webhook(captured(rzp, 20500, payId)), webhook(captured(rzp, 20500, payId)), webhook(captured(rzp, 20500, payId)),
+          webhook(captured(rzp, 20500, payId, {}, 'order.paid')), webhook(captured(rzp, 20500, payId)), verify(rzp, payId),
         ]);
         await __waitForBackgroundWork();
         await runOrderMaintenance(minutesFromNow(5));
@@ -336,16 +336,16 @@ describe('Payments adversarial audit', () => {
       const placed = await place();
       const pay = await createPayment(placed.body.data.id);
       const id = placed.body.data.id; const rzp = pay.body.razorpayOrderId; const payId = 'pay_retry_1';
-      await webhook({ event: 'payment.failed', payload: { payment: { entity: { id: 'pay_fail_0', order_id: rzp, amount: 22000 } } } });
+      await webhook({ event: 'payment.failed', payload: { payment: { entity: { id: 'pay_fail_0', order_id: rzp, amount: 20500 } } } });
       expect((await db(id)).paymentStatus).toBe('FAILED');
       expect((await createPayment(id)).body.razorpayOrderId).toBe(rzp); // same Razorpay order reused
-      await webhook(captured(rzp, 22000, payId));
+      await webhook(captured(rzp, 20500, payId));
       expect((await db(id)).paymentStatus).toBe('PAID');
-      await webhook({ event: 'payment.failed', payload: { payment: { entity: { id: 'pay_fail_stale', order_id: rzp, amount: 22000 } } } });
+      await webhook({ event: 'payment.failed', payload: { payment: { entity: { id: 'pay_fail_stale', order_id: rzp, amount: 20500 } } } });
       expect((await db(id)).paymentStatus).toBe('PAID');
       await adminCancel(id);
       await __waitForBackgroundWork();
-      await webhook({ event: 'payment.failed', payload: { payment: { entity: { id: 'pay_fail_stale2', order_id: rzp, amount: 22000 } } } });
+      await webhook({ event: 'payment.failed', payload: { payment: { entity: { id: 'pay_fail_stale2', order_id: rzp, amount: 20500 } } } });
       const row = await db(id);
       expect(row.paymentStatus).toBe('REFUNDED');
       expect(row.payments[0].status).toBe('REFUNDED');
@@ -354,10 +354,10 @@ describe('Payments adversarial audit', () => {
 
     test('PROVE: webhook-only, verify-only and both all end PAID once; 12 concurrent markOrderPaid calls give exactly one PAID outcome', async () => {
       const a = await mkOrder(); const b = await mkOrder(); const c = await mkOrder();
-      expect((await webhook(captured(a.rzp, 22000, 'pay_wh_only'))).body.status).toBe('processed');
+      expect((await webhook(captured(a.rzp, 20500, 'pay_wh_only'))).body.status).toBe('processed');
       expect((await verify(b.rzp, 'pay_verify_only')).status).toBe(200);
       const outcomes = await Promise.all(Array.from({ length: 12 }, (_, i) =>
-        markOrderPaid(i % 2 ? { razorpayOrderId: c.rzp, razorpayPaymentId: 'pay_both', amountPaise: 22000, source: 'WEBHOOK' } : { razorpayOrderId: c.rzp, razorpayPaymentId: 'pay_both', source: 'VERIFY' })));
+        markOrderPaid(i % 2 ? { razorpayOrderId: c.rzp, razorpayPaymentId: 'pay_both', amountPaise: 20500, source: 'WEBHOOK' } : { razorpayOrderId: c.rzp, razorpayPaymentId: 'pay_both', source: 'VERIFY' })));
       expect(outcomes.filter((x) => x.outcome === 'PAID')).toHaveLength(1);
       expect(outcomes.filter((x) => x.outcome === 'ALREADY_PAID')).toHaveLength(11);
       for (const x of [a, b, c]) {
@@ -402,14 +402,14 @@ describe('Payments adversarial audit', () => {
     test('PROVE: a second captured payment on a paid order (second Razorpay order) is flagged, refunded automatically by its OWN payment id exactly once, and changes nothing else; the original is refunded later by a cancel', async () => {
       const o = await placePaid();
       const dupRzp = `rzp_order_sim_dup_${randomUUID().slice(0, 8)}`;
-      await prisma.payment.create({ data: { orderId: o.id, razorpayOrderId: dupRzp, amount: 220, status: 'PENDING' } });
-      const w = await webhook(captured(dupRzp, 22000, 'pay_second'));
+      await prisma.payment.create({ data: { orderId: o.id, razorpayOrderId: dupRzp, amount: 205, status: 'PENDING' } });
+      const w = await webhook(captured(dupRzp, 20500, 'pay_second'));
       expect(w.body.status).toBe('rejected');
       expect(w.body.code).toBe('DUPLICATE_PAYMENT');
       await __waitForBackgroundWork();
       // the extra payment (and only it) was refunded
       expect(P.sim.refunds.get('pay_second')).toHaveLength(1);
-      expect(P.sim.refunds.get('pay_second')![0].amountPaise).toBe(22000);
+      expect(P.sim.refunds.get('pay_second')![0].amountPaise).toBe(20500);
       expect(P.sim.refunds.get(o.payId) ?? []).toHaveLength(0);
       // the order and its original payment are untouched
       const row = await db(o.id);
@@ -419,13 +419,13 @@ describe('Payments adversarial audit', () => {
       const original = row.payments.find((x) => x.razorpayPaymentId === o.payId)!;
       expect(original).toMatchObject({ status: 'PAID', razorpayRefundId: null, refundedAt: null });
       const extra = row.payments.find((x) => x.razorpayOrderId === dupRzp)!;
-      expect(extra).toMatchObject({ status: 'REFUNDED', razorpayPaymentId: 'pay_second', capturedAmountPaise: 22000, razorpayRefundId: P.sim.refunds.get('pay_second')![0].id });
+      expect(extra).toMatchObject({ status: 'REFUNDED', razorpayPaymentId: 'pay_second', capturedAmountPaise: 20500, razorpayRefundId: P.sim.refunds.get('pay_second')![0].id });
       // flag cleared, audit trail written
       expect((await needsAttention()).find((x) => x.order.id === o.id)?.problems ?? []).not.toContain('DUPLICATE_PAYMENT');
       expect(await prisma.adminAuditLog.count({ where: { targetId: o.id, action: 'PAYMENT_DUPLICATE' } })).toBe(1);
       expect(await prisma.adminAuditLog.count({ where: { targetId: o.id, action: 'PAYMENT_DUPLICATE_REFUNDED' } })).toBe(1);
       // replays (webhook x2, job) never refund it again
-      await Promise.all([webhook(captured(dupRzp, 22000, 'pay_second')), webhook(captured(dupRzp, 22000, 'pay_second')), runOrderMaintenance(minutesFromNow(5))]);
+      await Promise.all([webhook(captured(dupRzp, 20500, 'pay_second')), webhook(captured(dupRzp, 20500, 'pay_second')), runOrderMaintenance(minutesFromNow(5))]);
       await __waitForBackgroundWork();
       expect(P.calls.refund.filter((c) => c.paymentId === 'pay_second')).toHaveLength(1);
       // a later cancel refunds the ORIGINAL payment (the refunded extra row is not mistaken for it)
@@ -440,8 +440,8 @@ describe('Payments adversarial audit', () => {
     test('PROVE: a duplicate captured payment is refunded automatically (customer is not double-charged until a human acts)', async () => {
       const o = await placePaid();
       const dupRzp = `rzp_order_sim_dup2_${randomUUID().slice(0, 8)}`;
-      await prisma.payment.create({ data: { orderId: o.id, razorpayOrderId: dupRzp, amount: 220, status: 'PENDING' } });
-      await webhook(captured(dupRzp, 22000, 'pay_second_auto'));
+      await prisma.payment.create({ data: { orderId: o.id, razorpayOrderId: dupRzp, amount: 205, status: 'PENDING' } });
+      await webhook(captured(dupRzp, 20500, 'pay_second_auto'));
       await __waitForBackgroundWork();
       await runOrderMaintenance();
       expect(P.sim.refunds.get('pay_second_auto') ?? []).toHaveLength(1);
@@ -451,8 +451,8 @@ describe('Payments adversarial audit', () => {
       const p = useProvider({ down: true });
       const o = await placePaid();
       const dupRzp = `rzp_order_sim_dup3_${randomUUID().slice(0, 8)}`;
-      await prisma.payment.create({ data: { orderId: o.id, razorpayOrderId: dupRzp, amount: 220, status: 'PENDING' } });
-      await Promise.all(Array.from({ length: 12 }, () => webhook(captured(dupRzp, 22000, 'pay_second_down'))));
+      await prisma.payment.create({ data: { orderId: o.id, razorpayOrderId: dupRzp, amount: 205, status: 'PENDING' } });
+      await Promise.all(Array.from({ length: 12 }, () => webhook(captured(dupRzp, 20500, 'pay_second_down'))));
       await __waitForBackgroundWork();
       expect(p.calls.list.filter((x) => x === 'pay_second_down').length).toBe(1); // the claim let one worker through
       expect((await needsAttention()).find((x) => x.order.id === o.id)?.problems).toContain('DUPLICATE_PAYMENT');
@@ -462,7 +462,7 @@ describe('Payments adversarial audit', () => {
       p.ctl.down = false;
       const tick = await runOrderMaintenance(minutesFromNow(5));
       expect(tick.extraRefundsDone).toHaveLength(1);
-      await Promise.all([runOrderMaintenance(minutesFromNow(6)), runOrderMaintenance(minutesFromNow(6)), webhook(captured(dupRzp, 22000, 'pay_second_down'))]);
+      await Promise.all([runOrderMaintenance(minutesFromNow(6)), runOrderMaintenance(minutesFromNow(6)), webhook(captured(dupRzp, 20500, 'pay_second_down'))]);
       await __waitForBackgroundWork();
       expect(p.sim.refunds.get('pay_second_down')).toHaveLength(1);
       expect(p.calls.refund.filter((c) => c.paymentId === 'pay_second_down')).toHaveLength(1);
@@ -475,8 +475,8 @@ describe('Payments adversarial audit', () => {
       await adminCancel(o.id); await __waitForBackgroundWork();
       expect((await db(o.id)).paymentStatus).toBe('REFUNDED');
       const rzp2 = `rzp_order_sim_late2_${randomUUID().slice(0, 8)}`;
-      await prisma.payment.create({ data: { orderId: o.id, razorpayOrderId: rzp2, amount: 220, status: 'PENDING' } });
-      await webhook(captured(rzp2, 22000, 'pay_after_refund'));
+      await prisma.payment.create({ data: { orderId: o.id, razorpayOrderId: rzp2, amount: 205, status: 'PENDING' } });
+      await webhook(captured(rzp2, 20500, 'pay_after_refund'));
       await __waitForBackgroundWork();
       expect(P.sim.refunds.get('pay_after_refund')).toHaveLength(1);
       expect(P.sim.refunds.get(o.payId)).toHaveLength(1);
@@ -489,10 +489,10 @@ describe('Payments adversarial audit', () => {
 
     test('PROVE: another payment id on the SAME Razorpay order (no row for it) is refunded by its own id once (amount taken from the signed webhook)', async () => {
       const o = await placePaid();
-      const w1 = await webhook(captured(o.rzp, 22000, 'pay_same_order_b'));
+      const w1 = await webhook(captured(o.rzp, 20500, 'pay_same_order_b'));
       expect(w1.body.code).toBe('DUPLICATE_PAYMENT');
       await __waitForBackgroundWork();
-      await webhook(captured(o.rzp, 22000, 'pay_same_order_b')); await __waitForBackgroundWork();
+      await webhook(captured(o.rzp, 20500, 'pay_same_order_b')); await __waitForBackgroundWork();
       expect(P.sim.refunds.get('pay_same_order_b')).toHaveLength(1);
       expect(P.sim.refunds.get(o.payId) ?? []).toHaveLength(0);
       expect(await db(o.id)).toMatchObject({ paymentStatus: 'PAID', status: 'PLACED' });
@@ -568,7 +568,7 @@ describe('Payments adversarial audit', () => {
     const PRICES = [0.1, 0.2, 0.3, 0.7, 1.15, 7.07, 19.99, 33.33, 49.95, 99.99, 149.95, 12.5, 0.01, 8.2, 16.4, 10.1];
     beforeAll(async () => {
       for (let i = 0; i < PRICES.length; i++) {
-        await prisma.menuItem.create({ data: { id: `adv-p-${i}`, vendorId: 'ven-1', name: `adv-price-${i}`, price: PRICES[i], category: 'adv', description: '', imageUrl: '' } });
+        await prisma.menuItem.create({ data: { id: `adv-p-${i}`, vendorId: 'ven-1', name: `adv-price-${i}`, price: PRICES[i], vendorPrice: PRICES[i], category: 'adv', description: '', imageUrl: '' } });
       }
     });
 
@@ -584,43 +584,43 @@ describe('Payments adversarial audit', () => {
         for (const v of [r.calculatedSubtotal, r.calculatedDiscount, r.calculatedTotalAmount]) expect(v).toBe(Math.round(v * 100) / 100);
         expect(Math.round(r.calculatedSubtotal * 100)).toBe(subP);
         const discP = Math.round(r.calculatedDiscount * 100);
-        expect(Math.round(r.calculatedTotalAmount * 100)).toBe(subP + 4000 - discP);
+        expect(Math.round(r.calculatedTotalAmount * 100)).toBe(subP + 2500 - discP);
         const expectedDisc = coupon === 'VITFIRST' ? (subP >= 10000 ? Math.min(Math.round(subP * 0.2), 5000) : 0)
           : coupon === 'KRAVEO20' ? (subP >= 8000 ? 2000 : 0) : coupon === 'KRAVEO50' ? (subP >= 15000 ? 5000 : 0) : 0;
         if (expectedDisc !== discP) thresholdDisagreements++; // reported by the BUG threshold test below
-        expect(r.calculatedTotalAmount).toBeGreaterThanOrEqual(40 - 50 + 100 / 100); // never below Rs 1 with positive prices
+        expect(r.calculatedTotalAmount).toBeGreaterThanOrEqual(25 - 50 + 100 / 100); // never below Rs 1 with positive prices
       }
       expect(thresholdDisagreements).toBeGreaterThanOrEqual(0);
     });
 
     test('PROVE: coupon threshold is checked on the rounded subtotal, so a cart worth exactly Rs 100.00 gets VITFIRST (0.7x14 + 8.2x11 = 99.99999999999999)', async () => {
-      await prisma.menuItem.create({ data: { id: 'adv-p-thr1', vendorId: 'ven-1', name: 'adv-thr-0.7', price: 0.7, category: 'adv', description: '', imageUrl: '' } });
-      await prisma.menuItem.create({ data: { id: 'adv-p-thr2', vendorId: 'ven-1', name: 'adv-thr-8.2', price: 8.2, category: 'adv', description: '', imageUrl: '' } });
+      await prisma.menuItem.create({ data: { id: 'adv-p-thr1', vendorId: 'ven-1', name: 'adv-thr-0.7', price: 0.7, vendorPrice: 0.7, category: 'adv', description: '', imageUrl: '' } });
+      await prisma.menuItem.create({ data: { id: 'adv-p-thr2', vendorId: 'ven-1', name: 'adv-thr-8.2', price: 8.2, vendorPrice: 8.2, category: 'adv', description: '', imageUrl: '' } });
       const r = await validateAndCalculateOrder('ven-1', [{ itemId: 'adv-p-thr1', quantity: 14 }, { itemId: 'adv-p-thr2', quantity: 11 }], 'VITFIRST');
       expect(r.calculatedSubtotal).toBe(100);
       expect(r.calculatedDiscount).toBe(20); // was 0 before the fix (threshold compared on 99.99999999999999)
     });
 
-    test('PROVE: end to end 33.33 x 7 with VITFIRST: stored total, Razorpay order amount, captured amount and refund amount are all the same integer paise (22665)', async () => {
+    test('PROVE: end to end 33.33 x 7 with VITFIRST: stored total, Razorpay order amount, captured amount and refund amount are all the same integer paise (21165)', async () => {
       // VITFIRST is for a first order only: use a brand-new customer (the shared student has many earlier orders).
       const vit = { id: 'usr-adv-vit', phone: '+91 9999800777' };
       await prisma.user.upsert({ where: { id: vit.id }, update: {}, create: { id: vit.id, name: 'Vit First', phone: vit.phone, role: 'STUDENT', hostelBlock: 'Block 3' } });
       const tVit = getStudentToken(vit.id, vit.phone);
       const placed = await place(tVit, { items: [{ itemId: 'adv-p-7', quantity: 7 }], couponCode: 'VITFIRST' });
       expect(placed.status).toBe(201);
-      expect(placed.body.data.totalAmount).toBe(226.65); // 233.31 + 40 - 46.66
+      expect(placed.body.data.totalAmount).toBe(211.65); // 233.31 + 25 - 46.66
       const id = placed.body.data.id;
       const pay = await createPayment(id, tVit);
-      expect(pay.body.amountInPaise).toBe(22665);
-      expect(P.calls.createOrder[0].amountPaise).toBe(22665);
+      expect(pay.body.amountInPaise).toBe(21165);
+      expect(P.calls.createOrder[0].amountPaise).toBe(21165);
       expect(Number.isInteger(P.calls.createOrder[0].amountPaise)).toBe(true);
       expect((await webhook(captured(pay.body.razorpayOrderId, 22664, 'pay_amt'))).body.status).toBe('rejected'); // one paise short
       expect((await db(id)).paymentStatus).not.toBe('PAID');
-      expect((await webhook(captured(pay.body.razorpayOrderId, 22665, 'pay_amt'))).body.status).toBe('processed');
+      expect((await webhook(captured(pay.body.razorpayOrderId, 21165, 'pay_amt'))).body.status).toBe('processed');
       expect((await request.post(`/api/orders/${id}/cancel`).set(H(tVit)).send({})).status).toBe(200);
       await __waitForBackgroundWork();
-      expect(P.calls.refund[0].amountPaise).toBe(22665);
-      expect((await db(id)).payments[0].capturedAmountPaise).toBe(22665);
+      expect(P.calls.refund[0].amountPaise).toBe(21165);
+      expect((await db(id)).payments[0].capturedAmountPaise).toBe(21165);
       expect((await db(id)).couponCode).toBe('VITFIRST');
     });
 
@@ -637,7 +637,7 @@ describe('Payments adversarial audit', () => {
     test('PROVE: the client cannot influence totals: extra price/total/discount fields ignored; fractional, string, negative, zero, huge, NaN quantities and 31 lines are refused', async () => {
       const ok = await place(tStudent, { totalAmount: 1, price: 1, discount: 999, deliveryFee: 0, items: [{ itemId: 'item-1', quantity: 1, price: 0.01 }] });
       expect(ok.status).toBe(201);
-      expect(ok.body.data.totalAmount).toBe(220);
+      expect(ok.body.data.totalAmount).toBe(205);
       await prisma.order.updateMany({ where: { status: 'PLACED', paymentStatus: 'PENDING' }, data: { status: 'CANCELLED' } });
       for (const q of [1.5, '2', -1, 0, 21, 1e9, null, Number.MAX_SAFE_INTEGER]) {
         const r = await place(tStudent, { items: [{ itemId: 'item-1', quantity: q }] });
@@ -654,10 +654,10 @@ describe('Payments adversarial audit', () => {
       await prisma.menuItem.update({ where: { id: 'item-1' }, data: { price: 999 } });
       try {
         const pay = await createPayment(id);
-        expect(pay.body.amountInPaise).toBe(22000);
-        expect((await webhook(captured(pay.body.razorpayOrderId, 22000, 'pay_pc'))).body.status).toBe('processed');
+        expect(pay.body.amountInPaise).toBe(20500);
+        expect((await webhook(captured(pay.body.razorpayOrderId, 20500, 'pay_pc'))).body.status).toBe('processed');
         await adminCancel(id); await __waitForBackgroundWork();
-        expect(P.calls.refund[0].amountPaise).toBe(22000);
+        expect(P.calls.refund[0].amountPaise).toBe(20500);
       } finally {
         await prisma.menuItem.update({ where: { id: 'item-1' }, data: { price: 180 } });
       }
@@ -676,7 +676,7 @@ describe('Payments adversarial audit', () => {
       const red = await request.post('/api/coupons/redeem-coins').set(H(tStudent)).send({});
       expect([red.status, red.body.remainingCoins]).toEqual([200, 70]);
       const first = await place(tStudent, { couponCode: ' kraveo20 ' });
-      expect([first.status, first.body.data.discount, first.body.data.totalAmount]).toEqual([201, 20, 200]);
+      expect([first.status, first.body.data.discount, first.body.data.totalAmount]).toEqual([201, 20, 185]);
       expect((await db(first.body.data.id)).couponCode).toBe('KRAVEO20');
       // (Bug hunt BE1-01: an abandoned unpaid checkout is replaced by the next one; an order whose payment was just opened is "live" and keeps its code.)
       expect((await createPayment(first.body.data.id)).status).toBe(200);
@@ -754,13 +754,13 @@ describe('Payments adversarial audit', () => {
 
     test('PROVE: real HMAC over the exact raw bytes is accepted; any change to the bytes (whitespace, key order, one char) or a signature of another body is refused and nothing changes', async () => {
       const o = await mkOrder();
-      const body = JSON.stringify(captured(o.rzp, 22000, 'pay_hm1'));
-      const spaced = JSON.stringify(captured(o.rzp, 22000, 'pay_hm1'), null, 2);
+      const body = JSON.stringify(captured(o.rzp, 20500, 'pay_hm1'));
+      const spaced = JSON.stringify(captured(o.rzp, 20500, 'pay_hm1'), null, 2);
       expect((await signedPost(spaced, hmac(SECRET, body))).status).toBe(400); // signed the compact form, sent a re-serialised one
       expect((await signedPost(body, hmac('wrong_secret', body))).status).toBe(400);
       expect((await signedPost(body, hmac(SECRET, body).toUpperCase())).status).toBe(400);
       expect((await signedPost(body, hmac(SECRET, body).slice(0, 63))).status).toBe(400);
-      expect((await signedPost(body.replace('22000', '22001'), hmac(SECRET, body))).status).toBe(400);
+      expect((await signedPost(body.replace('20500', '20501'), hmac(SECRET, body))).status).toBe(400);
       expect((await db(o.id)).paymentStatus).toBe('PENDING');
       const good = await signedPost(body, hmac(SECRET, body));
       expect(good.status).toBe(200);
@@ -770,7 +770,7 @@ describe('Payments adversarial audit', () => {
 
     test('PROVE: missing / empty / non-string signature header -> 400, and a non-JSON content type cannot slip past the raw-body check', async () => {
       const o = await mkOrder();
-      const body = JSON.stringify(captured(o.rzp, 22000, 'pay_hm2'));
+      const body = JSON.stringify(captured(o.rzp, 20500, 'pay_hm2'));
       expect((await request.post('/api/payments/webhook').set('content-type', 'application/json').send(body)).status).toBe(400);
       expect((await signedPost(body, '')).status).toBe(400);
       // no JSON parsing -> no raw body: the signature of the real body does not match the fallback bytes
@@ -841,9 +841,9 @@ describe('Payments adversarial audit', () => {
     test('PROVE: webhooks for unknown, foreign or nonexistent orders change nothing and never 500; a signed foreign-customer payment cannot be claimed via verify', async () => {
       const mine = await mkOrder();
       for (const body of [
-        captured('rzp_order_sim_doesnotexist', 22000, 'pay_f1'),
-        captured('', 22000, 'pay_f2'),
-        { event: 'payment.captured', payload: { payment: { entity: { id: 'pay_f3', amount: 22000, notes: { orderId: 'no-such-order' } } } } },
+        captured('rzp_order_sim_doesnotexist', 20500, 'pay_f1'),
+        captured('', 20500, 'pay_f2'),
+        { event: 'payment.captured', payload: { payment: { entity: { id: 'pay_f3', amount: 20500, notes: { orderId: 'no-such-order' } } } } },
         { event: 'payment.captured', payload: {} }, { event: 'order.paid' }, {}, { event: 'refund.processed', payload: { refund: { entity: { id: 'rfnd_x' } } } },
       ]) {
         const r = await webhook(body);
@@ -858,7 +858,7 @@ describe('Payments adversarial audit', () => {
       await adminCancel(o.id); await __waitForBackgroundWork();
       const before = await db(o.id);
       for (let i = 0; i < 4; i++) {
-        await webhook(captured(o.rzp, 22000, o.payId)); await webhook(captured(o.rzp, 22000, o.payId, {}, 'order.paid')); await verify(o.rzp, o.payId);
+        await webhook(captured(o.rzp, 20500, o.payId)); await webhook(captured(o.rzp, 20500, o.payId, {}, 'order.paid')); await verify(o.rzp, o.payId);
       }
       await __waitForBackgroundWork();
       const after = await db(o.id);
@@ -866,14 +866,14 @@ describe('Payments adversarial audit', () => {
       expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
       expect(P.calls.refund).toHaveLength(1);
       // a replay carrying a different payment id is the duplicate path: flagged, state untouched
-      const r = await webhook(captured(o.rzp, 22000, 'pay_other_id'));
+      const r = await webhook(captured(o.rzp, 20500, 'pay_other_id'));
       expect(r.body.code).toBe('DUPLICATE_PAYMENT');
       expect((await db(o.id)).paymentStatus).toBe('REFUNDED');
     });
 
     test('PROVE: a webhook for a payment whose Kraveo order id is unknown is recorded in the admin audit log (not silently dropped)', async () => {
       await prisma.adminAuditLog.deleteMany({ where: { action: 'PAYMENT_UNKNOWN' } });
-      await webhook(captured('order_never_seen_1', 22000, 'pay_unknown_1'));
+      await webhook(captured('order_never_seen_1', 20500, 'pay_unknown_1'));
       const rows = await prisma.adminAuditLog.findMany({ where: { action: 'PAYMENT_UNKNOWN' } });
       expect(rows.length).toBe(1);
     });
@@ -930,7 +930,7 @@ describe('Payments adversarial audit', () => {
       expect((await setStatus(o.id, 'DELIVERED', tAdmin)).status).toBe(400);
       expect((await request.post(`/api/orders/${o.id}/verify-gate-otp`).set(H(tRider)).send({})).status).toBe(400);
       await runOrderMaintenance(minutesFromNow(600));
-      await webhook(captured(o.rzp, 22000, o.payId)); await retryRefund(o.id);
+      await webhook(captured(o.rzp, 20500, o.payId)); await retryRefund(o.id);
       await request.patch(`/api/orders/${o.id}/reassign`).set(H(tAdmin)).send({ driverId: 'usr-4' });
       expect((await db(o.id)).status).toBe('ARRIVED_AT_GATE');
       const otp = (await db(o.id)).otpCode!;
@@ -1002,7 +1002,7 @@ describe('Payments adversarial audit', () => {
       for (let i = 0; i < 15; i++) {
         const o = await mkOrder({ ageMin: 20 });
         const payId = `pay_race_${i}_${randomUUID().slice(0, 6)}`;
-        await Promise.all([runOrderMaintenance(), verify(o.rzp, payId), webhook(captured(o.rzp, 22000, payId)), runOrderMaintenance()]);
+        await Promise.all([runOrderMaintenance(), verify(o.rzp, payId), webhook(captured(o.rzp, 20500, payId)), runOrderMaintenance()]);
         await __waitForBackgroundWork();
         await runOrderMaintenance(minutesFromNow(3));
         const r = await db(o.id);
@@ -1238,7 +1238,7 @@ describe('Payments adversarial audit', () => {
     };
     const fetchedIds = () => new Set(P.calls.orderPayments);
     /** Many unpaid orders at once (the API allows 3 unpaid orders per customer, so these are written straight to the database). */
-    const bulkUnpaid = (n: number) => Promise.all(Array.from({ length: n }, async () => { const o = await mkOrder({ ageMin: 1 }); return { id: o.id, rzp: o.rzp, paise: 22000 }; }));
+    const bulkUnpaid = (n: number) => Promise.all(Array.from({ length: n }, async () => { const o = await mkOrder({ ageMin: 1 }); return { id: o.id, rzp: o.rzp, paise: 20500 }; }));
 
     test('PROVE: lost webhook + dead app: the job finds the captured payment at Razorpay and marks the order paid (once, with the usual side effects)', async () => {
       const o = await placeUnpaid();
@@ -1477,7 +1477,7 @@ describe('Payments adversarial audit', () => {
 
     test('PROVE: GET /admin/payments/reconcile lists captured payments with no PAID/REFUNDED row (orphans), read-only; admin only', async () => {
       const accounted = await placePaid();
-      P.sim.addPayment({ id: accounted.payId, orderId: accounted.rzp, amountPaise: 22000, createdAtSec: sec(60_000) });
+      P.sim.addPayment({ id: accounted.payId, orderId: accounted.rzp, amountPaise: 20500, createdAtSec: sec(60_000) });
       const unknown = P.sim.addPayment({ id: 'pay_orphan_unknown', orderId: 'order_not_ours', amountPaise: 1234, createdAtSec: sec(120_000) });
       const lost = await placeUnpaid();
       P.sim.addPayment({ id: 'pay_orphan_lost', orderId: lost.rzp, amountPaise: lost.paise, createdAtSec: sec(180_000) });
@@ -1539,7 +1539,7 @@ describe('Payments adversarial audit', () => {
   // 7b. REFUND WEBHOOKS (refund.processed / refund.failed)
   // =============================================================================================
   describe('7b. refund.processed / refund.failed webhooks', () => {
-    const refundEvent = (event: string, paymentId: string, refundId: string, amount = 22000, extra: Record<string, unknown> = {}) => ({
+    const refundEvent = (event: string, paymentId: string, refundId: string, amount = 20500, extra: Record<string, unknown> = {}) => ({
       event, payload: { refund: { entity: { id: refundId, payment_id: paymentId, amount, status: event === 'refund.failed' ? 'failed' : 'processed', ...extra } } },
     });
     const pendingRefundOrder = async () => {
@@ -1567,7 +1567,7 @@ describe('Payments adversarial audit', () => {
 
     test('PROVE: refund.failed marks the refund FAILED with the provider reason (needs-attention shows it), the job does not repeat it blindly, admin retry-refund refunds again', async () => {
       const o = await pendingRefundOrder();
-      const w = await webhook(refundEvent('refund.failed', o.payId, 'rfnd_bounce', 22000, { error_description: 'Refund rejected by the customer bank' }));
+      const w = await webhook(refundEvent('refund.failed', o.payId, 'rfnd_bounce', 20500, { error_description: 'Refund rejected by the customer bank' }));
       expect([w.status, w.body.status]).toEqual([200, 'processed']);
       const row = await db(o.id);
       expect(row).toMatchObject({ paymentStatus: 'PAID', refundStatus: 'FAILED', refundLeaseUntil: null });
@@ -1592,7 +1592,7 @@ describe('Payments adversarial audit', () => {
       const first = P.sim.refunds.get(o.payId)![0];
       expect(await db(o.id)).toMatchObject({ paymentStatus: 'REFUNDED', refundStatus: 'DONE' });
       first.status = 'failed'; // what Razorpay's refund list shows after the bank bounced it
-      const w = await webhook(refundEvent('refund.failed', o.payId, first.id, 22000, { error_description: 'Account closed' }));
+      const w = await webhook(refundEvent('refund.failed', o.payId, first.id, 20500, { error_description: 'Account closed' }));
       expect(w.body.status).toBe('processed');
       const row = await db(o.id);
       expect(row).toMatchObject({ paymentStatus: 'PAID', refundStatus: 'FAILED' });
@@ -1607,10 +1607,10 @@ describe('Payments adversarial audit', () => {
     test('PROVE: a refund.failed for an extra (duplicate) payment puts it back on the refund list; unknown payment / event / missing ids are answered 200 and ignored; bad signature 400', async () => {
       const o = await placePaid();
       const dupRzp = `rzp_order_sim_dup_ev_${randomUUID().slice(0, 8)}`;
-      await prisma.payment.create({ data: { orderId: o.id, razorpayOrderId: dupRzp, amount: 220, status: 'PENDING' } });
-      await webhook(captured(dupRzp, 22000, 'pay_dup_bounce')); await __waitForBackgroundWork();
+      await prisma.payment.create({ data: { orderId: o.id, razorpayOrderId: dupRzp, amount: 205, status: 'PENDING' } });
+      await webhook(captured(dupRzp, 20500, 'pay_dup_bounce')); await __waitForBackgroundWork();
       const refundId = P.sim.refunds.get('pay_dup_bounce')![0].id;
-      const w = await webhook(refundEvent('refund.failed', 'pay_dup_bounce', refundId, 22000, { error_description: 'Bank said no' }));
+      const w = await webhook(refundEvent('refund.failed', 'pay_dup_bounce', refundId, 20500, { error_description: 'Bank said no' }));
       expect(w.body.status).toBe('processed');
       const extra = (await db(o.id)).payments.find((x) => x.razorpayOrderId === dupRzp)!;
       expect(extra).toMatchObject({ status: 'PENDING', razorpayRefundId: null });
@@ -1792,8 +1792,8 @@ describe('Payments adversarial audit', () => {
       const sentPay = new Set<string>();
       for (const o of orders) {
         const menu: [string, Task][] = [
-          ['pay', () => verify(o.rzp, o.pay)], ['pay', () => webhook(captured(o.rzp, 22000, o.pay))],
-          ['pay', () => webhook(captured(o.rzp, 22000, o.pay, {}, 'order.paid'))],
+          ['pay', () => verify(o.rzp, o.pay)], ['pay', () => webhook(captured(o.rzp, 20500, o.pay))],
+          ['pay', () => webhook(captured(o.rzp, 20500, o.pay, {}, 'order.paid'))],
           ['x', () => customerCancel(o.id)], ['x', () => vendorReject(o.id)], ['x', () => setStatus(o.id, 'ACCEPTED', tVendor)], ['x', () => adminCancel(o.id)],
         ];
         const k = 3 + Math.floor(rnd() * 4);
@@ -1818,7 +1818,7 @@ describe('Payments adversarial audit', () => {
         if (!sentPay.has(o.id)) { expect({ ctx, refunds: refunds.length }).toEqual({ ctx, refunds: 0 }); expect(r.paymentStatus).not.toBe('PAID'); summary.unpaid++; continue; }
         if (r.status === 'CANCELLED') {
           expect({ ctx, pay: r.paymentStatus }).toEqual({ ctx, pay: 'REFUNDED' });
-          expect({ ctx, refunds: refunds.length, paise: refunds[0]?.amountPaise }).toEqual({ ctx, refunds: 1, paise: 22000 });
+          expect({ ctx, refunds: refunds.length, paise: refunds[0]?.amountPaise }).toEqual({ ctx, refunds: 1, paise: 20500 });
           expect(r.refundStatus).toBe('DONE'); summary.refunded++;
         } else {
           expect({ ctx, pay: r.paymentStatus }).toEqual({ ctx, pay: 'PAID' });

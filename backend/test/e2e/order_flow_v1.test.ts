@@ -230,7 +230,7 @@ describe('Order flow v1', () => {
       const id = placed.body.data.id;
       const v0 = placed.body.data;
       capture('customer_view_PLACED_unpaid', v0);
-      expect(v0).toMatchObject({ status: 'PLACED', paymentStatus: 'PENDING', subtotal: 180, deliveryFee: 25, taxAndPackaging: 15, discount: 0, totalAmount: 220, otpCode: null, driver: null });
+      expect(v0).toMatchObject({ status: 'PLACED', paymentStatus: 'PENDING', subtotal: 180, deliveryFee: 25, taxAndPackaging: 0, discount: 0, totalAmount: 205, otpCode: null, driver: null });
       expect(v0.customer).toEqual({ id: STUDENT.id, name: 'Rahul Sharma', phone: STUDENT.phone, hostelBlock: 'Block 3' });
       expect(Date.parse(v0.payBy) - Date.parse(v0.createdAt)).toBe(15 * 60_000);
       expect(await join(cust, `order_${id}`)).toBe(true);
@@ -330,7 +330,7 @@ describe('Order flow v1', () => {
       const adminView = (await getOrder(id, tAdmin)).body.data;
       capture('admin_view', adminView);
       expect(adminView.otpCode).toBe(otp);
-      expect(adminView.payments[0]).toMatchObject({ razorpayOrderId: pay.body.razorpayOrderId, status: 'PAID', capturedAmountPaise: 22000 });
+      expect(adminView.payments[0]).toMatchObject({ razorpayOrderId: pay.body.razorpayOrderId, status: 'PAID', capturedAmountPaise: 20500 });
       for (const t of [tStudent, tVendor, tRider]) expect(JSON.stringify((await getOrder(id, t)).body)).not.toMatch(/razorpay|"payments"/);
 
       // 7. Delivered with the code the customer reads out.
@@ -390,7 +390,7 @@ describe('Order flow v1', () => {
     test('webhook before verify', async () => {
       const { id, rzp, log } = await setup();
       const payId = 'pay_wh_first_1';
-      expect((await webhook(captured(rzp, 22000, payId))).body.status).toBe('processed');
+      expect((await webhook(captured(rzp, 20500, payId))).body.status).toBe('processed');
       const v = await verify(rzp, payId);
       expect(v.status).toBe(200);
       expect(v.body.message).toMatch(/already verified/);
@@ -398,7 +398,7 @@ describe('Order flow v1', () => {
       expect(alertsFor(log, id)).toBe(1);
       const o = await db(id);
       expect(o.paymentStatus).toBe('PAID');
-      expect(o.payments[0]).toMatchObject({ status: 'PAID', razorpayPaymentId: payId, capturedAmountPaise: 22000 });
+      expect(o.payments[0]).toMatchObject({ status: 'PAID', razorpayPaymentId: payId, capturedAmountPaise: 20500 });
     });
 
     test('verify before webhook, then duplicate webhooks', async () => {
@@ -406,7 +406,7 @@ describe('Order flow v1', () => {
       const payId = 'pay_vf_first_1';
       expect((await verify(rzp, payId)).status).toBe(200);
       const paidAt = (await db(id)).paidAt;
-      for (let i = 0; i < 3; i++) expect((await webhook(captured(rzp, 22000, payId))).body.status).toBe('processed');
+      for (let i = 0; i < 3; i++) expect((await webhook(captured(rzp, 20500, payId))).body.status).toBe('processed');
       await sleep(200);
       expect(alertsFor(log, id)).toBe(1);
       expect((await db(id)).paidAt).toEqual(paidAt);
@@ -416,7 +416,7 @@ describe('Order flow v1', () => {
       const { id, rzp, log } = await setup();
       const payId = 'pay_race_1';
       const results = await Promise.all([
-        webhook(captured(rzp, 22000, payId)), verify(rzp, payId), webhook(captured(rzp, 22000, payId)), verify(rzp, payId), webhook(captured(rzp, 22000, payId)),
+        webhook(captured(rzp, 20500, payId)), verify(rzp, payId), webhook(captured(rzp, 20500, payId)), verify(rzp, payId), webhook(captured(rzp, 20500, payId)),
       ]);
       expect(results.every((r) => r.status === 200)).toBe(true);
       await sleep(300);
@@ -428,7 +428,7 @@ describe('Order flow v1', () => {
 
     test('payment.failed marks FAILED; a retry on the same Razorpay order still pays', async () => {
       const { id, rzp } = await setup();
-      const failed = await webhook({ event: 'payment.failed', payload: { payment: { entity: { id: 'pay_f1', order_id: rzp, amount: 22000 } } } });
+      const failed = await webhook({ event: 'payment.failed', payload: { payment: { entity: { id: 'pay_f1', order_id: rzp, amount: 20500 } } } });
       expect(failed.status).toBe(200);
       expect((await db(id)).paymentStatus).toBe('FAILED');
       const again = await createPayment(id);
@@ -467,7 +467,7 @@ describe('Order flow v1', () => {
     test('webhook whose notes name a different order than the payment record is rejected', async () => {
       const a = await place();
       const pay = await createPayment(a.body.data.id);
-      const body = captured(pay.body.razorpayOrderId, 22000);
+      const body = captured(pay.body.razorpayOrderId, 20500);
       (body.payload.payment.entity as any).notes = { orderId: 'someone-elses-order' };
       expect((await webhook(body)).body.code).toBe('ORDER_MISMATCH');
       expect((await db(a.body.data.id)).paymentStatus).toBe('PENDING');
@@ -524,7 +524,7 @@ describe('Order flow v1', () => {
       expect(cancelled.status).toBe(200);
       expect(cancelled.body.data).toMatchObject({ status: 'CANCELLED', cancelledBy: 'CUSTOMER', paymentStatus: 'PENDING' });
 
-      const res = await webhook(captured(pay.body.razorpayOrderId, 22000, 'pay_late_1'));
+      const res = await webhook(captured(pay.body.razorpayOrderId, 20500, 'pay_late_1'));
       expect(res.body.status).toBe('processed');
       await __waitForBackgroundWork();
       const o = await db(id);
@@ -540,7 +540,7 @@ describe('Order flow v1', () => {
       expect(log.order_updated.filter((a) => a.id === id)).toHaveLength(0);
       expect((await getOrder(id, tVendor)).status).toBe(404);
       // A duplicate webhook does not refund twice.
-      await webhook(captured(pay.body.razorpayOrderId, 22000, 'pay_late_1'));
+      await webhook(captured(pay.body.razorpayOrderId, 20500, 'pay_late_1'));
       await __waitForBackgroundWork();
       expect(await refundsOf(id)).toHaveLength(1);
     });
@@ -601,13 +601,13 @@ describe('Order flow v1', () => {
       expect(res.every((r) => r.status === 200)).toBe(true);
       expect(new Set(res.map((r) => r.body.razorpayOrderId)).size).toBe(1);
       expect(await prisma.payment.count({ where: { orderId: placed.body.data.id } })).toBe(1);
-      expect(res[0].body.amount).toBe(22000);
+      expect(res[0].body.amount).toBe(20500);
     });
 
     test('app killed after paying: the webhook alone completes it and the active list shows it', async () => {
       const placed = await place();
       const pay = await createPayment(placed.body.data.id);
-      await webhook(captured(pay.body.razorpayOrderId, 22000));
+      await webhook(captured(pay.body.razorpayOrderId, 20500));
       const list = await request.get('/api/orders?scope=active').set(H(tStudent));
       expect(list.body.data.find((o: any) => o.id === placed.body.data.id)).toMatchObject({ paymentStatus: 'PAID', status: 'PLACED' });
       expect((await createPayment(placed.body.data.id)).body.code).toBe('ALREADY_PAID');
@@ -616,7 +616,7 @@ describe('Order flow v1', () => {
     test('the server ignores client prices, statuses and ids; unknown drop points are refused', async () => {
       const r = await place(tStudent, { totalAmount: 1, status: 'DELIVERED', paymentStatus: 'PAID', id: 'evil-id', customerId: STUDENT2.id });
       expect(r.status).toBe(201);
-      expect(r.body.data).toMatchObject({ totalAmount: 220, status: 'PLACED', paymentStatus: 'PENDING' });
+      expect(r.body.data).toMatchObject({ totalAmount: 205, status: 'PLACED', paymentStatus: 'PENDING' });
       expect(r.body.data.id).not.toBe('evil-id');
       expect(r.body.data.customer.id).toBe(STUDENT.id);
       expect((await place(tStudent, { dropoffHostel: 'Mars' })).body.field).toBe('dropoffHostel');
@@ -1076,7 +1076,7 @@ describe('Order flow v1', () => {
         const placed = await place();
         const id = placed.body.data.id;
         const pay = await createPayment(id);
-        await Promise.all([runOrderMaintenance(minutesFromNow(16)), webhook(captured(pay.body.razorpayOrderId, 22000))]);
+        await Promise.all([runOrderMaintenance(minutesFromNow(16)), webhook(captured(pay.body.razorpayOrderId, 20500))]);
         await __waitForBackgroundWork();
         const o = await db(id);
         if (o.status === 'CANCELLED') {

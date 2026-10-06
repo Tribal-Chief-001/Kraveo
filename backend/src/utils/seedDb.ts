@@ -318,12 +318,13 @@ async function main() {
   // 4. Create Menu Items (item-1 to item-7)
   await prisma.menuItem.upsert({
     where: { id: 'item-1' },
-    update: { vendorId: dhaba1.id, name: 'Special Shahi Paneer Thali', price: 180.0, category: 'Thalis', description: 'Paneer, Dal Makhani, 4 Butter Rotis, Rice & Gulab Jamun', imageUrl: 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400', isAvailable: true, isVeg: true, rating: 4.9, ratingCount: 42 },
+    update: { vendorId: dhaba1.id, name: 'Special Shahi Paneer Thali', price: 180.0, vendorPrice: 180.0, category: 'Thalis', description: 'Paneer, Dal Makhani, 4 Butter Rotis, Rice & Gulab Jamun', imageUrl: 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400', isAvailable: true, isVeg: true, rating: 4.9, ratingCount: 42 },
     create: {
       id: 'item-1',
       vendorId: dhaba1.id,
       name: 'Special Shahi Paneer Thali',
       price: 180.0,
+      vendorPrice: 180.0,
       category: 'Thalis',
       description: 'Paneer, Dal Makhani, 4 Butter Rotis, Rice & Gulab Jamun',
       imageUrl: 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400',
@@ -336,12 +337,13 @@ async function main() {
 
   await prisma.menuItem.upsert({
     where: { id: 'item-2' },
-    update: { vendorId: dhaba1.id, name: 'Aloo Pyaz Paratha (2 pcs)', price: 90.0, category: 'Parathas', description: 'Served with fresh curd & white butter', imageUrl: 'https://images.unsplash.com/photo-1626777552726-4a6b54c97e46?w=400', isAvailable: true, isVeg: true, rating: 4.7, ratingCount: 28 },
+    update: { vendorId: dhaba1.id, name: 'Aloo Pyaz Paratha (2 pcs)', price: 90.0, vendorPrice: 90.0, category: 'Parathas', description: 'Served with fresh curd & white butter', imageUrl: 'https://images.unsplash.com/photo-1626777552726-4a6b54c97e46?w=400', isAvailable: true, isVeg: true, rating: 4.7, ratingCount: 28 },
     create: {
       id: 'item-2',
       vendorId: dhaba1.id,
       name: 'Aloo Pyaz Paratha (2 pcs)',
       price: 90.0,
+      vendorPrice: 90.0,
       category: 'Parathas',
       description: 'Served with fresh curd & white butter',
       imageUrl: 'https://images.unsplash.com/photo-1626777552726-4a6b54c97e46?w=400',
@@ -354,12 +356,13 @@ async function main() {
 
   await prisma.menuItem.upsert({
     where: { id: 'item-3' },
-    update: { vendorId: dhaba1.id, name: 'Kulhad Sweet Lassi', price: 50.0, category: 'Beverages', description: 'Chilled thick creamy lassi in authentic earthen kulhad', imageUrl: 'https://images.unsplash.com/photo-1571006682855-3bc67776510d?w=400', isAvailable: true, isVeg: true, rating: 4.9, ratingCount: 65 },
+    update: { vendorId: dhaba1.id, name: 'Kulhad Sweet Lassi', price: 50.0, vendorPrice: 50.0, category: 'Beverages', description: 'Chilled thick creamy lassi in authentic earthen kulhad', imageUrl: 'https://images.unsplash.com/photo-1571006682855-3bc67776510d?w=400', isAvailable: true, isVeg: true, rating: 4.9, ratingCount: 65 },
     create: {
       id: 'item-3',
       vendorId: dhaba1.id,
       name: 'Kulhad Sweet Lassi',
       price: 50.0,
+      vendorPrice: 50.0,
       category: 'Beverages',
       description: 'Chilled thick creamy lassi in authentic earthen kulhad',
       imageUrl: 'https://images.unsplash.com/photo-1571006682855-3bc67776510d?w=400',
@@ -372,12 +375,13 @@ async function main() {
 
   await prisma.menuItem.upsert({
     where: { id: 'item-4' },
-    update: { vendorId: dhaba2.id, name: 'Cheese Butter Cheese Maggi', price: 70.0, category: 'Fast Food', description: 'Double cheese load with crispy onions and butter', imageUrl: 'https://images.unsplash.com/photo-1612929633738-8fe44f7ec841?w=400', isAvailable: true, isVeg: true, rating: 4.8, ratingCount: 50 },
+    update: { vendorId: dhaba2.id, name: 'Cheese Butter Cheese Maggi', price: 70.0, vendorPrice: 70.0, category: 'Fast Food', description: 'Double cheese load with crispy onions and butter', imageUrl: 'https://images.unsplash.com/photo-1612929633738-8fe44f7ec841?w=400', isAvailable: true, isVeg: true, rating: 4.8, ratingCount: 50 },
     create: {
       id: 'item-4',
       vendorId: dhaba2.id,
       name: 'Cheese Butter Cheese Maggi',
       price: 70.0,
+      vendorPrice: 70.0,
       category: 'Fast Food',
       description: 'Double cheese load with crispy onions and butter',
       imageUrl: 'https://images.unsplash.com/photo-1612929633738-8fe44f7ec841?w=400',
@@ -390,12 +394,13 @@ async function main() {
 
   await prisma.menuItem.upsert({
     where: { id: 'item-5' },
-    update: { vendorId: dhaba2.id, name: 'Paneer Loaded Sandwich', price: 85.0, category: 'Fast Food', description: 'Grilled sandwich with spiced cottage cheese filling', imageUrl: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af?w=400', isAvailable: true, isVeg: true, rating: 4.5, ratingCount: 30 },
+    update: { vendorId: dhaba2.id, name: 'Paneer Loaded Sandwich', price: 85.0, vendorPrice: 85.0, category: 'Fast Food', description: 'Grilled sandwich with spiced cottage cheese filling', imageUrl: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af?w=400', isAvailable: true, isVeg: true, rating: 4.5, ratingCount: 30 },
     create: {
       id: 'item-5',
       vendorId: dhaba2.id,
       name: 'Paneer Loaded Sandwich',
       price: 85.0,
+      vendorPrice: 85.0,
       category: 'Fast Food',
       description: 'Grilled sandwich with spiced cottage cheese filling',
       imageUrl: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af?w=400',
@@ -408,12 +413,13 @@ async function main() {
 
   await prisma.menuItem.upsert({
     where: { id: 'item-6' },
-    update: { vendorId: dhaba3.id, name: 'Butter Chicken (Half)', price: 260.0, category: 'Main Course', description: 'Rich tomato cream gravy with tender grilled chicken', imageUrl: 'https://images.unsplash.com/photo-1603894584373-5ac82b2ae398?w=400', isAvailable: true, isVeg: false, rating: 4.95, ratingCount: 80 },
+    update: { vendorId: dhaba3.id, name: 'Butter Chicken (Half)', price: 260.0, vendorPrice: 260.0, category: 'Main Course', description: 'Rich tomato cream gravy with tender grilled chicken', imageUrl: 'https://images.unsplash.com/photo-1603894584373-5ac82b2ae398?w=400', isAvailable: true, isVeg: false, rating: 4.95, ratingCount: 80 },
     create: {
       id: 'item-6',
       vendorId: dhaba3.id,
       name: 'Butter Chicken (Half)',
       price: 260.0,
+      vendorPrice: 260.0,
       category: 'Main Course',
       description: 'Rich tomato cream gravy with tender grilled chicken',
       imageUrl: 'https://images.unsplash.com/photo-1603894584373-5ac82b2ae398?w=400',
@@ -426,12 +432,13 @@ async function main() {
 
   await prisma.menuItem.upsert({
     where: { id: 'item-7' },
-    update: { vendorId: dhaba3.id, name: 'Garlic Butter Naan (2 pcs)', price: 60.0, category: 'Breads', description: 'Crispy tandoori naan brushed with garlic & butter', imageUrl: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400', isAvailable: true, isVeg: true, rating: 4.85, ratingCount: 75 },
+    update: { vendorId: dhaba3.id, name: 'Garlic Butter Naan (2 pcs)', price: 60.0, vendorPrice: 60.0, category: 'Breads', description: 'Crispy tandoori naan brushed with garlic & butter', imageUrl: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400', isAvailable: true, isVeg: true, rating: 4.85, ratingCount: 75 },
     create: {
       id: 'item-7',
       vendorId: dhaba3.id,
       name: 'Garlic Butter Naan (2 pcs)',
       price: 60.0,
+      vendorPrice: 60.0,
       category: 'Breads',
       description: 'Crispy tandoori naan brushed with garlic & butter',
       imageUrl: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400',

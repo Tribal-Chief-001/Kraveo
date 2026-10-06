@@ -105,6 +105,20 @@ const RULES: Rule[] = [
   { name: 'DEVICE_WRITE', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => (r.method === 'POST' || r.method === 'DELETE') && /^\/devices$/.test(p), message: 'Too many device updates. Please wait a few minutes.' },
   // A restaurant re-detecting its pin: a few tries (GPS retries, a correction) per hour, not a loop.
   { name: 'VENDOR_LOCATION', scope: 'user', max: 10, windowMs: 60 * MIN, applies: (r, p) => r.method === 'PUT' && /^\/partner\/vendor\/location$/.test(p), message: 'You changed the location too many times. Please try again in an hour.' },
+  // Docs/21: admin catalog and settings writes, and restaurant dish submissions (each one lands in the admin's approval queue).
+  // Generous for real work (bulk editing a menu), but a script or a stuck client loop cannot hammer the database or flood the queue.
+  {
+    name: 'ADMIN_CATALOG_WRITE', scope: 'user', max: 300, windowMs: 10 * MIN,
+    applies: (r, p) => ['POST', 'PATCH', 'PUT', 'DELETE'].includes(r.method) && ((/^\/admin\/catalog(\/|$)/.test(p) && p !== '/admin/catalog/preview' && p !== '/admin/catalog/recalculate') || /^\/admin\/vendors\/[^/]+\/commission$/.test(p)),
+    message: 'Too many catalog changes. Please wait a few minutes.',
+  },
+  { name: 'ADMIN_RECALCULATE', scope: 'user', max: 20, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/catalog/recalculate', message: 'Too many price recalculations. Please wait a few minutes.' },
+  { name: 'ADMIN_SETTINGS_WRITE', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => r.method === 'PUT' && /^\/admin\/settings\/[^/]+$/.test(p), message: 'Too many settings changes. Please wait a few minutes.' },
+  {
+    name: 'VENDOR_CATALOG_WRITE', scope: 'user', max: 60, windowMs: 10 * MIN,
+    applies: (r, p) => (r.method === 'POST' && /^\/vendors\/[^/]+\/items$/.test(p)) || (r.method === 'PATCH' && /^\/vendors\/items\/[^/]+$/.test(p) && r.body?.price !== undefined),
+    message: 'You are changing the menu too fast. Please wait a few minutes.',
+  },
   {
     name: 'AUTH_IP', scope: 'ip', max: 60, windowMs: MIN,
     applies: (r, p) => r.method === 'POST' && ['/auth/google', '/auth/partner-login', '/auth/admin-login', '/auth/partner-signup'].includes(p),

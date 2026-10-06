@@ -13,6 +13,9 @@ import { paymentWindowMin, vendorAcceptWindowMin } from '../config/orderFlow';
  *   customer.name  self; vendor first name only; assigned rider; admin; never pool
  *   driver.phone   customer and vendor once assigned; rider self; admin
  *   payment ids    admin only
+ *   money          Docs/21: the restaurant sees ONLY what it earns (its own prices; `subtotal` and `totalAmount` both = vendorSubtotal) and
+ *                  no fee, discount, tax, commission, coupon or customer price. The admin also gets vendorSubtotal, commissionTotal,
+ *                  feeBreakdown and per-item vendorUnitPrice / commissionUnit. Customer and rider views are unchanged.
  */
 export const ORDER_VIEW_INCLUDE = {
   items: true,
@@ -40,6 +43,14 @@ export const isPoolEligible = (o: OrderCore) => o.paymentStatus === 'PAID' && o.
  * A payment that arrived after the order was already cancelled (auto-refunded) never reaches the restaurant.
  */
 export const isVendorVisible = (o: OrderCore) => o.paidAt !== null || (o.paymentStatus === 'PAID' && o.status !== 'CANCELLED');
+
+/**
+ * What the restaurant earns per unit / for the order. Orders created before Docs/21 were backfilled (vendorUnitPrice = price,
+ * vendorSubtotal = subtotal); a row that still has 0 there (written by older code or a hand-made fixture) is read as "no commission".
+ * A real order never has vendorSubtotal 0 with a positive subtotal (dish prices are above 0).
+ */
+export const vendorEarnUnit = (i: { vendorUnitPrice: number; price: number }) => (i.vendorUnitPrice > 0 ? i.vendorUnitPrice : i.price);
+export const vendorEarnTotal = (o: { vendorSubtotal: number; subtotal: number }) => (o.vendorSubtotal > 0 ? o.vendorSubtotal : o.subtotal);
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
 const firstName = (name: string | null | undefined) => (name ?? '').trim().split(/\s+/)[0] || null;
@@ -99,6 +110,11 @@ export function orderView(o: OrderWithRelations, viewerRole: ViewerRole | string
         payBy: payByOf(o),
         acceptBy: acceptByOf(o),
         // Admin-only extras.
+        items: o.items.map((i) => ({ id: i.id, menuItemId: i.menuItemId ?? null, name: i.name, quantity: i.quantity, price: i.price, vendorUnitPrice: vendorEarnUnit(i), commissionUnit: i.commissionUnit })),
+        vendorSubtotal: vendorEarnTotal(o),
+        commissionTotal: o.commissionTotal,
+        feeBreakdown: o.feeBreakdown ?? null,
+        couponCode: o.couponCode ?? null,
         customerId: o.customerId,
         driverId: o.driverId,
         isReviewed: o.isReviewed,
@@ -135,8 +151,14 @@ export function orderView(o: OrderWithRelations, viewerRole: ViewerRole | string
     }
     case 'VENDOR': {
       if (o.vendor.userId !== viewerId || !isVendorVisible(o)) return null;
+      // Docs/21: no fee, tax, discount, commission, coupon or customer price in ANY field. `totalAmount` and `subtotal` are what the restaurant earns.
+      const { deliveryFee: _fee, taxAndPackaging: _tax, discount: _discount, ...base } = buildView(o);
+      const earn = vendorEarnTotal(o);
       return {
-        ...buildView(o),
+        ...base,
+        totalAmount: earn,
+        subtotal: earn,
+        items: o.items.map((i) => ({ id: i.id, menuItemId: i.menuItemId ?? null, name: i.name, quantity: i.quantity, price: vendorEarnUnit(i) })),
         customer: { id: o.customer.id, name: firstName(o.customer.name), phone: null, hostelBlock: null },
         driver: driverOf(o),
         acceptBy: acceptByOf(o),

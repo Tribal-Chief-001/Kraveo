@@ -145,7 +145,7 @@ describe('Partner approval pipeline', () => {
     });
 
     test('customers cannot see it or order from it, but the owner and the admin can', async () => {
-      const item = await prisma.menuItem.create({ data: { vendorId, name: 'Test roll', price: 60, category: 'Rolls', description: '', imageUrl: '' } });
+      const item = await prisma.menuItem.create({ data: { vendorId, name: 'Test roll', price: 60, vendorPrice: 60, category: 'Rolls', description: '', imageUrl: '' } });
       const anon = await request.get('/api/vendors');
       expect(anon.body.data.some((v: any) => v.id === vendorId)).toBe(false);
       expect((await request.get(`/api/vendors/${vendorId}`)).status).toBe(404);
@@ -374,7 +374,7 @@ describe('Partner approval pipeline', () => {
       const vendorId = created.body.profileId;
       __resetLoginLimiter();
       const token = (await request.post('/api/auth/partner-login').send({ phone: '9000000351', password: PW, role: 'VENDOR' })).body.token;
-      const item = await prisma.menuItem.create({ data: { vendorId, name: 'Roll', price: 60, category: 'Rolls', description: '', imageUrl: '' } });
+      const item = await prisma.menuItem.create({ data: { vendorId, name: 'Roll', price: 60, vendorPrice: 60, category: 'Rolls', description: '', imageUrl: '' } });
       const live = await prisma.order.create({ data: { customerId: 'usr-1', vendorId, totalAmount: 80, dropoffHostel: 'Block 1', status: 'PLACED', paymentStatus: 'PAID', items: { create: [{ menuItemId: item.id, name: 'Roll', quantity: 1, price: 60 }] } } });
 
       // Before: customers see it and can order.
