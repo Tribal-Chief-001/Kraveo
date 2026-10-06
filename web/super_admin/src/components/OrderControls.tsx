@@ -98,7 +98,9 @@ export const RiderAssignSelect: React.FC<{ order: Order; riders: DriverPartner[]
         {options.map((rider) => {
           const isCurrent = current?.id === rider.id;
           return (
-            <option key={rider.id} value={rider.id} disabled={isCurrent}>
+            // A rider already on a delivery cannot take a second order (the server refuses it), so it is not selectable.
+            // An offline rider can be chosen: the admin is asked "Assign anyway?" first.
+            <option key={rider.id} value={rider.id} disabled={isCurrent || rider.dutyStatus === 'IN_TRANSIT'}>
               {rider.name}{rider.dutyStatus === 'OFFLINE' ? ' (offline)' : rider.dutyStatus === 'IN_TRANSIT' ? ' (on a delivery)' : ''}{isCurrent ? ' (current)' : ''}
             </option>
           );

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ChevronRight, ClipboardList, MapPin, SearchX, TriangleAlert, UserX } from 'lucide-react';
+import { ChevronRight, ClipboardList, Loader2, MapPin, SearchX, TriangleAlert, UserX } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
 import { inr, timeAgo } from '../lib/tokens';
 import { cancelledByLabel, isCriticalFlag, isTerminal, isUnpaidOpen, orderFlags } from '../lib/orders';
@@ -22,6 +22,11 @@ interface OrdersTableProps {
   onClearQuery?: () => void;
   /** Clock from the app (ticks every 30 s) so time-based flags such as "not accepted" appear without a reload. */
   now: number;
+  /** The server has orders older than the loaded ones. */
+  hasMore?: boolean;
+  loadingOlder?: boolean;
+  /** Fetches the next older page. */
+  onLoadOlder?: () => void;
 }
 
 type Filter = 'ALL' | 'ATTENTION' | 'UNPAID' | OrderStatus;
@@ -71,7 +76,7 @@ const PaymentCell: React.FC<{ order: Order }> = ({ order }) => (
   </div>
 );
 
-export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, attentionIds, onAdvance, onOpenOrder, loading = false, query = '', onClearQuery, now }) => {
+export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, attentionIds, onAdvance, onOpenOrder, loading = false, query = '', onClearQuery, now, hasMore = false, loadingOlder = false, onLoadOlder }) => {
   const [filter, setFilter] = useState<Filter>('ALL');
 
   const needsAttention = useMemo(() => {
@@ -139,7 +144,7 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, attentionIds, 
       </div>
 
       <p className="px-1 text-xs text-kraveo-ink3" aria-live="polite">
-        Showing <span className="font-bold text-kraveo-ink">{filteredOrders.length}</span> of {orders.length} orders{isFiltered ? ' (filtered)' : ''}. Select an order for details and admin actions.
+        Showing <span className="font-bold text-kraveo-ink">{filteredOrders.length}</span> of {orders.length} loaded orders{isFiltered ? ' (filtered)' : ''}{hasMore ? ', newest first. Older orders are not loaded yet' : ''}. Select an order for details and admin actions.
       </p>
 
       {/* Desktop table (1280 px and up) */}
@@ -182,11 +187,11 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, attentionIds, 
                       </span>
                     </button>
                   </td>
-                  <td className={`${cell} min-w-[10rem]`}>
-                    <div className="font-bold text-kraveo-ink">{order.customerName}</div>
-                    <div className="flex items-center gap-1 text-xs text-kraveo-ink2"><MapPin className="h-3 w-3 text-kraveo-ink3" aria-hidden="true" />{order.dropoffHostel}</div>
+                  <td className={`${cell} min-w-[10rem] max-w-[18rem]`}>
+                    <div className="font-bold text-kraveo-ink [overflow-wrap:anywhere]">{order.customerName}</div>
+                    <div className="flex items-center gap-1 text-xs text-kraveo-ink2 [overflow-wrap:anywhere]"><MapPin className="h-3 w-3 shrink-0 text-kraveo-ink3" aria-hidden="true" />{order.dropoffHostel}</div>
                   </td>
-                  <td className={`${cell} font-semibold text-kraveo-ink2`}>{order.vendorName}</td>
+                  <td className={`${cell} font-semibold text-kraveo-ink2 [overflow-wrap:anywhere]`}>{order.vendorName}</td>
                   <td className={cell}><RunnerCell name={order.driverName} unpaid={order.paymentStatus !== 'PAID'} finished={isTerminal(order.status)} /></td>
                   <td className={`k-num ${cell} text-base text-kraveo-ink`}>{inr(order.totalAmount)}</td>
                   <td className={cell}><PaymentCell order={order} /></td>
@@ -237,6 +242,14 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, attentionIds, 
           );
         })}
       </div>
+
+      {hasMore && onLoadOlder && (
+        <div className="flex justify-center pt-1">
+          <button type="button" className="k-btn-ghost" onClick={onLoadOlder} disabled={loadingOlder} aria-busy={loadingOlder}>
+            {loadingOlder ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}Load older orders
+          </button>
+        </div>
+      )}
     </div>
   );
 };

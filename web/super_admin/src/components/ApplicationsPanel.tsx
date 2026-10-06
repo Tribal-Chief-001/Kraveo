@@ -5,6 +5,7 @@ import type { SavedPin } from '../lib/vendorLocation';
 import { VendorLocationEditor } from './VendorLocationEditor';
 import { ApiError, apiService } from '../services/api';
 import { copyText, generatePassword } from '../lib/credentials';
+import { decisionToast } from '../lib/adminMessages';
 import { timeAgo } from '../lib/tokens';
 import { vendorHasRealPin } from '../lib/campus';
 import { ApprovalPill } from './ui/ApprovalPill';
@@ -86,13 +87,8 @@ export const ApplicationsPanel: React.FC<Props> = ({ refreshKey, query = '', onC
     try {
       await apiService.setPartnerStatus(app.kind, app.id, next, reason);
       const who = app.kind === 'VENDOR' ? app.vendor?.name ?? app.name : app.name;
-      const msg: Record<ApprovalStatus, [string, string]> = {
-        APPROVED: ['Approved', `${who} can start working now.`],
-        REJECTED: ['Rejected', `${who} will see your reason in the app.`],
-        SUSPENDED: ['Suspended', `${who} is blocked until you reactivate.`],
-        PENDING: ['Updated', who],
-      };
-      toast.success(msg[next][0], msg[next][1]);
+      const [toastTitle, toastText] = decisionToast(app, next, who);
+      toast.success(toastTitle, toastText);
       await load();
       onChanged();
     } catch (e) {

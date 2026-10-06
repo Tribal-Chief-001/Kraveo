@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { Bike, ChevronRight, Clock, Phone, Plus, SearchX, Star, Users, Wallet, Zap } from 'lucide-react';
-import { DriverPartner } from '../types';
-import { inr } from '../lib/tokens';
+import { Bike, ChevronRight, Moon, Phone, Plus, SearchX, Truck, Users, Zap } from 'lucide-react';
+import { DriverPartner, Order } from '../types';
+import { tripsTodayByRider } from '../lib/dashboardStats';
 import { AddPartnerDrawer } from './AddPartnerDrawer';
 import { AnimatedNumber } from './ui/AnimatedNumber';
 import { ApprovalPill } from './ui/ApprovalPill';
@@ -13,6 +13,10 @@ import { SkeletonCard } from './ui/Skeleton';
 
 interface DriverManagerProps {
   drivers: DriverPartner[];
+  /** The loaded orders: "Trips today" is counted from them (deliveries finished today, India time). */
+  orders?: Order[];
+  /** Current time from the app, so the count rolls over at midnight. */
+  now?: number;
   onToggleStatus?: (driverId: string) => void;
   /** Called after a rider was created, so the list reloads. */
   onCreated?: () => void;
@@ -47,7 +51,9 @@ const DetailRow: React.FC<{ label: string; children: React.ReactNode }> = ({ lab
   </div>
 );
 
-export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, onCreated, loading = false, query = '', onClearQuery }) => {
+const NO_ORDERS: Order[] = [];
+
+export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, orders = NO_ORDERS, now = Date.now(), onCreated, loading = false, query = '', onClearQuery }) => {
   const [filter, setFilter] = useState<DutyFilter>('ALL');
   const [showAdd, setShowAdd] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -71,10 +77,10 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, onCreated
 
   const hasData = drivers.length > 0;
   const activeCount = counts.ONLINE + counts.IN_TRANSIT;
-  const totalPayoutToday = drivers.reduce((sum, d) => sum + d.totalEarningsToday, 0);
-  const totalOrdersToday = drivers.reduce((sum, d) => sum + d.ordersToday, 0);
-  const timed = drivers.filter((d) => d.avgCompletionTimeMinutes > 0);
-  const avgCompletion = timed.length ? timed.reduce((sum, d) => sum + d.avgCompletionTimeMinutes, 0) / timed.length : null;
+  // Counted from the loaded orders (the server keeps no per-rider daily numbers). Order.driverId is the rider's user id.
+  const tripsByRider = useMemo(() => tripsTodayByRider(orders, now), [orders, now]);
+  const tripsFor = (driver: DriverPartner): number => (driver.userId ? tripsByRider.get(driver.userId) ?? 0 : 0);
+  const totalOrdersToday = drivers.reduce((sum, d) => sum + tripsFor(d), 0);
   const initialLoad = loading && !hasData;
 
   return (
@@ -84,11 +90,11 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, onCreated
           value={<><AnimatedNumber value={hasData ? activeCount : null} />{hasData && <span className="text-xl text-kraveo-ink3"> / {drivers.length}</span>}</>}
           note={hasData ? `${counts.IN_TRANSIT} delivering now` : 'No runners registered'} />
         <KpiTile index={1} loading={initialLoad} label="Trips today" icon={Zap} tone="text-kraveo-status-pickedUp" toneBg="bg-kraveo-status-pickedUp/15"
-          value={<AnimatedNumber value={hasData ? totalOrdersToday : null} />} note="Completed by all runners" />
-        <KpiTile index={2} loading={initialLoad} label="Payouts today" icon={Wallet} tone="text-kraveo-status-ready" toneBg="bg-kraveo-status-ready/15"
-          value={<AnimatedNumber value={hasData ? totalPayoutToday : null} prefix={'₹'} />} note="Sum of runner earnings" />
-        <KpiTile index={3} loading={initialLoad} label="Avg completion" icon={Clock} tone="text-kraveo-status-atGate" toneBg="bg-kraveo-status-atGate/15"
-          value={<AnimatedNumber value={avgCompletion} decimals={1} suffix={avgCompletion === null ? '' : ' min'} />} note={avgCompletion === null ? 'No completed trips reported' : `Across ${timed.length} runner${timed.length === 1 ? '' : 's'}`} />
+          value={<AnimatedNumber value={hasData ? totalOrdersToday : null} />} note="Delivered today, from the loaded orders" />
+        <KpiTile index={2} loading={initialLoad} label="Delivering now" icon={Truck} tone="text-kraveo-status-ready" toneBg="bg-kraveo-status-ready/15"
+          value={<AnimatedNumber value={hasData ? counts.IN_TRANSIT : null} />} note="Runners on a delivery" />
+        <KpiTile index={3} loading={initialLoad} label="Offline" icon={Moon} tone="text-kraveo-status-atGate" toneBg="bg-kraveo-status-atGate/15"
+          value={<AnimatedNumber value={hasData ? counts.OFFLINE : null} />} note="Registered but not on duty" />
       </section>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -131,14 +137,8 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, onCreated
               </div>
               <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-kraveo-ink3" aria-hidden="true" />
             </div>
-            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-              <div className="k-inset px-2 py-2.5"><p className="k-label !text-[10px]">Trips</p><p className="k-num text-lg text-kraveo-ink">{d.ordersToday}</p></div>
-              <div className="k-inset px-2 py-2.5"><p className="k-label !text-[10px]">Payout</p><p className="k-num text-lg text-kraveo-ink">{inr(d.totalEarningsToday)}</p></div>
-              <div className="k-inset px-2 py-2.5"><p className="k-label !text-[10px]">Rating</p>
-                <p className="k-num flex items-center justify-center gap-1 text-lg text-kraveo-ink">
-                  {d.rating > 0 ? <><Star className="h-3.5 w-3.5 fill-kraveo-yellow text-kraveo-yellow" aria-hidden="true" />{d.rating.toFixed(1)}</> : <span className="text-kraveo-ink3">New</span>}
-                </p>
-              </div>
+            <div className="mt-4 grid grid-cols-1 gap-2 text-center">
+              <div className="k-inset px-2 py-2.5"><p className="k-label !text-[10px]">Trips today</p><p className="k-num text-lg text-kraveo-ink">{tripsFor(d)}</p></div>
             </div>
           </div>
         ))}
@@ -159,10 +159,7 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, onCreated
               <div><DutyPill status={selectedDriver.dutyStatus} /><p className="mt-2 text-xs text-kraveo-ink3">Joined {new Date(selectedDriver.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</p></div>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <DetailRow label="Avg completion">{selectedDriver.avgCompletionTimeMinutes > 0 ? `${selectedDriver.avgCompletionTimeMinutes} min` : '-'}</DetailRow>
-              <DetailRow label="On-time rate">{selectedDriver.onTimeRatePercent > 0 ? `${selectedDriver.onTimeRatePercent}%` : '-'}</DetailRow>
-              <DetailRow label="Trips today">{selectedDriver.ordersToday}</DetailRow>
-              <DetailRow label="Earned today">{inr(selectedDriver.totalEarningsToday)}</DetailRow>
+              <DetailRow label="Trips today">{tripsFor(selectedDriver)}</DetailRow>
             </div>
             {selectedDriver.approvalStatus && selectedDriver.approvalStatus !== 'APPROVED' && <DetailRow label="Approval"><ApprovalPill status={selectedDriver.approvalStatus} /></DetailRow>}
             {selectedDriver.studentRegNo && <DetailRow label="Student reg no.">{dash(selectedDriver.studentRegNo)}</DetailRow>}

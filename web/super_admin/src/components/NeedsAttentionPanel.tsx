@@ -9,6 +9,7 @@ import { EmptyState } from './ui/EmptyState';
 import { SkeletonCard } from './ui/Skeleton';
 import { StatusPill } from './ui/StatusPill';
 import { PaymentPill, TonePill } from './ui/OrderBadges';
+import { useConfirm } from './ui/ConfirmDialog';
 import { shortId } from './OrderControls';
 import type { DrawerMode } from './OrderDrawer';
 
@@ -86,15 +87,29 @@ export const NeedsAttentionPanel: React.FC<Props> = ({ entries, serverAvailable,
   const visibleGaps = useMemo(() => (q ? locationGaps.filter((v) => v.name.toLowerCase().includes(q) || v.address.toLowerCase().includes(q) || 'location'.includes(q)) : locationGaps), [locationGaps, q]);
   const critical = entries.filter((entry) => entry.problems.some((p) => problemMeta(p.code).tone === 'danger')).length;
 
-  const runBusy = (action: (orderId: string) => Promise<boolean>) => async (orderId: string) => {
+  const { confirm, dialog: confirmDialog } = useConfirm();
+
+  // Both actions have side effects (a new gate code goes to the customer; a refund is attempted), so ask first.
+  const runBusy = (action: (orderId: string) => Promise<boolean>, question: Parameters<typeof confirm>[0]) => async (orderId: string) => {
+    if (busyId) return;
+    if (!(await confirm(question))) return;
     setBusyId(orderId);
     try { await action(orderId); } finally { setBusyId(null); }
   };
-  const reset = runBusy(onResetOtpLock);
-  const retry = runBusy(onRetryRefund);
+  const reset = runBusy(onResetOtpLock, {
+    title: 'Reset the OTP lock?',
+    message: 'The customer gets a new gate code and the old one stops working. The rider can then try again.',
+    confirmLabel: 'Reset OTP lock',
+  });
+  const retry = runBusy(onRetryRefund, {
+    title: 'Retry the refund?',
+    message: 'The refund is tried again right now. If it works, the customer gets their money back.',
+    confirmLabel: 'Retry refund',
+  });
 
   return (
     <div className="space-y-4">
+      {confirmDialog}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2 text-xs" aria-live="polite">
           <TonePill tone="danger">{critical} urgent</TonePill>
@@ -156,7 +171,7 @@ export const NeedsAttentionPanel: React.FC<Props> = ({ entries, serverAvailable,
                   </p>
                   {o && (
                     <>
-                      <p className="mt-1 truncate font-bold text-kraveo-ink">{o.vendorName} <span className="font-normal text-kraveo-ink3">for</span> {o.customerName}</p>
+                      <p className="mt-1 truncate font-bold text-kraveo-ink" title={`${o.vendorName} for ${o.customerName}`}>{o.vendorName} <span className="font-normal text-kraveo-ink3">for</span> {o.customerName}</p>
                       <p className="flex items-center gap-1 text-xs text-kraveo-ink2"><MapPin className="h-3 w-3 shrink-0 text-kraveo-ink3" aria-hidden="true" /><span className="truncate">{o.dropoffHostel}</span><span className="k-num ml-auto shrink-0 text-sm text-kraveo-ink">{inr(o.totalAmount)}</span></p>
                     </>
                   )}

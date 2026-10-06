@@ -57,16 +57,39 @@ async function send(path: string, init: RequestInit): Promise<{ response: Respon
   return { response, body };
 }
 
-export const getAuthToken = (): string => localStorage.getItem('kraveo_admin_token') || '';
+// Storage can be blocked (private window, strict cookie settings): never let that throw into the UI.
+// A token that could not be written is kept in memory so this tab still works until it is closed.
+let memoryToken = '';
+let storageWriteFailed = false;
+
+export const getAuthToken = (): string => {
+  try {
+    const stored = localStorage.getItem('kraveo_admin_token') || '';
+    return stored || (storageWriteFailed ? memoryToken : '');
+  } catch {
+    return memoryToken;
+  }
+};
 
 export const setAuthToken = (token: string, adminProfile?: AdminProfile) => {
-  localStorage.setItem('kraveo_admin_token', token.replace(/^Bearer\s+/i, ''));
-  if (adminProfile) localStorage.setItem('kraveo_admin_profile', JSON.stringify(adminProfile));
+  const clean = token.replace(/^Bearer\s+/i, '');
+  memoryToken = clean;
+  try {
+    localStorage.setItem('kraveo_admin_token', clean);
+    storageWriteFailed = false;
+    if (adminProfile) localStorage.setItem('kraveo_admin_profile', JSON.stringify(adminProfile));
+  } catch {
+    storageWriteFailed = true;
+  }
 };
 
 export const clearAuthToken = () => {
-  localStorage.removeItem('kraveo_admin_token');
-  localStorage.removeItem('kraveo_admin_profile');
+  memoryToken = '';
+  storageWriteFailed = false;
+  try {
+    localStorage.removeItem('kraveo_admin_token');
+    localStorage.removeItem('kraveo_admin_profile');
+  } catch { /* storage blocked: nothing stored to clear */ }
 };
 
 export const isAuthenticated = (): boolean => getAuthToken().trim().length > 10;
@@ -117,8 +140,18 @@ export const apiService = {
   },
 
   async fetchOrders(): Promise<Order[]> {
-    const data = await request<any[]>('/api/orders');
-    return (Array.isArray(data) ? data : []).map(normalizeOrder);
+    return (await apiService.fetchOrderPage()).orders;
+  },
+
+  /** One page of orders, newest first (the server default is 100). `cursor` = the id of the last order already loaded. */
+  async fetchOrderPage(cursor?: string | null, limit?: number): Promise<{ orders: Order[]; nextCursor: string | null }> {
+    const params = new URLSearchParams();
+    if (limit) params.set('limit', String(limit));
+    if (cursor) params.set('cursor', cursor);
+    const query = params.toString();
+    const body = await requestFull<any>(`/api/orders${query ? `?${query}` : ''}`);
+    const data = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
+    return { orders: data.map(normalizeOrder), nextCursor: typeof body?.nextCursor === 'string' && body.nextCursor ? body.nextCursor : null };
   },
 
   async fetchVendors(): Promise<Vendor[]> {
@@ -191,10 +224,11 @@ export const apiService = {
     }));
   },
 
-  async reassignOrderDriver(orderId: string, driverId: string | null): Promise<Order | null> {
+  /** `force` assigns a rider who is offline (the server still refuses a rider who already has an active order). */
+  async reassignOrderDriver(orderId: string, driverId: string | null, force = false): Promise<Order | null> {
     return orderOrNull(await request<any>(`/api/orders/${encodeURIComponent(orderId)}/reassign`, {
       method: 'PATCH',
-      body: JSON.stringify({ driverId }),
+      body: JSON.stringify({ driverId, ...(force ? { force: true } : {}) }),
     }));
   },
 

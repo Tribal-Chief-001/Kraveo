@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { MapPin, Plus, SearchX, Star, Store } from 'lucide-react';
-import { Vendor } from '../types';
+import { Order, Vendor } from '../types';
+import { activeOrderCountByVendor } from '../lib/dashboardStats';
 import type { SavedPin } from '../lib/vendorLocation';
 import { VendorLocationEditor } from './VendorLocationEditor';
 import { AddPartnerDrawer } from './AddPartnerDrawer';
@@ -12,6 +13,10 @@ import { Switch } from './ui/Switch';
 
 interface VendorManagerProps {
   vendors: Vendor[];
+  /** The loaded orders: "Active orders" per restaurant is counted from them (the vendors API does not send it). */
+  orders?: Order[];
+  /** Restaurants whose open/close request is still running: their switch is disabled. */
+  busyVendorIds?: ReadonlySet<string>;
   onToggleVendor: (vendorId: string) => void;
   /** Called after a restaurant (with its owner login) was created, so the list reloads. */
   onCreated?: () => void;
@@ -24,7 +29,10 @@ interface VendorManagerProps {
 
 type VendorFilter = 'ALL' | 'OPEN' | 'CLOSED';
 
-export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleVendor, onCreated, onLocationSaved, loading = false, query = '', onClearQuery }) => {
+const NO_ORDERS: Order[] = [];
+const NOT_BUSY: ReadonlySet<string> = new Set();
+
+export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, orders = NO_ORDERS, busyVendorIds = NOT_BUSY, onToggleVendor, onCreated, onLocationSaved, loading = false, query = '', onClearQuery }) => {
   const [showDrawer, setShowDrawer] = useState(false);
   const [filter, setFilter] = useState<VendorFilter>('ALL');
 
@@ -33,6 +41,8 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
     OPEN: vendors.filter((v) => v.isAcceptingOrders).length,
     CLOSED: vendors.filter((v) => !v.isAcceptingOrders).length,
   }), [vendors]);
+
+  const activeByVendor = useMemo(() => activeOrderCountByVendor(orders), [orders]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -81,7 +91,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
             <div className="flex items-start gap-3.5">
               <Avatar name={v.name} size="lg" className="!rounded-k-md" />
               <div className="min-w-0 flex-1">
-                <h3 className="truncate font-display text-lg font-bold leading-tight text-kraveo-ink">{v.name}</h3>
+                <h3 className="truncate font-display text-lg font-bold leading-tight text-kraveo-ink" title={v.name}>{v.name}</h3>
                 <p className="truncate text-xs font-semibold text-kraveo-g300">{v.category}</p>
                 <ApprovalPill status={v.approvalStatus} className="mt-1.5" />
                 <p className="mt-1.5 flex items-center gap-1 text-xs text-kraveo-ink3"><MapPin className="h-3 w-3 shrink-0" aria-hidden="true" /><span className="truncate">{v.address}</span></p>
@@ -99,7 +109,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
               </div>
               <div className="k-inset px-3 py-2.5">
                 <p className="k-label">Active orders</p>
-                <p className="k-num text-xl text-kraveo-ink">{v.activeOrdersCount}</p>
+                <p className="k-num text-xl text-kraveo-ink">{activeByVendor.get(v.id) ?? 0}</p>
               </div>
             </div>
 
@@ -113,7 +123,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, onToggleV
                   <p className="text-[11px] text-kraveo-ink3">Accepting orders</p>
                 </div>
               </div>
-              <Switch checked={v.isAcceptingOrders} onChange={() => onToggleVendor(v.id)} label={`${v.name}: accepting orders`} />
+              <Switch checked={v.isAcceptingOrders} onChange={() => onToggleVendor(v.id)} disabled={busyVendorIds.has(v.id)} label={`${v.name}: accepting orders`} />
             </div>
           </article>
         ))}

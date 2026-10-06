@@ -18,7 +18,10 @@ import { ORDER_STATUS_LABEL } from './lib/tokens';
 import { RefreshCw, X } from 'lucide-react';
 import { NeedsAttentionPanel } from './components/NeedsAttentionPanel';
 import { DrawerMode, OrderDrawer } from './components/OrderDrawer';
-import { mergeInto, mergeOrderLists, patchOrder, restoreIfUntouched, upsertOrder } from './lib/orders';
+import { appendOlderPage, mergeInto, mergeOrderLists, oldestOrderId, patchOrder, restoreIfUntouched, upsertOrder } from './lib/orders';
+import { sameData } from './lib/dashboardStats';
+import { isSessionRejected, reassignFailureMessage, sessionRetryDelayMs } from './lib/adminMessages';
+import { useConfirm } from './components/ui/ConfirmDialog';
 import { localAttention, pruneWithLiveOrders } from './lib/orderProblems';
 import { SavedPin, vendorsNeedingLocation } from './lib/vendorLocation';
 import { mergeRiderPins, newestPerRider, replaceRiderPins } from './lib/riderMarkers';
@@ -28,6 +31,16 @@ const POLL_MS = 15_000;
 const ATTENTION_DEBOUNCE_MS = 1_500;
 /** Rider position events are applied to the map at most this often. */
 const LOCATION_FLUSH_MS = 1_000;
+/** One page of "Load older" orders. */
+const OLDER_PAGE_SIZE = 100;
+
+/** Thrown inside an order action when the admin answers "no" to a question: roll back quietly, no error toast. */
+class ActionCancelled extends Error {}
+
+/** Makes the server's rider errors readable (see lib/adminMessages). */
+const plainReassignError = (error: unknown): unknown => (error instanceof ApiError
+  ? new ApiError(error.status, reassignFailureMessage(error.code, error.message), error.code, error.field)
+  : error);
 
 export const App: React.FC = () => {
   const [isAuth, setIsAuth] = useState(false);
@@ -47,6 +60,16 @@ export const App: React.FC = () => {
   const [pendingApplications, setPendingApplications] = useState(0);
   const [applicationsKey, setApplicationsKey] = useState(0);
   const [now, setNow] = useState(() => Date.now());
+  // The stored session could not be checked because the server was unreachable (the token is kept and the check retried).
+  const [sessionUnreachable, setSessionUnreachable] = useState(false);
+  // "Load older": whether the server has more orders than the ones loaded, and whether a page is being fetched.
+  const [hasMoreOrders, setHasMoreOrders] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const olderLoadedRef = useRef(false);
+  // Restaurants whose open/close request is in flight (the switch is disabled meanwhile).
+  const [busyVendorIds, setBusyVendorIds] = useState<ReadonlySet<string>>(() => new Set());
+  const busyVendorRef = useRef<Set<string>>(new Set());
+  const { confirm, dialog: confirmDialog } = useConfirm();
   // Needs-attention list (server). `available: false` = old server without the endpoint -> local fallback.
   const [attention, setAttention] = useState<{ available: boolean | null; entries: AttentionEntry[]; loading: boolean; error: string; checkedAt: number | null }>(
     { available: null, entries: [], loading: false, error: '', checkedAt: null },
@@ -57,6 +80,8 @@ export const App: React.FC = () => {
   const [drawerLoad, setDrawerLoad] = useState<{ loading: boolean; error: string }>({ loading: false, error: '' });
   const ordersRef = useRef<Order[]>([]);
   ordersRef.current = orders;
+  const vendorsRef = useRef<Vendor[]>([]);
+  vendorsRef.current = vendors;
   const attentionTimer = useRef<number | undefined>(undefined);
 
   const handleAuthFailure = useCallback((error: unknown) => {
@@ -107,11 +132,20 @@ export const App: React.FC = () => {
   const silentRefresh = useCallback(async () => {
     if (!getAuthToken()) return;
     try {
-      const fetched = await apiService.fetchOrders();
-      setOrders((current) => mergeOrderLists(current, fetched));
+      const page = await apiService.fetchOrderPage();
+      setOrders((current) => mergeOrderLists(current, page.orders, { keepOlder: olderLoadedRef.current }));
+      if (!olderLoadedRef.current) setHasMoreOrders(page.nextCursor !== null);
     } catch (error) {
       handleSessionError(error);
     }
+    // Restaurants (open/closed, map pin) and the rider roster (duty) have no live event for every change: refetch them too,
+    // and only replace the state when something really changed, so an idle poll re-renders nothing.
+    apiService.fetchVendors()
+      .then((fresh) => { if (busyVendorRef.current.size === 0) setVendors((current) => (sameData(current, fresh) ? current : fresh)); })
+      .catch(() => { /* the next poll catches up */ });
+    apiService.fetchDrivers()
+      .then((fresh) => setDriverPartners((current) => (sameData(current, fresh) ? current : fresh)))
+      .catch(() => { /* the next poll catches up */ });
     // Rider positions too: after a missed socket event the next poll puts every marker right again (no change = no re-render).
     apiService.fetchDriverLocations().then((fresh) => setDrivers((current) => replaceRiderPins(current, fresh))).catch(() => { /* the live socket or the next poll catches up */ });
     loadAttention();
@@ -122,13 +156,16 @@ export const App: React.FC = () => {
     setIsLoading(true);
     setErrorMessage('');
     const results = await Promise.allSettled([
-      apiService.fetchOrders(),
+      apiService.fetchOrderPage(),
       apiService.fetchVendors(),
       apiService.fetchDrivers(),
       apiService.fetchDriverLocations(),
     ]);
     const [ordersResult, vendorsResult, driversResult, locationsResult] = results;
-    if (ordersResult.status === 'fulfilled') setOrders((current) => mergeOrderLists(current, ordersResult.value));
+    if (ordersResult.status === 'fulfilled') {
+      setOrders((current) => mergeOrderLists(current, ordersResult.value.orders, { keepOlder: olderLoadedRef.current }));
+      if (!olderLoadedRef.current) setHasMoreOrders(ordersResult.value.nextCursor !== null);
+    }
     if (vendorsResult.status === 'fulfilled') setVendors(vendorsResult.value);
     if (driversResult.status === 'fulfilled') setDriverPartners(driversResult.value);
     if (locationsResult.status === 'fulfilled') setDrivers((current) => replaceRiderPins(current, locationsResult.value));
@@ -139,21 +176,39 @@ export const App: React.FC = () => {
     loadAttention();
   }, [handleAuthFailure, refreshPendingCount, loadAttention]);
 
+  // Check the stored session. Only a rejected token (401/403) ends it; if the server or network is down the token is
+  // kept and the check retries with a growing delay, so a blip never throws away a valid 30-day session.
   useEffect(() => {
     if (!hasSession()) {
       setAuthChecking(false);
-      return;
+      return undefined;
     }
-    apiService.validateSession()
-      .then((profile) => {
-        setAdminProfile(profile);
-        setIsAuth(true);
-      })
-      .catch((error) => {
-        clearAuthToken();
-        handleAuthFailure(error);
-      })
-      .finally(() => setAuthChecking(false));
+    let cancelled = false;
+    let timer: number | undefined;
+    const check = (attempt: number) => {
+      apiService.validateSession()
+        .then((profile) => {
+          if (cancelled || !getAuthToken()) return;
+          setSessionUnreachable(false);
+          setAdminProfile(profile);
+          setIsAuth(true);
+          setAuthChecking(false);
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          if (isSessionRejected(error)) {
+            clearAuthToken();
+            handleAuthFailure(error);
+            setSessionUnreachable(false);
+            setAuthChecking(false);
+            return;
+          }
+          setSessionUnreachable(true);
+          timer = window.setTimeout(() => check(attempt + 1), sessionRetryDelayMs(attempt));
+        });
+    };
+    check(0);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [handleAuthFailure]);
 
   useEffect(() => {
@@ -164,7 +219,11 @@ export const App: React.FC = () => {
     const socket = io(SOCKET_URL, {
       auth: { token },
       transports: ['websocket', 'polling'],
-      reconnectionAttempts: 8,
+      // Never give up: a server restart or a Wi-Fi outage of any length must heal by itself.
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1_000,
+      reconnectionDelayMax: 10_000,
     });
     let connectedBefore = false;
     socket.on('connect', () => {
@@ -180,7 +239,11 @@ export const App: React.FC = () => {
       if (connectedBefore) silentRefresh();
       connectedBefore = true;
     });
-    socket.on('disconnect', () => setIsLiveConnected(false));
+    socket.on('disconnect', (reason: string) => {
+      setIsLiveConnected(false);
+      // socket.io does not retry after the server itself closed the connection: do it ourselves.
+      if (reason === 'io server disconnect') socket.connect();
+    });
     socket.on('connect_error', () => setIsLiveConnected(false));
     // Same OrderView as REST (contract 2.1/3). Merge by updatedAt so an older event never rolls an order back.
     const applyLiveOrder = (rawOrder: unknown) => {
@@ -191,7 +254,12 @@ export const App: React.FC = () => {
       scheduleAttention();
     };
     socket.on('order_updated', applyLiveOrder);
-    socket.on('new_order_alert', applyLiveOrder);
+    socket.on('new_order_alert', (rawOrder: unknown) => {
+      const incoming = normalizeOrderPartial(rawOrder);
+      const isNew = Boolean(incoming.id) && !ordersRef.current.some((order) => order.id === incoming.id);
+      applyLiveOrder(rawOrder);
+      if (isNew) toast.info('New order', `${incoming.vendorName ?? 'A restaurant'} has a new paid order.`);
+    });
     socket.on('partner_application', (info: { kind?: string; name?: string; resubmitted?: boolean }) => {
       const who = info?.kind === 'VENDOR' ? 'A restaurant' : 'A rider';
       toast.info(info?.resubmitted ? 'Application updated' : 'New application', `${who}${info?.name ? ` (${info.name})` : ''} is waiting for your approval.`);
@@ -275,6 +343,7 @@ export const App: React.FC = () => {
         setOrders((current) => restoreIfUntouched(current, snapshot));
         setDrawerFallback((current) => (current?.id === orderId ? restoreIfUntouched([current], snapshot)[0] : current));
       }
+      if (error instanceof ActionCancelled) return false; // the admin said no: nothing failed
       handleSessionError(error);
       const message = error instanceof Error ? error.message : 'Please try again.';
       toast.error(messages.fail, message);
@@ -292,12 +361,35 @@ export const App: React.FC = () => {
     { ok: (updated) => ['Order updated', `Now ${ORDER_STATUS_LABEL[updated?.status ?? status] ?? status}.`], fail: 'Status not changed' },
   );
 
-  const handleReassignDriver = (orderId: string, driverId: string | null) => {
+  const askAssignOffline = (name?: string) => confirm({
+    title: name ? `Assign ${name}?` : 'Assign this rider?',
+    message: 'This rider is offline. Assign anyway?',
+    confirmLabel: 'Assign anyway',
+  });
+
+  const handleReassignDriver = async (orderId: string, driverId: string | null) => {
     const rider = driverId ? driverPartners.find((driver) => driver.id === driverId) : undefined;
+    // The roster already says offline: ask before anything changes on screen.
+    let force = false;
+    if (driverId && rider?.dutyStatus === 'OFFLINE') {
+      if (!(await askAssignOffline(rider.name))) return false;
+      force = true;
+    }
     return runOrderAction(
       orderId,
       { driverId: driverId ? rider?.userId ?? driverId : undefined, driverName: driverId ? rider?.name ?? 'Updating assignment…' : undefined, driverPhone: driverId ? rider?.phone : undefined },
-      () => apiService.reassignOrderDriver(orderId, driverId),
+      async () => {
+        try {
+          return await apiService.reassignOrderDriver(orderId, driverId, force);
+        } catch (error) {
+          // The roster was out of date and the server knows the rider is offline: same question, then resend with force.
+          if (driverId && !force && error instanceof ApiError && error.code === 'RIDER_OFFLINE') {
+            if (!(await askAssignOffline(rider?.name))) throw new ActionCancelled();
+            try { return await apiService.reassignOrderDriver(orderId, driverId, true); } catch (second) { throw plainReassignError(second); }
+          }
+          throw plainReassignError(error);
+        }
+      },
       { ok: (updated) => [driverId ? 'Rider assigned' : 'Rider unassigned', updated?.driverName ? `${updated.driverName} is on this order.` : undefined], fail: 'Rider not changed' },
     );
   };
@@ -360,19 +452,59 @@ export const App: React.FC = () => {
   const closeDrawer = useCallback(() => { setDrawer(null); setDrawerFallback(null); setDrawerLoad({ loading: false, error: '' }); }, []);
   const setDrawerMode = useCallback((mode: DrawerMode) => setDrawer((current) => (current ? { ...current, mode } : current)), []);
 
+  const setVendorBusy = (vendorId: string, busy: boolean) => {
+    if (busy) busyVendorRef.current.add(vendorId); else busyVendorRef.current.delete(vendorId);
+    setBusyVendorIds(new Set(busyVendorRef.current));
+  };
+
   const handleToggleVendor = async (vendorId: string) => {
-    const target = vendors.find((vendor) => vendor.id === vendorId);
+    if (busyVendorRef.current.has(vendorId)) return; // one request at a time per restaurant
+    const first = vendorsRef.current.find((vendor) => vendor.id === vendorId);
+    if (!first) return;
+    if (first.isAcceptingOrders) {
+      const ok = await confirm({
+        title: `Close ${first.name}?`,
+        message: 'Customers cannot place new orders with this restaurant until it is opened again.',
+        confirmLabel: 'Close restaurant',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    if (busyVendorRef.current.has(vendorId)) return;
+    const target = vendorsRef.current.find((vendor) => vendor.id === vendorId);
     if (!target) return;
-    const previous = vendors;
-    const nextStatus = !target.isAcceptingOrders;
+    setVendorBusy(vendorId, true);
+    const wasAccepting = target.isAcceptingOrders;
+    const nextStatus = !wasAccepting;
     setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, isAcceptingOrders: nextStatus } : vendor));
     try {
       const updated = await apiService.toggleVendorStatus(vendorId, nextStatus);
       setVendors((current) => current.map((vendor) => vendor.id === vendorId ? updated : vendor));
       toast.success(updated.isAcceptingOrders ? 'Vendor is open' : 'Vendor is closed', `${updated.name} is ${updated.isAcceptingOrders ? 'now accepting' : 'no longer accepting'} orders.`);
     } catch (error) {
-      setVendors(previous);
+      // Put back only this restaurant's switch: a pin saved meanwhile must not be undone.
+      setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, isAcceptingOrders: wasAccepting } : vendor));
       handleAuthFailure(error);
+    } finally {
+      setVendorBusy(vendorId, false);
+    }
+  };
+
+  const handleLoadOlder = async () => {
+    const cursor = oldestOrderId(ordersRef.current);
+    if (!cursor || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const page = await apiService.fetchOrderPage(cursor, OLDER_PAGE_SIZE);
+      olderLoadedRef.current = true;
+      setOrders((current) => appendOlderPage(current, page.orders));
+      setHasMoreOrders(page.nextCursor !== null);
+      if (page.orders.length === 0) toast.info('No older orders', 'Every order is already loaded.');
+    } catch (error) {
+      handleSessionError(error);
+      toast.error('Older orders not loaded', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setLoadingOlder(false);
     }
   };
 
@@ -389,6 +521,8 @@ export const App: React.FC = () => {
     setDriverPartners([]);
     setDrivers([]);
     setPendingApplications(0);
+    olderLoadedRef.current = false;
+    setHasMoreOrders(false);
     setAttention({ available: null, entries: [], loading: false, error: '', checkedAt: null });
     closeDrawer();
     setSearchQuery('');
@@ -417,7 +551,10 @@ export const App: React.FC = () => {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-kraveo-night" role="status" aria-live="polite">
         <div className="animate-scale-in"><LogoMark size={64} /></div>
-        <p className="flex items-center gap-2 text-sm font-semibold text-kraveo-ink2"><RefreshCw className="h-4 w-4 animate-spin text-kraveo-g400" aria-hidden="true" />Verifying admin session…</p>
+        <p className="flex items-center gap-2 text-sm font-semibold text-kraveo-ink2"><RefreshCw className="h-4 w-4 animate-spin text-kraveo-g400" aria-hidden="true" />{sessionUnreachable ? 'Cannot reach the server, retrying…' : 'Verifying admin session…'}</p>
+        {sessionUnreachable && (
+          <button type="button" className="k-btn-ghost !min-h-[36px] text-xs" onClick={() => { clearAuthToken(); setSessionUnreachable(false); setAuthChecking(false); }}>Sign in again instead</button>
+        )}
       </div>
     );
   }
@@ -465,7 +602,7 @@ export const App: React.FC = () => {
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 p-4 pb-10 outline-none sm:p-6 sm:pb-12">
           <div key={activeTab} className="animate-fade-up">
             {activeTab === 'map' && <LiveCommandCenter drivers={drivers} orders={orders} driverPartners={driverPartners} vendors={vendors} onReassignDriver={handleReassignDriver} onOpenOrder={openOrder} loading={isLoading} query={searchQuery} />}
-            {activeTab === 'orders' && <OrdersTable orders={orders} attentionIds={attentionIds} onAdvance={handleStatusChange} onOpenOrder={openOrder} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} now={now} />}
+            {activeTab === 'orders' && <OrdersTable orders={orders} attentionIds={attentionIds} onAdvance={handleStatusChange} onOpenOrder={openOrder} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} now={now} hasMore={hasMoreOrders} loadingOlder={loadingOlder} onLoadOlder={handleLoadOlder} />}
             {activeTab === 'attention' && (
               <NeedsAttentionPanel
                 entries={attentionEntries}
@@ -484,8 +621,8 @@ export const App: React.FC = () => {
               />
             )}
             {activeTab === 'applications' && <ApplicationsPanel refreshKey={applicationsKey} query={searchQuery} onChanged={fetchBackendData} onAuthError={handleSessionError} onLocationSaved={handleVendorLocationSaved} />}
-            {activeTab === 'vendors' && <VendorManager vendors={vendors} onToggleVendor={handleToggleVendor} onLocationSaved={handleVendorLocationSaved} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
-            {activeTab === 'drivers' && <DriverManager drivers={driverPartners} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'vendors' && <VendorManager vendors={vendors} orders={orders} busyVendorIds={busyVendorIds} onToggleVendor={handleToggleVendor} onLocationSaved={handleVendorLocationSaved} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'drivers' && <DriverManager drivers={driverPartners} orders={orders} now={now} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'customers' && <CustomersPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} />}
             {activeTab === 'analytics' && <AnalyticsPanel />}
           </div>
@@ -507,6 +644,7 @@ export const App: React.FC = () => {
         onResetOtpLock={handleResetOtpLock}
         onRetryRefund={handleRetryRefund}
       />
+      {confirmDialog}
     </div>
   );
 };

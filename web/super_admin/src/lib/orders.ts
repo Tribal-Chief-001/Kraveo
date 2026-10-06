@@ -62,7 +62,7 @@ export const mergeInto = (current: Order | null, incoming: Partial<Order> & { id
  * - an order only known locally is kept when it is newer than everything on the page (it arrived over the socket
  *   while the request was in flight); older local-only orders have simply scrolled out of the page and are dropped.
  */
-export const mergeOrderLists = (local: Order[], fetched: Order[]): Order[] => {
+export const mergeOrderLists = (local: Order[], fetched: Order[], opts: { keepOlder?: boolean } = {}): Order[] => {
   const localById = new Map(local.map((order) => [order.id, order]));
   const fetchedIds = new Set(fetched.map((order) => order.id));
   const merged = fetched.map((order) => {
@@ -71,7 +71,27 @@ export const mergeOrderLists = (local: Order[], fetched: Order[]): Order[] => {
   });
   const newestFetched = fetched.reduce((max, order) => Math.max(max, ts(order.createdAt) ?? 0), 0);
   const arrivedMeanwhile = local.filter((order) => !fetchedIds.has(order.id) && (fetched.length === 0 || (ts(order.createdAt) ?? 0) > newestFetched));
-  return [...arrivedMeanwhile, ...merged];
+  if (!opts.keepOlder || fetched.length === 0) return [...arrivedMeanwhile, ...merged];
+  // The admin loaded older pages ("Load older"): orders older than this page stay, otherwise the next poll would drop them again.
+  const oldestFetched = fetched.reduce((min, order) => Math.min(min, ts(order.createdAt) ?? Infinity), Infinity);
+  const olderKept = local.filter((order) => !fetchedIds.has(order.id) && (ts(order.createdAt) ?? 0) <= oldestFetched);
+  return [...arrivedMeanwhile, ...merged, ...olderKept];
+};
+
+/** Adds an older page (from "Load older") below the loaded list; an order already loaded keeps its newer copy. Same array when nothing was added. */
+export const appendOlderPage = (local: Order[], page: Order[]): Order[] => {
+  const known = new Set(local.map((order) => order.id));
+  const added = page.filter((order) => !known.has(order.id));
+  return added.length ? [...local, ...added] : local;
+};
+
+/** The id to continue from when loading older orders: the oldest loaded one (the server lists newest first). */
+export const oldestOrderId = (orders: Order[]): string | null => {
+  let oldest: Order | null = null;
+  for (const order of orders) {
+    if (!oldest || (ts(order.createdAt) ?? Infinity) < (ts(oldest.createdAt) ?? Infinity)) oldest = order;
+  }
+  return oldest?.id ?? null;
 };
 
 /**

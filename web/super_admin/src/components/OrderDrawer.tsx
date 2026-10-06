@@ -8,6 +8,7 @@ import { Drawer } from './ui/Drawer';
 import { Field } from './ui/Field';
 import { StatusPill } from './ui/StatusPill';
 import { OtpLockedPill, PaymentPill, RefundPill } from './ui/OrderBadges';
+import { useConfirm } from './ui/ConfirmDialog';
 import { AdvanceHandler, NextStepControl, ReassignHandler, RiderAssignSelect, shortId } from './OrderControls';
 
 export type DrawerMode = 'view' | 'cancel';
@@ -94,11 +95,27 @@ const OrderView: React.FC<Omit<Props, 'mode' | 'onModeChange' | 'onClose' | 'onC
   const acceptBy = clock(order.acceptBy);
   const primaryCode = problems[0]?.code;
 
+  const { confirm, dialog: confirmDialog } = useConfirm();
+
   const reset = async () => {
+    if (resetting) return;
+    const ok = await confirm({
+      title: 'Reset the OTP lock?',
+      message: 'The customer gets a new gate code and the old one stops working. The rider can then try again.',
+      confirmLabel: 'Reset OTP lock',
+    });
+    if (!ok) return;
     setResetting(true);
     try { await onResetOtpLock(order.id); } finally { setResetting(false); }
   };
   const retry = async () => {
+    if (retrying) return;
+    const ok = await confirm({
+      title: 'Retry the refund?',
+      message: 'The refund is tried again right now. If it works, the customer gets their money back.',
+      confirmLabel: 'Retry refund',
+    });
+    if (!ok) return;
     setRetrying(true);
     try { await onRetryRefund(order.id); } finally { setRetrying(false); }
   };
@@ -119,7 +136,7 @@ const OrderView: React.FC<Omit<Props, 'mode' | 'onModeChange' | 'onClose' | 'onC
         return (
           <Notice key={meta.code} tone={meta.tone} icon={TriangleAlert} title={meta.label}>
             <p>{meta.explain}</p>
-            {p.detail && <p className="mt-1 text-kraveo-ink">{p.detail}</p>}
+            {p.detail && <p className="mt-1 text-kraveo-ink [overflow-wrap:anywhere]">{p.detail}</p>}
             <p className="mt-1 font-semibold text-kraveo-ink">{p.code === primaryCode && hint ? hint : meta.advice}</p>
           </Notice>
         );
@@ -160,7 +177,7 @@ const OrderView: React.FC<Omit<Props, 'mode' | 'onModeChange' | 'onClose' | 'onC
 
       {order.status === 'CANCELLED' && (
         <Notice tone="neutral" icon={Ban} title={`Cancelled by ${cancelledByLabel(order.cancelledBy)}${order.cancelledAt ? ` · ${dateTime(order.cancelledAt)}` : ''}`}>
-          <p>{order.cancelReason ? `“${order.cancelReason}”` : 'No reason recorded.'}</p>
+          <p className="[overflow-wrap:anywhere]">{order.cancelReason ? `“${order.cancelReason}”` : 'No reason recorded.'}</p>
         </Notice>
       )}
 
@@ -238,23 +255,25 @@ const OrderView: React.FC<Omit<Props, 'mode' | 'onModeChange' | 'onClose' | 'onC
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Section title="Customer" icon={User}>
-          <p className="font-bold text-kraveo-ink">{order.customerName}</p>
+          <p className="font-bold text-kraveo-ink [overflow-wrap:anywhere]">{order.customerName}</p>
           {order.customerEmail && <p className="break-all text-xs text-kraveo-ink3">{order.customerEmail}</p>}
           <CallLink phone={order.customerPhone} who={order.customerName} />
-          <p className="mt-3 flex items-start gap-1.5 text-sm font-semibold text-kraveo-ink"><MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-kraveo-g400" aria-hidden="true" />{order.dropoffHostel}</p>
-          <p className="mt-1 text-xs text-kraveo-ink2">{order.dropoffNotes || <span className="text-kraveo-ink3">No drop-off notes.</span>}</p>
+          <p className="mt-3 flex items-start gap-1.5 text-sm font-semibold text-kraveo-ink"><MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-kraveo-g400" aria-hidden="true" /><span className="min-w-0 [overflow-wrap:anywhere]">{order.dropoffHostel}</span></p>
+          <p className="mt-1 text-xs text-kraveo-ink2 [overflow-wrap:anywhere]">{order.dropoffNotes || <span className="text-kraveo-ink3">No drop-off notes.</span>}</p>
         </Section>
 
         <Section title="Rider" icon={Bike}>
           {order.driverName || order.driverId
-            ? <><p className="font-bold text-kraveo-ink">{order.driverName ?? 'Assigned rider'}</p><CallLink phone={order.driverPhone} who={order.driverName ?? 'the rider'} /></>
+            ? <><p className="font-bold text-kraveo-ink [overflow-wrap:anywhere]">{order.driverName ?? 'Assigned rider'}</p><CallLink phone={order.driverPhone} who={order.driverName ?? 'the rider'} /></>
             : <p className="text-sm text-kraveo-ink3">{order.paymentStatus === 'PAID' ? 'No rider has claimed this order yet.' : 'Riders see the order once it is paid.'}</p>}
           <h3 className="k-label mb-1.5 mt-4 flex items-center gap-1.5"><Store className="h-3.5 w-3.5" aria-hidden="true" />Restaurant</h3>
-          <p className="font-bold text-kraveo-ink">{order.vendorName}</p>
-          {order.vendorAddress && <p className="text-xs text-kraveo-ink3">{order.vendorAddress}</p>}
+          <p className="font-bold text-kraveo-ink [overflow-wrap:anywhere]">{order.vendorName}</p>
+          {order.vendorAddress && <p className="text-xs text-kraveo-ink3 [overflow-wrap:anywhere]">{order.vendorAddress}</p>}
           {order.vendorPhone && <CallLink phone={order.vendorPhone} who={order.vendorName} />}
         </Section>
       </div>
+
+      {confirmDialog}
 
       <Section title="Payment record (admin only)" icon={CreditCard}>
         <dl className="space-y-1.5 text-xs">

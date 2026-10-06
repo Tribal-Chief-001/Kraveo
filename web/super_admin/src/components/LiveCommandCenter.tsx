@@ -2,7 +2,8 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import { Bike, Clock, Crosshair, MapPin, PackageCheck, Radio, Timer, UserX, Users } from 'lucide-react';
 import { DriverPartner, DriverPin, Order, OrderStatus, Vendor } from '../types';
 import { apiService } from '../services/api';
-import { DropPointInfo, FALLBACK_DROP_POINTS, LatLng, campusCenter, vendorHasRealPin } from '../lib/campus';
+import { DropPointInfo, FALLBACK_DROP_POINTS, LatLng, campusCenter } from '../lib/campus';
+import { averageDeliveryMinutes, isMapVendor, trackedRiders } from '../lib/dashboardStats';
 import { RIDER_STATE_META, RIDER_STATE_ORDER, RiderMarkerState, countByState, riderMarkerState } from '../lib/riderMarkers';
 import type { MapRider, MapVendor } from './CampusMap';
 import { PIPELINE_ORDER, STATUS_META, inr, statusMeta, timeAgo } from '../lib/tokens';
@@ -91,14 +92,8 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
   const unpaidCount = orders.filter((order) => order.status === 'PLACED' && order.paymentStatus !== 'PAID').length;
   const runnersOnline = driverPartners.filter((driver) => driver.dutyStatus === 'ONLINE' || driver.dutyStatus === 'IN_TRANSIT').length;
 
-  // Average created -> last update over delivered orders in the feed (same definition the analytics note uses).
-  const avgDeliveryMinutes = useMemo(() => {
-    const spans = orders
-      .filter((order) => order.status === 'DELIVERED' && order.updatedAt)
-      .map((order) => (new Date(order.updatedAt as string).getTime() - new Date(order.createdAt).getTime()) / 60000)
-      .filter((minutes) => Number.isFinite(minutes) && minutes > 0);
-    return spans.length ? { value: spans.reduce((sum, minutes) => sum + minutes, 0) / spans.length, count: spans.length } : null;
-  }, [orders]);
+  // Average placed -> delivered over delivered orders in the feed: the same definition as the Analytics tab.
+  const avgDeliveryMinutes = useMemo(() => averageDeliveryMinutes(orders), [orders]);
 
   const activeByDriver = useMemo(() => {
     const map = new Map<string, Order>();
@@ -117,7 +112,9 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
     return map;
   }, [drivers, driverPartners, activeByDriver, now]);
 
-  const plottable = useMemo(() => drivers.filter((driver) => Number.isFinite(driver.lat) && Number.isFinite(driver.lng)), [drivers]);
+  // Riders worth tracking: not off duty, approved, and not an old test row. They may still be in the Drivers roster.
+  const tracked = useMemo(() => trackedRiders(drivers, driverPartners, new Set(activeByDriver.keys()), now), [drivers, driverPartners, activeByDriver, now]);
+  const plottable = useMemo(() => tracked.filter((driver) => Number.isFinite(driver.lat) && Number.isFinite(driver.lng)), [tracked]);
   const stateCounts = useMemo(() => countByState(plottable.map((driver) => riderStates.get(driver.id) ?? 'stale')), [plottable, riderStates]);
 
   // Campus data: built-in copy first, the server's answer replaces it when it arrives.
@@ -142,7 +139,7 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
   }), [plottable, activeByDriver, riderStates]);
 
   const mapVendors = useMemo<MapVendor[]>(() => vendors
-    .filter((vendor) => vendorHasRealPin(vendor))
+    .filter((vendor) => isMapVendor(vendor))
     .map((vendor) => ({ id: vendor.id, name: vendor.name, lat: vendor.lat as number, lng: vendor.lng as number })), [vendors]);
 
   const [focusRequest, setFocusRequest] = useState<{ id: string; n: number } | null>(null);
@@ -235,7 +232,7 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
           value={<AnimatedNumber value={pendingCount} />} note={pendingCount ? `Paid, waiting for the restaurant${unpaidCount ? ` · ${unpaidCount} unpaid` : ''}` : unpaidCount ? `${unpaidCount} waiting for payment` : 'Nothing waiting'} />
         <KpiTile index={3} loading={initialLoad} label="Avg delivery time" icon={Timer} tone="text-kraveo-status-atGate" toneBg="bg-kraveo-status-atGate/15"
           value={<AnimatedNumber value={avgDeliveryMinutes ? avgDeliveryMinutes.value : null} decimals={1} suffix={avgDeliveryMinutes ? ' min' : ''} />}
-          note={avgDeliveryMinutes ? `Placed to last update, ${avgDeliveryMinutes.count} delivered` : 'No delivered orders yet'} />
+          note={avgDeliveryMinutes ? `Placed to delivered, ${avgDeliveryMinutes.count} delivered` : 'No delivered orders yet'} />
       </section>
 
       {/* Map + runners */}
@@ -282,12 +279,12 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
         <div className="k-card k-reveal flex max-h-[420px] min-w-0 flex-col overflow-hidden p-4 sm:max-h-[520px] sm:h-[520px]" style={{ ['--i' as string]: 5 }}>
           <div className="mb-3 flex items-center justify-between border-b border-kraveo-line pb-3">
             <h2 className="flex items-center gap-2 font-display text-base font-bold text-kraveo-ink"><Bike className="h-4 w-4 text-kraveo-g400" aria-hidden="true" /> Tracked runners</h2>
-            <span className="rounded-full bg-kraveo-surface2 px-2.5 py-0.5 text-xs font-bold tabular-nums text-kraveo-ink2">{drivers.length}</span>
+            <span className="rounded-full bg-kraveo-surface2 px-2.5 py-0.5 text-xs font-bold tabular-nums text-kraveo-ink2">{tracked.length}</span>
           </div>
           <ul className="-mx-1 flex-1 space-y-1.5 overflow-y-auto px-1" aria-label="Tracked runners">
             {initialLoad && Array.from({ length: 4 }).map((_, index) => <li key={index}><Skeleton className="h-14 w-full" /></li>)}
-            {!initialLoad && drivers.length === 0 && <li><EmptyState icon={Bike} title="No location feed" description="No runner has reported a location yet." className="py-8" /></li>}
-            {drivers.map((driver) => {
+            {!initialLoad && tracked.length === 0 && <li><EmptyState icon={Bike} title="No runners on duty" description="Runners appear here while they are on duty and sending their location." className="py-8" /></li>}
+            {tracked.map((driver) => {
               const order = activeByDriver.get(driver.id);
               return (
                 <RunnerRow

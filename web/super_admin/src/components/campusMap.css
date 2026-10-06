@@ -41,7 +41,7 @@
   position: absolute; left: 50%; top: 100%; transform: translateX(-50%); margin-top: 1px;
   max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 1px 7px; border-radius: 9999px;
-  font: 700 10px/1.4 inherit; color: #f4f7f2;
+  font-family: inherit; font-size: 10px; font-weight: 700; line-height: 1.4; color: #f4f7f2;
   background: rgba(8, 13, 9, 0.88); border: 1px solid #26322a;
   pointer-events: none;
 }
@@ -60,7 +60,7 @@
 .k-pin {
   display: inline-flex; align-items: center; gap: 4px; transform: translate(-50%, -50%);
   padding: 2px 8px; border-radius: 9999px; white-space: nowrap;
-  font: 800 10px/1.5 inherit; letter-spacing: 0.02em;
+  font-family: inherit; font-size: 10px; font-weight: 800; line-height: 1.5; letter-spacing: 0.02em;
   border: 1.5px solid; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
 }
 .k-pin--boys { color: #dbeafe; background: rgba(30, 58, 138, 0.9); border-color: #60a5fa; }
