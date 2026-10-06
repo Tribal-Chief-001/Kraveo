@@ -187,6 +187,7 @@ const vendorView = (v: any) => v && ({
 const driverView = (d: any) => d && ({
   id: d.id, runnerCode: d.runnerCode, vehicleType: d.vehicleType, vehicleRegNo: d.vehicleRegNo ?? null,
   emergencyPhone: d.emergencyPhone ?? null, upiId: d.upiId ?? null, approvalStatus: d.approvalStatus, rejectionReason: d.rejectionReason ?? null,
+  dutyStatus: d.dutyStatus ?? 'OFFLINE', // lets the rider app re-read what the server believes (second phone, bad network, logout elsewhere)
 });
 
 // ----------------------------------------------------------------------------
@@ -379,8 +380,11 @@ partnerRouter.put('/partner/application', requireAuth, requireRole('VENDOR', 'DR
     }
     const fresh = await loadOwnProfile(user.id, user.role);
     notifyAdmins(req, 'partner_application', { kind: user.role, id: (fresh.vendor ?? fresh.driver).id, name: user.name, phone: user.phone, appliedAt: now.toISOString(), resubmitted: true });
+    // Same `user` object as /partner/me and sign-in: the apps parse this answer as a session (re-read name: it may have just changed).
+    const freshUser = (await prisma.user.findUnique({ where: { id: user.id } })) ?? user;
     return res.json({
       success: true,
+      user: { id: freshUser.id, name: freshUser.name, phone: freshUser.phone, role: freshUser.role, avatarId: freshUser.avatarId ?? null },
       approvalStatus: fresh.status,
       rejectionReason: fresh.reason,
       ...(fresh.vendor ? { vendor: vendorView(fresh.vendor) } : {}),

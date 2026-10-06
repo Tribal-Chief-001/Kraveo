@@ -77,6 +77,17 @@ export const verifyTokenForAccount = async (token: string): Promise<TokenClaims>
   return decoded;
 };
 
+/** True when this (already signature-verified) token's user is a partner whose profile is currently SUSPENDED. Never throws. */
+const partnerIsSuspended = async (userId: string, role: unknown): Promise<boolean> => {
+  try {
+    if (role === 'VENDOR') return (await prisma.vendor.count({ where: { userId, approvalStatus: 'SUSPENDED' } })) > 0 && (await prisma.vendor.count({ where: { userId, approvalStatus: 'APPROVED' } })) === 0;
+    if (role === 'DRIVER') return (await prisma.driverPartner.count({ where: { userId, approvalStatus: 'SUSPENDED' } })) > 0;
+    return false;
+  } catch {
+    return false;
+  }
+};
+
 // Middleware to verify JWT authentication header
 export const requireAuth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
@@ -103,6 +114,12 @@ export const requireAuth = async (req: AuthenticatedRequest, res: Response, next
 
   try {
     if (!(await accountMatchesToken(decoded.id, decoded.tv))) {
+      // The signature and expiry verified and the id belongs to a real account, so this is a session that account really held:
+      // it may be told WHY it ended when the admin paused the partner. Anyone without a validly signed token never gets here.
+      const suspended = await partnerIsSuspended(decoded.id, decoded.role);
+      if (suspended) {
+        return res.status(401).json({ success: false, code: 'TOKEN_REVOKED', reason: 'ACCOUNT_SUSPENDED', message: 'Your Kraveo account is paused. Log in to see why, or ask Kraveo support.' });
+      }
       return res.status(401).json({ success: false, code: 'TOKEN_REVOKED', message: 'This session is no longer valid. Please sign in again.' });
     }
   } catch (error) {

@@ -250,10 +250,10 @@ apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
     }
     recordSuccess(key);
 
-    const vendors = role === 'VENDOR' ? await prisma.vendor.findMany({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true, approvalStatus: true, rejectionReason: true, ...VENDOR_LOCATION_SELECT }, orderBy: { createdAt: 'asc' } }) : [];
+    const vendors = role === 'VENDOR' ? await prisma.vendor.findMany({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true, approvalStatus: true, rejectionReason: true, category: true, address: true, fssaiNumber: true, ...VENDOR_LOCATION_SELECT }, orderBy: { createdAt: 'asc' } }) : [];
     const vendorRow = vendors.find((v) => v.approvalStatus === 'APPROVED') ?? vendors[0] ?? null;
     const vendor = vendorRow ? { ...vendorRow, ...vendorLocationView(vendorRow) } : null;
-    const driver = role === 'DRIVER' ? await prisma.driverPartner.findFirst({ where: { userId: user.id }, select: { id: true, runnerCode: true, approvalStatus: true, rejectionReason: true } }) : null;
+    const driver = role === 'DRIVER' ? await prisma.driverPartner.findFirst({ where: { userId: user.id }, select: { id: true, runnerCode: true, approvalStatus: true, rejectionReason: true, vehicleType: true, vehicleRegNo: true, emergencyPhone: true, upiId: true, dutyStatus: true } }) : null;
     const approvalStatus = (vendor ?? driver)?.approvalStatus ?? 'APPROVED';
     const rejectionReason = (vendor ?? driver)?.rejectionReason ?? null;
 
