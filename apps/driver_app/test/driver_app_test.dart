@@ -306,7 +306,7 @@ void main() {
       await tester.pumpWidget(_app(ActiveDeliveryScreen(controller: c, onGoHome: () {})));
       await tester.pump(const Duration(milliseconds: 600));
       expect(find.text(RiderController.supportMessage), findsOneWidget);
-      expect(find.text('Call Kraveo support'), findsOneWidget);
+      expect(find.text('Email Kraveo support'), findsOneWidget);
       expect(find.byKey(const ValueKey('enter-code-button')), findsNothing);
       expect(tester.takeException(), isNull);
       c.dispose();
@@ -417,14 +417,26 @@ void main() {
   });
 
   group('RunnerIdCardScreen', () {
-    testWidgets('renders pass details', (tester) async {
+    testWidgets('shows the rider\'s name and runner code, with no fake QR and no "ID verified" claim', (tester) async {
       await _smallPhone(tester);
-      await tester.pumpWidget(_app(const RunnerIdCardScreen()));
+      await tester.pumpWidget(_app(const RunnerIdCardScreen(name: 'Vikram Singh', runnerId: 'RUN-8042')));
       await tester.pump(const Duration(milliseconds: 700));
       expect(find.text('Vikram Singh'), findsOneWidget);
       expect(find.text('VS'), findsOneWidget);
-      expect(find.text('ID verified'), findsOneWidget);
       expect(find.text('RUN-8042'), findsOneWidget);
+      expect(find.text('Show this pass; the guard checks the code RUN-8042'), findsOneWidget);
+      expect(find.text('ID verified'), findsNothing);
+      expect(find.textContaining('SCAN AT'), findsNothing);
+      expect(find.textContaining('scan', findRichText: true), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a rider without a runner code is not shown a made-up one', (tester) async {
+      await _smallPhone(tester);
+      await tester.pumpWidget(_app(const RunnerIdCardScreen(name: 'Runner', runnerId: '-')));
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(find.textContaining('the guard checks the code'), findsNothing);
+      expect(find.text('Show this pass to the guard.'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });

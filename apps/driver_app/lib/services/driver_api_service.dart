@@ -11,9 +11,27 @@ class DriverApiService {
   /// Shown when the server rejects the saved token (HTTP 401) on an authenticated call.
   static const String sessionExpiredMessage = 'Session expired. Please log in again.';
 
+  /// Shown when the 401 says an admin paused the account (`reason: ACCOUNT_SUSPENDED`).
+  static const String accountPausedMessage = 'Your Kraveo account is paused. Please contact Kraveo support.';
+
+  /// True when a 401 body says the token ended because the account was suspended.
+  static bool isSuspendedBody(String body) {
+    if (!body.contains('ACCOUNT_SUSPENDED')) return false;
+    try {
+      final json = jsonDecode(body);
+      return json is Map && json['reason'] == 'ACCOUNT_SUSPENDED';
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Set by the session gate. Called when any authenticated request comes back 401, so the
   /// app can drop the dead token and return to the login screen.
   static void Function()? onUnauthorized;
+
+  /// Like [onUnauthorized], for a 401 that says the account was suspended. When nothing is registered here,
+  /// [onUnauthorized] gets the call as before.
+  static void Function()? onSuspended;
 
   /// Set by the session gate. Called when Kraveo answers 403 PARTNER_NOT_APPROVED, i.e. an admin suspended
   /// this account while the app was open, so the app can re-check its status and move to the status screen.
@@ -24,7 +42,12 @@ class DriverApiService {
   /// Every authenticated call in the app (including the order API) runs its response through this.
   static void checkAuthResponse(http.Response response) {
     if (response.statusCode == 401) {
-      onUnauthorized?.call();
+      final suspended = onSuspended;
+      if (suspended != null && isSuspendedBody(response.body)) {
+        suspended();
+      } else {
+        onUnauthorized?.call();
+      }
     } else if (response.statusCode == 403 && response.body.contains('PARTNER_NOT_APPROVED')) {
       onNotApproved?.call();
     }

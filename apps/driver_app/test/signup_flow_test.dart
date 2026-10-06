@@ -350,7 +350,10 @@ void main() {
     });
   });
 
-  group('Suspended while the app is open', () {
+  // DR-10: an admin SUSPENDING a rider bumps the token version, so the old token gets a 401 with
+  // `reason: ACCOUNT_SUSPENDED` (covered in bughunt_session_test.dart). The tests below only model the 403
+  // PARTNER_NOT_APPROVED answer (an account that is no longer approved but whose token is still valid).
+  group('No longer approved while the app is open (403 PARTNER_NOT_APPROVED)', () {
     test('a 403 PARTNER_NOT_APPROVED fires onNotApproved; a plain 403 or a 200 does not', () async {
       var fired = 0;
       DriverApiService.onNotApproved = () => fired++;
@@ -372,7 +375,7 @@ void main() {
       DriverApiService.onNotApproved = null;
     });
 
-    testWidgets('an approved rider that gets suspended moves to the status screen, and again on app resume', (tester) async {
+    testWidgets('an approved rider whose account is no longer approved (403) moves to the status screen, and again on app resume', (tester) async {
       SharedPreferences.setMockInitialValues({
         'kraveo_driver_jwt_token': 'stored-jwt',
         SessionController.sessionPrefKey: jsonEncode(_with(PartnerApproval.approved).toJson()),
@@ -381,7 +384,7 @@ void main() {
       await _pumpApp(tester, auth);
       expect(find.byType(DriverHomeScreen), findsOneWidget);
 
-      // The admin suspends the account; the next field action is refused with PARTNER_NOT_APPROVED.
+      // The account stops being approved; the next field action is refused with 403 PARTNER_NOT_APPROVED.
       auth.profile = ProfileResult(ProfileOutcome.valid, _with(PartnerApproval.suspended, reason: 'No-shows on orders'));
       DriverApiService.onNotApproved!.call();
       await _settle(tester);

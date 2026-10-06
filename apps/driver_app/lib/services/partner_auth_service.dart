@@ -35,8 +35,12 @@ class LoginResult {
 enum ProfileOutcome { valid, unauthorized, unreachable }
 
 class ProfileResult {
-  const ProfileResult(this.outcome, [this.session]);
+  const ProfileResult(this.outcome, [this.session, this.suspended = false]);
   final ProfileOutcome outcome;
+
+  /// With [ProfileOutcome.unauthorized]: Kraveo said the token ended because an admin paused the account
+  /// (`reason: ACCOUNT_SUSPENDED`), not because the session simply expired.
+  final bool suspended;
 
   /// Account basics from the server (no driver details) when [outcome] is valid.
   final PartnerSession? session;
@@ -52,7 +56,13 @@ class PartnerSignupForm {
     this.vehicleRegNo = '',
     this.emergencyPhone = '',
     this.upiId = '',
+    this.updateFields,
   });
+
+  /// For [toUpdateJson]: only these fields are sent (`name`, `vehicleType`, `vehicleRegNo`, `emergencyPhone`,
+  /// `upiId`), so details the rider did not touch (and the app may not even know) are never overwritten
+  /// with empty values. Null sends all of them.
+  final Set<String>? updateFields;
 
   final String name;
   final String phone;
@@ -77,13 +87,17 @@ class PartnerSignupForm {
       };
 
   /// Body for `PUT /partner/application` (phone and password cannot change there).
-  Map<String, dynamic> toUpdateJson() => {
-        'name': name,
-        'vehicleType': vehicleType,
-        'vehicleRegNo': vehicleRegNo,
-        'emergencyPhone': emergencyPhone,
-        'upiId': upiId,
-      };
+  Map<String, dynamic> toUpdateJson() {
+    final all = <String, dynamic>{
+      'name': name,
+      'vehicleType': vehicleType,
+      'vehicleRegNo': vehicleRegNo,
+      'emergencyPhone': emergencyPhone,
+      'upiId': upiId,
+    };
+    final only = updateFields;
+    return only == null ? all : {for (final e in all.entries) if (only.contains(e.key)) e.key: e.value};
+  }
 }
 
 /// Vehicles a rider can choose. Cycle and on foot need no number plate.
@@ -94,7 +108,7 @@ enum SignupFailure { invalid, phoneTaken, rateLimited, unauthorized, offline, se
 
 /// Outcome of creating an account or re-sending an application.
 class SignupResult {
-  const SignupResult.success({this.token, required PartnerSession this.session})
+  const SignupResult.success({this.token, this.session})
       : failure = null,
         field = null,
         message = null;
@@ -105,6 +119,9 @@ class SignupResult {
 
   /// Present for a new account (sign-up); null when an existing account re-sent its application.
   final String? token;
+
+  /// The account as Kraveo answered. Null only when an application was re-sent and the 200 answer carried no
+  /// readable user: the application is accepted, and the caller re-reads the profile.
   final PartnerSession? session;
   final SignupFailure? failure;
 
@@ -229,6 +246,8 @@ class ApiPartnerAuthService implements PartnerAuthService {
       case 201:
         final session = json == null ? null : PartnerSession.fromMeJson(json);
         final token = json?['token'];
+        // Re-sending an application: a 200 means Kraveo accepted it, whether or not the body has a user.
+        if (!expectToken) return SignupResult.success(session: session);
         if (session == null) return const SignupResult.failure(SignupFailure.server);
         if (expectToken && (token is! String || token.isEmpty)) return const SignupResult.failure(SignupFailure.server);
         return SignupResult.success(token: token is String ? token : null, session: session);
@@ -252,7 +271,9 @@ class ApiPartnerAuthService implements PartnerAuthService {
         Uri.parse('${ApiConfig.baseUrl}/partner/me'),
         headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
       ).timeout(const Duration(seconds: 10));
-      if (response.statusCode == 401) return const ProfileResult(ProfileOutcome.unauthorized);
+      if (response.statusCode == 401) {
+        return ProfileResult(ProfileOutcome.unauthorized, null, _decode(response.body)?['reason'] == 'ACCOUNT_SUSPENDED');
+      }
       if (response.statusCode != 200) return const ProfileResult(ProfileOutcome.unreachable);
       final json = _decode(response.body);
       final session = json == null ? null : PartnerSession.fromMeJson(json);

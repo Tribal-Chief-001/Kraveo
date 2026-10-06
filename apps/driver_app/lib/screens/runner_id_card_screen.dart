@@ -2,35 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../widgets/ui/icon_action.dart';
-import '../widgets/ui/pass_qr.dart';
 
-/// Premium digital staff badge shown to hostel-gate security.
+/// The rider's staff pass, shown to hostel-gate security. It carries only what Kraveo really knows: the
+/// rider's name and runner code. There is no scannable code and no "verified" badge: the guard reads the
+/// code (RUN-xxxx) and checks it with Kraveo.
 class RunnerIdCardScreen extends StatelessWidget {
   final String name;
+
+  /// The rider's runner code, e.g. "RUN-8042". "-" when Kraveo has not given one.
   final String runnerId;
-  final String vehicle;
-  final String plate;
-  final String gateAccess;
-  final String emergencyContact;
 
   /// Optional profile photo. Falls back to initials when null or when it fails to load.
   final String? photoUrl;
 
-  /// Vehicle, gate access and emergency contact rows. The server does not provide these yet,
-  /// so the real (logged-in) pass hides them instead of showing placeholder values.
-  final bool showExtraDetails;
-
   const RunnerIdCardScreen({
     super.key,
-    this.name = 'Vikram Singh',
-    this.runnerId = 'RUN-8042',
-    this.vehicle = 'TVS Jupiter',
-    this.plate = 'MP 04 AB 1234',
-    this.gateAccess = 'All hostel blocks',
-    this.emergencyContact = '+91 98989 12345',
+    required this.name,
+    required this.runnerId,
     this.photoUrl,
-    this.showExtraDetails = true,
   });
+
+  bool get _hasCode => runnerId.trim().isNotEmpty && runnerId.trim() != '-';
 
   String get _initials {
     final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
@@ -90,62 +82,27 @@ class RunnerIdCardScreen extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 22),
                       child: Text(name, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.displayMd.copyWith(color: k.ink)),
                     ),
-                    const SizedBox(height: 10),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: k.brand.withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(KRadius.pill),
-                        border: Border.all(color: k.brand.withValues(alpha: 0.6)),
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(LucideIcons.badgeCheck, size: 18, color: k.brand),
-                        const SizedBox(width: 8),
-                        Text('ID verified', style: KraveoType.titleMd.copyWith(color: k.brand)),
-                      ]),
-                    ),
                     const SizedBox(height: 22),
                     Text('RUNNER ID', style: KraveoType.label.copyWith(color: k.inkFaint, letterSpacing: 1.6)),
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Text(runnerId, style: KraveoType.displayLg.copyWith(color: k.accent, fontSize: 46, letterSpacing: 2)),
                     ),
-                    if (showExtraDetails) ...[
-                      const SizedBox(height: 18),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 22),
-                        child: Divider(color: k.line, height: 1),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(22, 14, 22, 8),
-                        child: Column(children: [
-                          _Detail(icon: LucideIcons.bike, label: 'Vehicle', value: '$vehicle · $plate'),
-                          _Detail(icon: LucideIcons.mapPinned, label: 'Gate access', value: gateAccess),
-                          _Detail(icon: LucideIcons.phone, label: 'Emergency contact', value: emergencyContact),
-                        ]),
-                      ),
-                    ] else
-                      const SizedBox(height: 14),
                     Container(
-                      margin: const EdgeInsets.fromLTRB(22, 8, 22, 22),
+                      key: const ValueKey('pass-guard-note'),
+                      margin: const EdgeInsets.fromLTRB(22, 18, 22, 22),
                       padding: const EdgeInsets.all(16),
                       width: double.infinity,
-                      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(KRadius.xl)),
-                      child: Column(children: [
-                        PassQr(seed: runnerId, size: 176, ink: Colors.black),
-                        const SizedBox(height: 10),
-                        Text('SCAN AT HOSTEL GATE', style: KraveoType.label.copyWith(color: Colors.black, letterSpacing: 1.4)),
-                      ]),
+                      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(KRadius.xl), border: Border.all(color: k.line)),
+                      child: Text(
+                        _hasCode ? 'Show this pass; the guard checks the code $runnerId' : 'Show this pass to the guard.',
+                        textAlign: TextAlign.center,
+                        style: KraveoType.titleMd.copyWith(color: k.ink),
+                      ),
                     ),
                   ],
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Show this pass to gate security before entering.',
-              textAlign: TextAlign.center,
-              style: KraveoType.bodySm.copyWith(color: k.inkMuted),
             ),
           ],
         ),
@@ -178,30 +135,6 @@ class _Avatar extends StatelessWidget {
             ? fallback
             : Image.network(photoUrl!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback),
       ),
-    );
-  }
-}
-
-class _Detail extends StatelessWidget {
-  const _Detail({required this.icon, required this.label, required this.value});
-  final IconData icon;
-  final String label, value;
-
-  @override
-  Widget build(BuildContext context) {
-    final k = context.k;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Icon(icon, size: 20, color: k.brand),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(label.toUpperCase(), style: KraveoType.caption.copyWith(color: k.inkFaint, letterSpacing: 1.1)),
-            Text(value, style: KraveoType.titleMd.copyWith(color: k.ink)),
-          ]),
-        ),
-      ]),
     );
   }
 }

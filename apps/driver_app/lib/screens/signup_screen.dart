@@ -29,7 +29,10 @@ class _SignupScreenState extends State<SignupScreen> {
   final _phoneFocus = FocusNode();
   final _passwordFocus = FocusNode();
 
-  late String _vehicle = kVehicleTypes.contains(widget.existing?.vehicleType) ? widget.existing!.vehicleType! : 'Bike';
+  /// New account: starts on Bike. Editing an application whose vehicle Kraveo did not tell us: nothing is
+  /// pre-selected (and nothing is sent) until the rider picks one, so a Cycle rider is never silently turned into a Bike.
+  late String? _vehicle = kVehicleTypes.contains(widget.existing?.vehicleType) ? widget.existing!.vehicleType! : (widget.existing == null ? 'Bike' : null);
+  bool get _needsPlate => _vehicle != null && vehicleNeedsPlate(_vehicle!);
   bool _showPassword = false;
   bool _showMore = false;
   bool _busy = false;
@@ -66,7 +69,7 @@ class _SignupScreenState extends State<SignupScreen> {
       if (!isValidIndianMobile(_phone.text.trim())) e['phone'] = 'Enter your 10-digit mobile number';
       if (_password.text.length < 8) e['password'] = 'Use at least 8 characters';
     }
-    if (vehicleNeedsPlate(_vehicle) && _plate.text.trim().length < 4) e['vehicleRegNo'] = 'Enter the number plate of your vehicle';
+    if (_needsPlate && _plate.text.trim().length < 4) e['vehicleRegNo'] = 'Enter the number plate of your vehicle';
     final emergency = _emergency.text.trim();
     if (emergency.isNotEmpty && !isValidIndianMobile(emergency)) e['emergencyPhone'] = 'Enter a valid 10-digit number, or leave it empty';
     if (emergency.isNotEmpty && emergency == _phone.text.trim()) e['emergencyPhone'] = 'The emergency contact must be someone else';
@@ -94,14 +97,16 @@ class _SignupScreenState extends State<SignupScreen> {
       _errors.clear();
       _problem = null;
     });
+    final plate = _needsPlate ? _plate.text.trim().toUpperCase() : '';
     final form = PartnerSignupForm(
       name: _name.text.trim(),
       phone: _phone.text.trim(),
       password: _password.text,
-      vehicleType: _vehicle,
-      vehicleRegNo: vehicleNeedsPlate(_vehicle) ? _plate.text.trim().toUpperCase() : '',
+      vehicleType: _vehicle ?? widget.existing?.vehicleType ?? '',
+      vehicleRegNo: plate,
       emergencyPhone: _emergency.text.trim(),
       upiId: _upi.text.trim(),
+      updateFields: _editing ? _editedFields(plate) : null,
     );
     SignupResult result;
     try {
@@ -139,6 +144,24 @@ class _SignupScreenState extends State<SignupScreen> {
           _problem = 'Kraveo is having trouble. Please try again in a moment.';
       }
     });
+  }
+
+  /// The fields the rider really changed (editing only). Everything else stays as Kraveo has it: the app may not
+  /// even know the stored value (older server), and an empty value must never wipe it.
+  Set<String> _editedFields(String plate) {
+    final old = widget.existing!;
+    final fields = <String>{};
+    if (_name.text.trim() != old.name.trim()) fields.add('name');
+    if (_vehicle != null && _vehicle != old.vehicleType) fields.add('vehicleType');
+    final oldPlate = (old.vehicleRegNo ?? '').trim().toUpperCase();
+    if (_needsPlate) {
+      if (plate != oldPlate) fields.add('vehicleRegNo');
+    } else if (_vehicle != null && _vehicle != old.vehicleType && oldPlate.isNotEmpty) {
+      fields.add('vehicleRegNo'); // moved to a vehicle without a plate: the old plate goes
+    }
+    if (_digits(_emergency.text) != _digits(old.emergencyPhone)) fields.add('emergencyPhone');
+    if (_upi.text.trim() != (old.upiId ?? '').trim()) fields.add('upiId');
+    return fields;
   }
 
   void _clear(String key) {
@@ -315,7 +338,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     ]),
                   ),
                 ),
-                if (vehicleNeedsPlate(_vehicle)) ...[
+                if (_needsPlate) ...[
                   const SizedBox(height: 18),
                   KReveal(
                     index: 6,

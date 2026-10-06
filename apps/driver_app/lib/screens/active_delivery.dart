@@ -84,18 +84,48 @@ class _DeliveryViewState extends State<_DeliveryView> {
   RiderController get c => widget.controller;
   OrderView get o => widget.order;
 
-  Future<void> _openCodeEntry() async {
-    await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => GateOtpDialog(
-        orderRef: o.shortRef,
-        customerName: o.customer?.name ?? 'the customer',
-        gateName: o.dropLabel,
-        initiallyLocked: c.activeLocked,
-        onSubmit: c.verifyOtp,
-      ),
-    );
+  Future<void> _openCodeEntry({bool retry = false}) async {
+    final orderId = o.id;
+    final ref = o.shortRef;
+    final customer = o.customer?.name ?? 'the customer';
+    final gate = o.dropLabel;
+    final locked = c.activeLocked && !retry;
+    BuildContext? dialogContext;
+
+    // The keypad must not stay on top of an order that was cancelled or moved away: close it as soon as
+    // the delivery on screen is no longer this one at the drop point. (A delivered order closes it itself.)
+    void closeIfGone() {
+      final ctx = dialogContext;
+      if (ctx == null || !ctx.mounted) return;
+      final cur = c.active;
+      final gone = cur == null || cur.id != orderId || cur.status != OrderStatus.arrivedAtGate;
+      final delivered = c.notice?.kind == NoticeKind.delivered && c.notice?.order.id == orderId;
+      if (gone && !delivered) {
+        dialogContext = null;
+        Navigator.of(ctx).pop(false);
+      }
+    }
+
+    c.addListener(closeIfGone);
+    try {
+      await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) {
+          dialogContext = ctx;
+          return GateOtpDialog(
+            orderRef: ref,
+            customerName: customer,
+            gateName: gate,
+            initiallyLocked: locked,
+            onSubmit: c.verifyOtp,
+          );
+        },
+      );
+    } finally {
+      dialogContext = null;
+      c.removeListener(closeIfGone);
+    }
   }
 
   /// Opens Google Maps navigation to [point]; says so when no maps app or browser can.
@@ -224,13 +254,28 @@ class _DeliveryViewState extends State<_DeliveryView> {
     if (c.actionBusy) {
       action = const KButton(label: 'Saving…', large: true, loading: true);
     } else if (locked) {
-      action = KButton(
-        label: 'Call Kraveo support',
-        icon: LucideIcons.phone,
-        kind: KButtonKind.danger,
-        large: true,
-        onPressed: () => showSupportSheet(context, note: 'Delivery ${o.shortRef} is locked after too many wrong codes.'),
-      );
+      action = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        KButton(
+          key: const ValueKey('locked-support-button'),
+          label: 'Email Kraveo support',
+          icon: LucideIcons.mail,
+          kind: KButtonKind.danger,
+          large: true,
+          onPressed: () => showSupportSheet(context,
+              note: 'Delivery ${o.shortRef} is locked after too many wrong codes.', subject: 'Locked delivery ${o.shortRef}'),
+        ),
+        const SizedBox(height: 10),
+        // A wrong guess here costs nothing: Kraveo answers a locked order without counting an attempt,
+        // and after support unlocks it the same button finishes the delivery.
+        KButton(
+          key: const ValueKey('retry-code-button'),
+          label: 'Try the code again',
+          icon: LucideIcons.hash,
+          kind: KButtonKind.ghost,
+          large: true,
+          onPressed: () => _openCodeEntry(retry: true),
+        ),
+      ]);
     } else {
       action = switch (status) {
         OrderStatus.readyForPickup => Semantics(
@@ -341,11 +386,12 @@ class _DeliveryViewState extends State<_DeliveryView> {
                       ),
                       const SizedBox(width: 8),
                       KButton(
+                        key: const ValueKey('call-customer-button'),
                         label: 'Call',
                         icon: LucideIcons.phone,
                         kind: KButtonKind.tonal,
                         expand: false,
-                        onPressed: () => showNumberSheet(context, title: 'Call ${o.customer?.name ?? 'the customer'}', number: phone),
+                        onPressed: () => callNumber(context, number: phone),
                       ),
                     ]),
                   )
@@ -406,7 +452,7 @@ class _NoticeView extends StatelessWidget {
             if (o.cancelReason != null) 'Reason: ${o.cancelReason}.',
             if (o.isRefunded) 'The customer has been refunded.',
             o.pickedUpAt != null
-                ? 'Do not hand over the food. Call Kraveo support to ask what to do with it.'
+                ? 'Do not hand over the food. Email Kraveo support to ask what to do with it.'
                 : 'Do not go to the restaurant for this order.',
           ].join(' '),
           'OK, got it',
@@ -438,7 +484,14 @@ class _NoticeView extends StatelessWidget {
         KButton(key: const ValueKey('notice-done'), label: button, large: true, onPressed: onDone),
         if (notice.kind == NoticeKind.cancelled) ...[
           const SizedBox(height: 12),
-          KButton(label: 'Call Kraveo support', icon: LucideIcons.phone, kind: KButtonKind.ghost, large: true, onPressed: () => showSupportSheet(context)),
+          KButton(
+            key: const ValueKey('notice-support-button'),
+            label: 'Email Kraveo support',
+            icon: LucideIcons.mail,
+            kind: KButtonKind.ghost,
+            large: true,
+            onPressed: () => showSupportSheet(context, subject: 'Cancelled delivery ${o.shortRef}'),
+          ),
         ],
       ],
     );

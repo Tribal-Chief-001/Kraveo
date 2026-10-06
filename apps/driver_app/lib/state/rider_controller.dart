@@ -77,7 +77,7 @@ class RiderController extends ChangeNotifier {
   RiderController(this.services, {Set<String> myIds = const {}}) : _myIds = myIds.where((e) => e.isNotEmpty).toSet();
 
   static const String dutyPrefKey = 'kraveo_driver_duty_online';
-  static const supportMessage = 'Call Kraveo support – this delivery is locked.';
+  static const supportMessage = 'Contact Kraveo support – this delivery is locked.';
 
   final RiderServices services;
   final Set<String> _myIds;
@@ -101,6 +101,8 @@ class RiderController extends ChangeNotifier {
   bool _onDuty = false;
   bool _dutyBusy = false;
   bool _pendingOffSync = false;
+  bool _dutyOffInFlight = false;
+  DateTime? _lastDutyChangeAt;
   bool get onDuty => _onDuty;
   bool get dutyBusy => _dutyBusy;
 
@@ -123,7 +125,11 @@ class RiderController extends ChangeNotifier {
   bool _activeStale = false;
   bool _actionBusy = false;
   String? _actionError;
-  final Set<String> _lockedIds = {};
+  /// Orders whose gate code Kraveo locked (5 wrong codes). The value is the `updatedAt` of the first copy of the
+  /// order seen after the lock (null until that copy arrives); a copy newer than that means someone (an admin
+  /// resetting the lock) changed the order, so the lock is lifted. The 5th wrong code itself also bumps
+  /// `updatedAt`, which is why the baseline is the post-lock copy and not the copy that was on screen.
+  final Map<String, DateTime?> _lockedAt = {};
   DeliveryNotice? _notice;
   String? _releasingId;
   DateTime? _lastSync;
@@ -137,7 +143,7 @@ class RiderController extends ChangeNotifier {
   bool get activeStale => _activeStale;
   bool get actionBusy => _actionBusy;
   String? get actionError => _actionError;
-  bool get activeLocked => _active != null && _lockedIds.contains(_active!.id);
+  bool get activeLocked => _active != null && _lockedAt.containsKey(_active!.id);
   DeliveryNotice? get notice => _notice;
   DateTime? get lastSync => _lastSync;
   bool get socketConnected => services.socket.isConnected;
@@ -160,6 +166,10 @@ class RiderController extends ChangeNotifier {
   /// True while the foreground-service position stream is running (always false for a source
   /// that cannot stream, which is polled on a timer instead).
   bool get isTracking => _trackSub != null;
+
+  /// Location is shared while the rider is on duty AND while a delivery is in hand, even after the rider
+  /// switched the duty off: the customer's live map must not freeze mid-delivery.
+  bool get sharingLocation => _onDuty || _active != null;
   DateTime? get lastFixAt => _lastFixAt;
   bool get lastLocationPostFailed => _lastLocationPostFailed;
 
@@ -211,6 +221,7 @@ class RiderController extends ChangeNotifier {
     await refreshActive();
     if (_disposed) return;
     if (wantDuty) await setDuty(true, restoring: true);
+    _resumeSharingForActive();
     _updateConnection();
     _startPolling();
     unawaited(loadHistory());
@@ -288,14 +299,22 @@ class RiderController extends ChangeNotifier {
     if (!on) {
       final wasOn = _onDuty;
       _onDuty = false;
-      _stopLocation();
+      _lastDutyChangeAt = _now();
+      // A delivery in hand keeps its live location (customer map, admin) until it is finished or released.
+      if (_active == null) _stopLocation();
       _offers = const [];
       _offersLoaded = false;
       _offersStale = false;
       _updateConnection();
       _notify();
       await _saveDutyPref(false);
-      final r = await _api.setDuty(false);
+      _dutyOffInFlight = true;
+      final ApiResult<String?> r;
+      try {
+        r = await _api.setDuty(false);
+      } finally {
+        _dutyOffInFlight = false;
+      }
       if (_disposed) return;
       if (!r.ok && r.failure != ApiFailure.unauthorized && r.failure != ApiFailure.notApproved) {
         _pendingOffSync = true;
@@ -304,7 +323,7 @@ class RiderController extends ChangeNotifier {
         _pendingOffSync = false;
         if (wasOn) {
           _say(_active != null
-              ? 'You are off duty. Please still finish the delivery you are carrying.'
+              ? 'You are off duty. Your location is still shared with the customer until you finish this delivery.'
               : 'You are off duty. Location sharing is off.');
         }
       }
@@ -313,10 +332,12 @@ class RiderController extends ChangeNotifier {
 
     if (_onDuty) return;
     _dutyBusy = true;
+    _lastDutyChangeAt = _now();
     _notify();
     final r = await _api.setDuty(true);
     if (_disposed) return;
     _dutyBusy = false;
+    _lastDutyChangeAt = _now();
     if (r.ok) {
       _onDuty = true;
       _pendingOffSync = false;
@@ -349,7 +370,8 @@ class RiderController extends ChangeNotifier {
   /// Logout: stop GPS and offers on this phone and forget "on duty" (the session tells the server).
   Future<void> stopForLogout() async {
     _onDuty = false;
-    _stopLocation();
+    _lastDutyChangeAt = _now();
+    _stopLocation(); // logging out ends the session, so nothing can be sent for a delivery in hand either
     _offers = const [];
     services.socket.disconnect();
     await _saveDutyPref(false);
@@ -359,7 +381,8 @@ class RiderController extends ChangeNotifier {
   /// The server says this rider is off duty: mirror it without another server call.
   void _goOffLocally() {
     _onDuty = false;
-    _stopLocation();
+    _lastDutyChangeAt = _now();
+    if (_active == null) _stopLocation();
     _offers = const [];
     _offersLoaded = false;
     _updateConnection();
@@ -370,6 +393,59 @@ class RiderController extends ChangeNotifier {
   Future<void> _syncOff() async {
     final r = await _api.setDuty(false);
     if (r.ok && !_onDuty) _pendingOffSync = false;
+  }
+
+  /// The server went ON for this rider while the phone shows off (restore failed on a weak network, or the
+  /// rider logged in again): show the truth and start sharing, without another server call.
+  Future<void> _goOnLocally() async {
+    _onDuty = true;
+    _lastDutyChangeAt = _now();
+    _pendingOffSync = false;
+    unawaited(_saveDutyPref(true));
+    _startLocation();
+    _updateConnection();
+    _notify();
+    if (_active == null) await refreshOffers();
+  }
+
+  /// Mirrors the duty Kraveo holds for this rider (`driver.dutyStatus` of the login / `GET /partner/me`
+  /// answer, read at [asOf]). The server is the truth unless this phone has a change of its own that Kraveo
+  /// has not seen yet (a switch in flight, an "I went off duty" still waiting to be sent, or a switch made
+  /// after [asOf]). A missing or unknown value changes nothing (older server).
+  Future<void> reconcileDuty(String? serverStatus, {DateTime? asOf}) async {
+    if (_disposed || !_started) return;
+    final s = serverStatus?.trim().toUpperCase() ?? '';
+    final serverOn = switch (s) {
+      'ONLINE' || 'IN_TRANSIT' => true,
+      'OFFLINE' => false,
+      _ => null,
+    };
+    if (serverOn == null || serverOn == _onDuty) return;
+    if (_dutyBusy || _dutyOffInFlight || _pendingOffSync) return;
+    final changedAt = _lastDutyChangeAt;
+    if (asOf != null && changedAt != null && changedAt.isAfter(asOf)) return;
+    if (serverOn) {
+      await _goOnLocally();
+    } else {
+      _goOffLocally();
+      unawaited(_saveDutyPref(false));
+      _say('Kraveo has you off duty. Go on duty again to receive orders.');
+    }
+  }
+
+  /// A delivery is in hand but the duty switch is off (the app was restarted, or Kraveo assigned the order):
+  /// keep the customer's live map alive.
+  void _resumeSharingForActive() {
+    if (_disposed || _active == null || _onDuty) return;
+    if (_location != LocationState.off || _trackSub != null || _locTimer != null) return;
+    _startLocation();
+  }
+
+  /// A delivery ended (finished or released) while the duty switch is off: location sharing stops now.
+  void _stopSharingIfIdle() {
+    if (_onDuty || _active != null) return;
+    if (_location == LocationState.off && _trackSub == null && _locTimer == null) return;
+    _stopLocation();
   }
 
   // =====================================================================================
@@ -388,7 +464,7 @@ class RiderController extends ChangeNotifier {
     _lastPostAt = null;
     _trackFailures = 0;
     unawaited(_locationTick().whenComplete(() {
-      if (!_onDuty || _disposed) return;
+      if (!sharingLocation || _disposed) return;
       // Only start the foreground service once a reading worked (permission is settled);
       // otherwise poll, which names the problem and retries.
       if (_location == LocationState.ok) {
@@ -417,7 +493,7 @@ class RiderController extends ChangeNotifier {
 
   /// Streams when it can (and has not failed repeatedly), polls otherwise.
   void _ensureSharing() {
-    if (!_onDuty || _disposed || _trackSub != null) return;
+    if (!sharingLocation || _disposed || _trackSub != null) return;
     if (_trackFailures < _maxTrackFailures) {
       Stream<LocationReading>? stream;
       try {
@@ -453,7 +529,7 @@ class RiderController extends ChangeNotifier {
   /// One streamed reading. Shown at once, but posted only if the last post is at least
   /// [RiderServices.minPostGap] old and none is in flight.
   void _onTracked(LocationReading reading) {
-    if (!_onDuty || _disposed) return;
+    if (!sharingLocation || _disposed) return;
     if (!reading.hasFix) {
       _applyProblem(reading.problem!);
       _trackLost();
@@ -501,11 +577,11 @@ class RiderController extends ChangeNotifier {
   /// no fallback position: Kraveo would rather show "location unavailable" than a made-up
   /// point on the map.
   Future<void> _locationTick() async {
-    if (!_onDuty || _locBusy || _disposed) return;
+    if (!sharingLocation || _locBusy || _disposed) return;
     _locBusy = true;
     try {
       final reading = await services.location.read();
-      if (!_onDuty || _disposed) return;
+      if (!sharingLocation || _disposed) return;
       if (reading.hasFix) {
         _location = LocationState.ok;
         _lastFixAt = _now();
@@ -521,7 +597,7 @@ class RiderController extends ChangeNotifier {
       _locBusy = false;
     }
     // A reading worked while only the timer is running: (re)start the position stream.
-    if (_onDuty && !_disposed && _trackSub == null && _location == LocationState.ok) _ensureSharing();
+    if (sharingLocation && !_disposed && _trackSub == null && _location == LocationState.ok) _ensureSharing();
   }
 
   /// The "Allow location" / "Turn on GPS" buttons.
@@ -680,8 +756,13 @@ class RiderController extends ChangeNotifier {
     _active = o;
     _actionError = null;
     _offers = const [];
+    // A "delivered" / "moved away" notice for the previous job must not hide the new one. A cancelled order
+    // with the food already picked up stays: the rider must read what to do with it.
+    final n = _notice;
+    if (n != null && !(n.kind == NoticeKind.cancelled && n.order.pickedUpAt != null)) _notice = null;
     services.socket.watchOrder(o.id);
     _updateConnection();
+    _resumeSharingForActive();
     _notify();
   }
 
@@ -722,6 +803,7 @@ class RiderController extends ChangeNotifier {
     final cur = _active;
     if (cur == null || incoming.id != cur.id) return;
     if (!incoming.isAtLeastAsNewAs(cur)) return;
+    _reviewLock(incoming);
     if (incoming.status == OrderStatus.delivered) {
       _finish(incoming, NoticeKind.delivered);
       return;
@@ -732,6 +814,22 @@ class RiderController extends ChangeNotifier {
     }
     _active = incoming;
     _notify();
+  }
+
+  /// The order is locked: remember the first copy seen after the lock; a newer copy than that means an admin
+  /// acted (a locked order is not changed by further attempts, they are refused before any write), so the
+  /// lock is lifted. If it was lifted wrongly, the next attempt gets a free 423 and locks it again.
+  void _reviewLock(OrderView incoming) {
+    if (!_lockedAt.containsKey(incoming.id)) return;
+    final seen = incoming.updatedAt;
+    if (seen == null) return;
+    final base = _lockedAt[incoming.id];
+    if (base == null) {
+      _lockedAt[incoming.id] = seen;
+    } else if (seen.isAfter(base)) {
+      _lockedAt.remove(incoming.id);
+      _say('Kraveo unlocked this delivery. You can enter the customer\'s code again.');
+    }
   }
 
   /// The active order is no longer in this rider's list: find out why before removing it.
@@ -781,6 +879,7 @@ class RiderController extends ChangeNotifier {
     services.socket.unwatchOrder(o.id);
     final releasedByMe = kind == NoticeKind.reassigned && _releasingId == o.id;
     _active = null;
+    _lockedAt.remove(o.id);
     _otherActive = 0;
     _actionError = null;
     _actionBusy = false;
@@ -794,6 +893,7 @@ class RiderController extends ChangeNotifier {
       _history = [o, ..._history.where((h) => h.id != o.id)];
     }
     _updateConnection();
+    _stopSharingIfIdle();
     _notify();
     if (_onDuty) unawaited(refreshOffers());
     if (kind == NoticeKind.delivered) unawaited(loadHistory());
@@ -868,7 +968,6 @@ class RiderController extends ChangeNotifier {
   Future<OtpOutcome> verifyOtp(String code) async {
     final cur = _active;
     if (cur == null) return const OtpOutcome(OtpOutcomeKind.error, message: 'This delivery is no longer on your phone.');
-    if (_lockedIds.contains(cur.id)) return const OtpOutcome(OtpOutcomeKind.locked);
     if (cur.status != OrderStatus.arrivedAtGate) {
       return const OtpOutcome(OtpOutcomeKind.error, message: 'Mark "Arrived at the drop point" first.');
     }
@@ -887,14 +986,20 @@ class RiderController extends ChangeNotifier {
     }
     switch (r.failure) {
       case ApiFailure.locked:
-        _lockedIds.add(cur.id);
+        // Free for the rider: Kraveo answers a locked order before it counts an attempt.
+        _lockedAt.putIfAbsent(cur.id, () => null);
         _notify();
         return const OtpOutcome(OtpOutcomeKind.locked);
       case ApiFailure.badRequest when r.code == 'OTP_INVALID':
         if (r.attemptsLeft != null && r.attemptsLeft! <= 0) {
-          _lockedIds.add(cur.id);
+          _lockedAt.putIfAbsent(cur.id, () => null);
           _notify();
           return const OtpOutcome(OtpOutcomeKind.locked);
+        }
+        // Kraveo is counting attempts again, so it is not locked (an admin reset it).
+        if (_lockedAt.containsKey(cur.id)) {
+          _lockedAt.remove(cur.id);
+          _notify();
         }
         return OtpOutcome(OtpOutcomeKind.wrong, attemptsLeft: r.attemptsLeft);
       case ApiFailure.badRequest:
@@ -949,9 +1054,11 @@ class RiderController extends ChangeNotifier {
     if (r.ok) {
       services.socket.unwatchOrder(cur.id);
       _active = null;
+      _lockedAt.remove(cur.id);
       _releasingId = null;
       _otherActive = 0;
       _updateConnection();
+      _stopSharingIfIdle();
       _say('Job released. It is back with other riders.');
       _notify();
       if (_onDuty) await refreshOffers();

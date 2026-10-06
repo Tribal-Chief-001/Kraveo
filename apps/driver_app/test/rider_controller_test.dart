@@ -349,14 +349,15 @@ void main() {
       expect(c.activeLocked, isTrue);
     });
 
-    test('423 OTP_LOCKED locks the delivery; further tries do not hit the server', () async {
+    test('423 OTP_LOCKED locks the delivery; further tries still ask Kraveo (a 423 costs no attempt)', () async {
       f.api.onOtp = (_, __) => const ApiResult.fail(ApiFailure.locked, statusCode: 423, code: 'OTP_LOCKED');
       await boot();
       expect((await c.verifyOtp('1111')).kind, OtpOutcomeKind.locked);
       expect(c.activeLocked, isTrue);
       f.api.calls.clear();
       expect((await c.verifyOtp('2222')).kind, OtpOutcomeKind.locked);
-      expect(f.api.calls, isEmpty);
+      expect(f.api.calls, ['otp:ord-1:2222'], reason: 'DR-01: no local short-circuit, so an admin reset is never hidden by the app');
+      expect(c.activeLocked, isTrue);
     });
 
     test('correct code: delivered notice, fee added to history', () async {
@@ -547,6 +548,246 @@ void main() {
       expect(f.api.calls, contains('history:cur-2'));
       expect(c.history.length, 1);
       expect(c.historyError, isTrue);
+    });
+  });
+
+  group('OTP lock reset by an admin (DR-01)', () {
+    const locked = ApiResult<OrderView?>.fail(ApiFailure.locked, statusCode: 423, code: 'OTP_LOCKED');
+    OrderView atGate(Duration ago) => order(status: 'ARRIVED_AT_GATE', phone: '+91 9876500000', updatedAt: testNow.subtract(ago));
+
+    setUp(() => f.api.active = ApiResult.ok([atGate(const Duration(minutes: 5))]));
+
+    test('locked -> newer copy -> unlocked', () async {
+      f.api.onOtp = (_, __) => locked;
+      await boot();
+      expect((await c.verifyOtp('1111')).kind, OtpOutcomeKind.locked);
+      expect(c.activeLocked, isTrue);
+
+      // The 5th wrong code itself changed the order on the server (newer updatedAt): that first copy is only the
+      // baseline and must NOT lift the lock.
+      f.socket.emit(OrderUpdated(atGate(const Duration(minutes: 4))));
+      expect(c.activeLocked, isTrue);
+      f.api.active = ApiResult.ok([atGate(const Duration(minutes: 4))]);
+      await c.pollNow();
+      expect(c.activeLocked, isTrue, reason: 'the same copy again (poll) changes nothing');
+
+      // The admin resets the lock: a newer copy arrives.
+      f.socket.emit(OrderUpdated(atGate(const Duration(minutes: 1))));
+      expect(c.activeLocked, isFalse);
+      expect(said.last, contains('unlocked'));
+      expect(c.active?.id, 'ord-1');
+    });
+
+    test('a newer copy that arrives by poll unlocks too, and the new code can finish the delivery', () async {
+      f.api.onOtp = (_, __) => locked;
+      await boot();
+      await c.verifyOtp('1111');
+      f.api.active = ApiResult.ok([atGate(const Duration(minutes: 4))]);
+      await c.pollNow();
+      expect(c.activeLocked, isTrue);
+      f.api.active = ApiResult.ok([atGate(const Duration(minutes: 1))]);
+      await c.pollNow();
+      expect(c.activeLocked, isFalse);
+      f.api.onOtp = (id, _) => ApiResult.ok(order(id: id, status: 'DELIVERED', updatedAt: testNow, deliveredAt: testNow));
+      expect((await c.verifyOtp('4821')).kind, OtpOutcomeKind.delivered);
+      expect(c.notice?.kind, NoticeKind.delivered);
+    });
+
+    test('an old copy never lifts the lock', () async {
+      f.api.onOtp = (_, __) => locked;
+      await boot();
+      await c.verifyOtp('1111');
+      f.socket.emit(OrderUpdated(atGate(const Duration(minutes: 4))));
+      f.socket.emit(OrderUpdated(atGate(const Duration(minutes: 9))));
+      expect(c.activeLocked, isTrue);
+    });
+
+    test('if Kraveo answers the retry with a normal wrong-code reply, the lock is gone locally', () async {
+      f.api.onOtp = (_, __) => locked;
+      await boot();
+      await c.verifyOtp('1111');
+      expect(c.activeLocked, isTrue);
+      f.api.onOtp = (_, __) => const ApiResult.fail(ApiFailure.badRequest, statusCode: 400, code: 'OTP_INVALID', attemptsLeft: 4);
+      final r = await c.verifyOtp('0000');
+      expect(r.kind, OtpOutcomeKind.wrong);
+      expect(r.attemptsLeft, 4);
+      expect(c.activeLocked, isFalse);
+    });
+
+    test('delivering or releasing forgets the lock of that order', () async {
+      f.api.onOtp = (_, __) => locked;
+      await boot();
+      await c.verifyOtp('1111');
+      f.api.active = ApiResult.ok([order(status: 'DELIVERED', updatedAt: testNow, deliveredAt: testNow)]);
+      await c.pollNow();
+      expect(c.active, isNull);
+      expect(c.activeLocked, isFalse);
+    });
+  });
+
+  group('location while carrying an order (DR-06)', () {
+    test('going off duty with a delivery in hand keeps sharing until the job ends', () async {
+      f = FakeRider(gps: const Duration(milliseconds: 20));
+      f.api.active = ApiResult.ok([order(status: 'ACCEPTED')]);
+      await boot();
+      await c.setDuty(true);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await c.setDuty(false);
+      expect(c.onDuty, isFalse);
+      expect(c.sharingLocation, isTrue);
+      expect(said.last, contains('still shared'));
+      final n = f.api.locations.length;
+      await Future<void>.delayed(const Duration(milliseconds: 90));
+      expect(f.api.locations.length, greaterThan(n), reason: 'the customer map keeps moving');
+      expect(c.location, LocationState.ok);
+
+      f.api.onRelease = (_) => const ApiResult.ok(null);
+      await c.release();
+      expect(c.active, isNull);
+      expect(c.sharingLocation, isFalse);
+      expect(c.location, LocationState.off);
+      final m = f.api.locations.length;
+      await Future<void>.delayed(const Duration(milliseconds: 90));
+      expect(f.api.locations.length, m, reason: 'nothing is sent once the job is released and the rider is off duty');
+    });
+
+    test('a finished delivery (off duty) stops the sharing too', () async {
+      f = FakeRider(gps: const Duration(milliseconds: 20));
+      f.api.active = ApiResult.ok([order(status: 'ARRIVED_AT_GATE')]);
+      await boot();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(c.onDuty, isFalse);
+      expect(c.location, LocationState.ok, reason: 'restored with a job: sharing resumed without a tap');
+      expect(f.api.locations, isNotEmpty);
+      await c.verifyOtp('4821');
+      expect(c.active, isNull);
+      expect(c.location, LocationState.off);
+    });
+
+    test('after a restore with an active job and duty off, sharing resumes automatically', () async {
+      f.api.active = ApiResult.ok([order(status: 'PICKED_UP')]);
+      await boot();
+      await flush();
+      expect(c.onDuty, isFalse);
+      expect(c.sharingLocation, isTrue);
+      expect(f.api.locations, [(23.0775, 76.8513)]);
+    });
+
+    test('logging out stops everything', () async {
+      f.api.active = ApiResult.ok([order(status: 'PICKED_UP')]);
+      await boot();
+      await flush();
+      await c.stopForLogout();
+      expect(c.location, LocationState.off);
+    });
+
+    test('with no job, going off duty stops sharing at once', () async {
+      await boot();
+      await c.setDuty(true);
+      await flush();
+      await c.setDuty(false);
+      expect(c.sharingLocation, isFalse);
+      expect(c.location, LocationState.off);
+    });
+  });
+
+  group('duty mirrors what Kraveo holds (DR-07)', () {
+    test('Kraveo says OFFLINE while the phone shows ON: the phone goes off, without another server call', () async {
+      await boot();
+      await c.setDuty(true);
+      await flush();
+      f.api.calls.clear();
+      await c.reconcileDuty('OFFLINE');
+      expect(c.onDuty, isFalse);
+      expect(c.location, LocationState.off);
+      expect(said.last, contains('Kraveo has you off duty'));
+      expect((await SharedPreferences.getInstance()).getBool(RiderController.dutyPrefKey), isFalse);
+      expect(f.api.calls, isNot(contains('duty:false')));
+    });
+
+    test('Kraveo says ONLINE while a failed restore left the phone off: the phone goes on', () async {
+      f.api.onDuty = (_) => const ApiResult.fail(ApiFailure.timeout);
+      f.api.available = ApiResult.ok([offer()]);
+      await boot(onDutyPref: true);
+      expect(c.onDuty, isFalse);
+      f.api.onDuty = (on) => ApiResult.ok(on ? 'ONLINE' : 'OFFLINE');
+      f.api.calls.clear();
+      await c.reconcileDuty('ONLINE');
+      await flush();
+      expect(c.onDuty, isTrue);
+      expect(f.api.calls, isNot(contains('duty:true')), reason: 'mirroring needs no second call');
+      expect(c.offers.map((o) => o.id), ['pool-1']);
+      expect(f.api.locations, isNotEmpty);
+      expect((await SharedPreferences.getInstance()).getBool(RiderController.dutyPrefKey), isTrue);
+    });
+
+    test('IN_TRANSIT counts as on duty', () async {
+      f.api.active = ApiResult.ok([order(status: 'PICKED_UP')]);
+      await boot();
+      await c.reconcileDuty('IN_TRANSIT');
+      expect(c.onDuty, isTrue);
+    });
+
+    test('a pending "I went off duty" is not fought', () async {
+      await boot();
+      await c.setDuty(true);
+      f.api.onDuty = (_) => const ApiResult.fail(ApiFailure.offline);
+      await c.setDuty(false);
+      expect(c.onDuty, isFalse);
+      await c.reconcileDuty('ONLINE');
+      expect(c.onDuty, isFalse, reason: 'Kraveo has not heard the OFF yet; the poll will send it');
+    });
+
+    test('a missing or unknown value changes nothing (older server)', () async {
+      await boot();
+      await c.setDuty(true);
+      await flush();
+      await c.reconcileDuty(null);
+      await c.reconcileDuty('');
+      await c.reconcileDuty('SOMETHING_NEW');
+      expect(c.onDuty, isTrue);
+    });
+
+    test('an answer that was asked before the rider switched is ignored', () async {
+      await boot();
+      await c.setDuty(true);
+      await flush();
+      await c.reconcileDuty('OFFLINE', asOf: testNow.subtract(const Duration(minutes: 1)));
+      expect(c.onDuty, isTrue);
+      await c.reconcileDuty('OFFLINE', asOf: testNow.add(const Duration(minutes: 1)));
+      expect(c.onDuty, isFalse);
+    });
+  });
+
+  group('a finished delivery does not hide the next job (DR-17)', () {
+    test('the "delivered" notice is dropped when the next job arrives', () async {
+      f.api.active = ApiResult.ok([order(status: 'ARRIVED_AT_GATE')]);
+      f.api.available = ApiResult.ok([offer()]);
+      await boot();
+      await c.verifyOtp('4821');
+      expect(c.notice?.kind, NoticeKind.delivered);
+      await c.setDuty(true);
+      await flush();
+      expect(c.offers, isNotEmpty);
+      expect(await c.claim(c.offers.first), isTrue);
+      expect(c.active?.id, 'pool-1');
+      expect(c.notice, isNull);
+    });
+
+    test('a cancelled order with the food in hand stays until the rider reads it', () async {
+      f.api.active = ApiResult.ok([order(status: 'PICKED_UP')]);
+      await boot();
+      f.api.active = ApiResult.ok([
+        order(status: 'CANCELLED', paymentStatus: 'REFUNDED', cancelledBy: 'ADMIN', pickedUpAt: testNow, updatedAt: testNow),
+      ]);
+      await c.pollNow();
+      expect(c.notice?.kind, NoticeKind.cancelled);
+      f.api.available = ApiResult.ok([offer()]);
+      await c.setDuty(true);
+      await flush();
+      await c.claim(c.offers.first);
+      expect(c.active?.id, 'pool-1');
+      expect(c.notice?.kind, NoticeKind.cancelled);
     });
   });
 }

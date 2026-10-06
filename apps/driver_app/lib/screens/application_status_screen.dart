@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/partner_session.dart';
+import '../widgets/support_sheet.dart';
 
 /// What a rider sees after creating an account until Kraveo approves it, or when the application was
 /// rejected or the account suspended. Pending applications are re-checked every [pollEvery] and when the
@@ -89,7 +90,7 @@ class _ApplicationStatusScreenState extends State<ApplicationStatusScreen> with 
           LucideIcons.circlePause,
           KraveoPalette.warning,
           'Your account is paused',
-          'You cannot take deliveries right now. Ask Kraveo support to open it again.',
+          'You cannot take deliveries right now. Email Kraveo support to open it again.',
         ),
       _ => (
           LucideIcons.hourglass,
@@ -230,7 +231,13 @@ class _ApplicationStatusScreenState extends State<ApplicationStatusScreen> with 
                   ),
                 ),
                 const SizedBox(height: 18),
-                Text('Need help? Ask Kraveo support.', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
+                KButton(
+                  key: const ValueKey('status-support-button'),
+                  label: 'Need help? Email Kraveo support',
+                  kind: KButtonKind.ghost,
+                  icon: LucideIcons.mail,
+                  onPressed: () => emailSupport(context, subject: 'Kraveo rider application help'),
+                ),
               ]),
             ),
           ),

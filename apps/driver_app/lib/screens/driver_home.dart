@@ -41,6 +41,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
   PushController? _push;
   bool _explaining = false;
   StreamSubscription<String>? _messages;
+  SessionController? _sessionCtl;
+  DutyReading? _lastDutyReading;
   int selectedTab = 0;
 
   @override
@@ -53,7 +55,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
     );
     _messages = _rider.messages.listen(_showMessage);
     WidgetsBinding.instance.addObserver(this);
-    _rider.start();
+    // Kraveo's own idea of this rider's duty (second phone, logout elsewhere, a restore that failed on a weak
+    // network) is mirrored once the controller has started and whenever a fresh profile answer arrives.
+    _sessionCtl = context.getInheritedWidgetOfExactType<SessionScope>()?.notifier;
+    _sessionCtl?.dutyReading.addListener(_syncDutyFromSession);
+    unawaited(_rider.start().then((_) => _syncDutyFromSession()));
     // Push is optional: null when the app runs without it (tests, or Firebase unavailable).
     _push = context.getInheritedWidgetOfExactType<PushScope>()?.notifier;
     _push?.addListener(_maybeExplainNotifications);
@@ -62,6 +68,54 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
       _push?.attachUi(this);
       _maybeExplainNotifications();
     });
+  }
+
+  void _syncDutyFromSession() {
+    final reading = _sessionCtl?.dutyReading.value;
+    if (!mounted || reading == null || identical(reading, _lastDutyReading)) return;
+    _lastDutyReading = reading;
+    unawaited(_rider.reconcileDuty(reading.status, asOf: reading.asOf));
+  }
+
+  /// The duty switch. Going off duty with a delivery in hand asks first.
+  Future<void> _onDutyChanged(bool on) async {
+    if (!on && _rider.active != null) {
+      final stay = await _confirmOffDutyWithOrder();
+      if (stay != false || !mounted) return;
+    }
+    await _rider.setDuty(on);
+  }
+
+  /// true = stay on duty (also when the sheet is dismissed), false = go off duty anyway.
+  Future<bool?> _confirmOffDutyWithOrder() {
+    return showKSheet<bool>(
+      context,
+      builder: (ctx) {
+        final k = ctx.k;
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('Stay on duty?', textAlign: TextAlign.center, style: KraveoType.headline.copyWith(color: k.ink)),
+            const SizedBox(height: 8),
+            Text(
+              'You are carrying an order. Going off duty stops new orders, but your live location keeps going to the customer until this delivery is finished or released. Stay on duty?',
+              textAlign: TextAlign.center,
+              style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 16),
+            ),
+            const SizedBox(height: 24),
+            KButton(key: const ValueKey('stay-on-duty-button'), label: 'Stay on duty', large: true, onPressed: () => Navigator.of(ctx).pop(true)),
+            const SizedBox(height: 12),
+            KButton(
+              key: const ValueKey('go-off-duty-anyway-button'),
+              label: 'Go off duty anyway',
+              kind: KButtonKind.ghost,
+              large: true,
+              onPressed: () => Navigator.of(ctx).pop(false),
+            ),
+          ]),
+        );
+      },
+    );
   }
 
   // ---- push (Docs/18) ----
@@ -114,6 +168,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
     _messages?.cancel();
     _push?.removeListener(_maybeExplainNotifications);
     _push?.detachUi(this);
+    _sessionCtl?.dutyReading.removeListener(_syncDutyFromSession);
     _rider.dispose();
     super.dispose();
   }
@@ -144,13 +199,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
     final partner = SessionScope.maybeOf(context)?.session;
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => partner == null
-            ? const RunnerIdCardScreen()
-            : RunnerIdCardScreen(
-                name: partner.name.isEmpty ? 'Runner' : partner.name,
-                runnerId: (partner.runnerCode ?? '').isEmpty ? '-' : partner.runnerCode!,
-                showExtraDetails: false,
-              ),
+        builder: (context) => RunnerIdCardScreen(
+          name: (partner == null || partner.name.isEmpty) ? 'Runner' : partner.name,
+          runnerId: (partner?.runnerCode ?? '').isEmpty ? '-' : partner!.runnerCode!,
+        ),
       ),
     );
   }
@@ -232,7 +284,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
                   const Spacer(),
                   KIconButton(icon: LucideIcons.badgeCheck, semanticLabel: 'Open runner ID pass', onTap: _openRunnerPass),
                   const SizedBox(width: 10),
-                  KIconButton(icon: LucideIcons.siren, semanticLabel: 'Emergency campus support', tint: KraveoPalette.danger, onTap: () => showSupportSheet(context)),
+                  KIconButton(icon: LucideIcons.siren, semanticLabel: 'Contact Kraveo support', tint: KraveoPalette.danger, onTap: () => showSupportSheet(context)),
                 ],
               ),
               if (partner != null) ...[
@@ -252,8 +304,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
               ],
 
               // Hero duty control (truthful: ON only after Kraveo confirmed it)
-              DutyToggle(isOnline: r.onDuty, busy: r.dutyBusy, alertsOff: _push?.showBlockedBanner ?? false, onChanged: (v) => r.setDuty(v)),
-              if (r.onDuty) _LocationLine(state: r.location, postFailed: r.lastLocationPostFailed, onFix: r.fixLocation),
+              DutyToggle(isOnline: r.onDuty, busy: r.dutyBusy, alertsOff: _push?.showBlockedBanner ?? false, onChanged: _onDutyChanged),
+              if (r.sharingLocation) _LocationLine(state: r.location, postFailed: r.lastLocationPostFailed, onFix: r.fixLocation),
               const SizedBox(height: 16),
 
               KReveal(
@@ -262,6 +314,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
                   completedTrips: r.deliveredToday.length,
                   weekFees: RiderController.feesOf(r.deliveredThisWeek),
                   onTap: () => _goTab(2),
+                  unavailable: r.historyError && !r.historyLoaded,
+                  onRetry: () => unawaited(r.loadHistory()),
                 ),
               ),
               const SizedBox(height: 8),

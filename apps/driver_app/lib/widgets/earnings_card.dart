@@ -10,12 +10,19 @@ class EarningsCard extends StatelessWidget {
   final double weekFees;
   final VoidCallback? onTap;
 
+  /// The delivery history could not be loaded, so the sums above are unknown, not zero: the numbers show "—"
+  /// with a small retry hint instead of a made-up "₹0".
+  final bool unavailable;
+  final VoidCallback? onRetry;
+
   const EarningsCard({
     super.key,
     required this.todayEarnings,
     required this.completedTrips,
     required this.weekFees,
     this.onTap,
+    this.unavailable = false,
+    this.onRetry,
   });
 
   @override
@@ -43,13 +50,31 @@ class EarningsCard extends StatelessWidget {
               FittedBox(
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerLeft,
-                child: KAnimatedNumber(
-                  value: todayEarnings,
-                  prefix: '₹',
-                  style: KraveoType.displayLg.copyWith(fontSize: 60, height: 1.05, color: k.ink),
-                ),
+                child: unavailable
+                    ? Text('—', key: const ValueKey('earnings-unavailable'), style: KraveoType.displayLg.copyWith(fontSize: 60, height: 1.05, color: k.inkFaint))
+                    : KAnimatedNumber(
+                        value: todayEarnings,
+                        prefix: '₹',
+                        style: KraveoType.displayLg.copyWith(fontSize: 60, height: 1.05, color: k.ink),
+                      ),
               ),
-              if (completedTrips > 0)
+              if (unavailable)
+                KPressable(
+                  key: const ValueKey('earnings-retry'),
+                  semanticLabel: 'Could not load your fees. Double tap to retry.',
+                  onTap: onRetry,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: ExcludeSemantics(
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(LucideIcons.rotateCcw, size: 16, color: k.brand),
+                        const SizedBox(width: 6),
+                        Flexible(child: Text('Could not load. Tap to retry', style: KraveoType.bodySm.copyWith(color: k.brand))),
+                      ]),
+                    ),
+                  ),
+                )
+              else if (completedTrips > 0)
                 Text('Avg ₹$avg per trip', style: KraveoType.bodySm.copyWith(color: k.inkFaint)),
             ],
           ),
@@ -61,7 +86,9 @@ class EarningsCard extends StatelessWidget {
               icon: LucideIcons.bike,
               tint: KStatus.pickedUp.color,
               label: 'Trips today',
-              value: KAnimatedNumber(value: completedTrips, style: KraveoType.numericSm.copyWith(color: k.ink, fontSize: 28)),
+              value: unavailable
+                  ? Text('—', style: KraveoType.numericSm.copyWith(color: k.inkFaint, fontSize: 28))
+                  : KAnimatedNumber(value: completedTrips, style: KraveoType.numericSm.copyWith(color: k.ink, fontSize: 28)),
             ),
           ),
           const SizedBox(width: 10),
@@ -70,7 +97,9 @@ class EarningsCard extends StatelessWidget {
               icon: LucideIcons.calendarDays,
               tint: k.brand,
               label: 'Fees, 7 days',
-              value: KAnimatedNumber(value: weekFees, prefix: '₹', style: KraveoType.numericSm.copyWith(color: k.ink, fontSize: 28)),
+              value: unavailable
+                  ? Text('—', style: KraveoType.numericSm.copyWith(color: k.inkFaint, fontSize: 28))
+                  : KAnimatedNumber(value: weekFees, prefix: '₹', style: KraveoType.numericSm.copyWith(color: k.ink, fontSize: 28)),
             ),
           ),
         ]),

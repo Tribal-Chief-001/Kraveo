@@ -37,6 +37,7 @@ class PartnerSession {
     this.vehicleRegNo,
     this.emergencyPhone,
     this.upiId,
+    this.dutyStatus,
   });
 
   final String userId;
@@ -59,6 +60,10 @@ class PartnerSession {
   final String? vehicleRegNo;
   final String? emergencyPhone;
   final String? upiId;
+
+  /// What Kraveo holds for this rider's duty (`ONLINE`, `IN_TRANSIT`, `OFFLINE`) as of the login / profile answer.
+  /// Null when the server did not say (older server). Never stored: it is only meaningful right after an answer.
+  final String? dutyStatus;
 
   bool get isApproved => approval == PartnerApproval.approved;
 
@@ -90,6 +95,7 @@ class PartnerSession {
       vehicleRegNo: driver['vehicleRegNo']?.toString(),
       emergencyPhone: driver['emergencyPhone']?.toString(),
       upiId: driver['upiId']?.toString(),
+      dutyStatus: driver['dutyStatus']?.toString(),
     );
   }
 
@@ -110,6 +116,7 @@ class PartnerSession {
         vehicleRegNo: vehicleRegNo,
         emergencyPhone: emergencyPhone,
         upiId: upiId,
+        dutyStatus: dutyStatus,
       );
 
   /// Parses a contract `user` object.
@@ -141,7 +148,19 @@ class PartnerSession {
         vehicleRegNo: vehicleRegNo,
         emergencyPhone: emergencyPhone,
         upiId: upiId,
+        dutyStatus: dutyStatus,
       );
+
+  /// True when every profile detail the rider can see or edit is the same in both copies.
+  bool sameDetailsAs(PartnerSession o) =>
+      name == o.name &&
+      phone == o.phone &&
+      vehicleType == o.vehicleType &&
+      vehicleRegNo == o.vehicleRegNo &&
+      emergencyPhone == o.emergencyPhone &&
+      upiId == o.upiId &&
+      driverId == o.driverId &&
+      runnerCode == o.runnerCode;
 
   Map<String, dynamic> toJson() => {
         'userId': userId,

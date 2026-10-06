@@ -1,9 +1,12 @@
 /// How a rider reaches Kraveo when something goes wrong on a delivery (locked code, cancelled order
-/// in hand, emergency).
+/// in hand, a question about the account).
 ///
-/// UNVERIFIED: this number was hard-coded in the old home screen (and the restaurant app) before the
-/// order-flow work. Nobody has confirmed it is a staffed Kraveo line. Replace it with the real
-/// support number before release.
+/// Kraveo has no staffed phone line yet, so support is by email only. The old placeholder phone
+/// number was removed on purpose: a number nobody answers is worse than none. For a real emergency
+/// the rider dials the national emergency number ([emergencyNumber]).
 class SupportConfig {
-  static const String phone = '+91 98765 43214';
+  static const String email = 'kraveo.contact@gmail.com';
+
+  /// India's single emergency number (police, ambulance, fire).
+  static const String emergencyNumber = '112';
 }

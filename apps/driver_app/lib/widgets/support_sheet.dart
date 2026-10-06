@@ -3,10 +3,45 @@ import 'package:flutter/services.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../config/support_config.dart';
+import '../services/navigation.dart';
 
-/// Shows a phone number big and clear with a "Copy number" button. The app has no dialer plugin,
-/// so it never pretends to place a call: the rider copies the number into the phone app.
-Future<void> showNumberSheet(BuildContext context, {required String title, required String number, String? note}) {
+/// Opens `tel:` / `mailto:` links. Tests replace it with a fake; it is the real
+/// `url_launcher` otherwise.
+NavigationLauncher contactLauncher = const UrlNavigationLauncher();
+
+/// `tel:` link for [number] (digits, spaces and a leading + are kept; anything else is dropped).
+Uri telUri(String number) => Uri(scheme: 'tel', path: number.replaceAll(RegExp(r'[^0-9+]'), ''));
+
+/// `mailto:` link to Kraveo support. The subject is encoded by hand because `Uri(queryParameters:)`
+/// writes spaces as `+`, which mail apps show literally.
+Uri supportMailUri({String subject = 'Kraveo rider support'}) =>
+    Uri.parse('mailto:${SupportConfig.email}?subject=${Uri.encodeComponent(subject)}');
+
+/// Dials [number] in the phone app. When no dialer can open, the number is copied and the rider is told.
+Future<void> callNumber(BuildContext context, {required String number}) async {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final opened = await contactLauncher.open(telUri(number));
+  if (opened) return;
+  await Clipboard.setData(ClipboardData(text: number));
+  messenger
+    ?..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text('Could not open the phone app. Number copied: $number'), duration: const Duration(seconds: 4)));
+}
+
+/// Opens a new email to Kraveo support. When no email app can open, the address is copied.
+Future<void> emailSupport(BuildContext context, {String subject = 'Kraveo rider support'}) async {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final opened = await contactLauncher.open(supportMailUri(subject: subject));
+  if (opened) return;
+  await Clipboard.setData(const ClipboardData(text: SupportConfig.email));
+  messenger
+    ?..hideCurrentSnackBar()
+    ..showSnackBar(const SnackBar(content: Text('No email app found. Address copied: ${SupportConfig.email}'), duration: Duration(seconds: 4)));
+}
+
+/// "Email Kraveo support" sheet, with a separate, clearly labelled "Emergency: call 112" action for a
+/// real emergency (Kraveo support is email only and is not an emergency service).
+Future<void> showSupportSheet(BuildContext context, {String? note, String? subject}) {
   return showKSheet<void>(
     context,
     builder: (ctx) {
@@ -14,7 +49,7 @@ Future<void> showNumberSheet(BuildContext context, {required String title, requi
       return SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 24),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text(title, textAlign: TextAlign.center, style: KraveoType.headline.copyWith(color: k.ink)),
+          Text('Kraveo support', textAlign: TextAlign.center, style: KraveoType.headline.copyWith(color: k.ink)),
           if (note != null) ...[
             const SizedBox(height: 8),
             Text(note, textAlign: TextAlign.center, style: KraveoType.body.copyWith(color: k.inkMuted)),
@@ -22,21 +57,35 @@ Future<void> showNumberSheet(BuildContext context, {required String title, requi
           const SizedBox(height: 16),
           FittedBox(
             fit: BoxFit.scaleDown,
-            child: SelectableText(number, style: KraveoType.displayMd.copyWith(color: k.ink, letterSpacing: 0.6)),
+            child: SelectableText(SupportConfig.email, style: KraveoType.titleLg.copyWith(color: k.ink)),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 6),
+          Text('Kraveo support answers by email.', textAlign: TextAlign.center, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+          const SizedBox(height: 18),
           KButton(
-            label: 'Copy number',
-            icon: LucideIcons.copy,
+            key: const ValueKey('email-support-button'),
+            label: 'Email Kraveo support',
+            icon: LucideIcons.mail,
             large: true,
             onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: number));
-              if (ctx.mounted) {
-                Navigator.of(ctx).pop();
-                ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                  const SnackBar(content: Text('Number copied. Paste it in your phone app to call.'), duration: Duration(seconds: 3)),
-                );
-              }
+              Navigator.of(ctx).pop();
+              await emailSupport(context, subject: subject ?? 'Kraveo rider support');
+            },
+          ),
+          const SizedBox(height: 12),
+          Divider(color: k.line, height: 1),
+          const SizedBox(height: 12),
+          Text('In a real emergency, do not wait for an email.', textAlign: TextAlign.center, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+          const SizedBox(height: 8),
+          KButton(
+            key: const ValueKey('emergency-112-button'),
+            label: 'Emergency: call ${SupportConfig.emergencyNumber}',
+            icon: LucideIcons.siren,
+            kind: KButtonKind.danger,
+            large: true,
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              await callNumber(context, number: SupportConfig.emergencyNumber);
             },
           ),
           const SizedBox(height: 10),
@@ -46,6 +95,3 @@ Future<void> showNumberSheet(BuildContext context, {required String title, requi
     },
   );
 }
-
-Future<void> showSupportSheet(BuildContext context, {String? note}) =>
-    showNumberSheet(context, title: 'Kraveo support', number: SupportConfig.phone, note: note);

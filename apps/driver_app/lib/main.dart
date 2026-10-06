@@ -99,14 +99,18 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     DriverApiService.onUnauthorized = _handleUnauthorized;
+    DriverApiService.onSuspended = _handleSuspended;
     DriverApiService.onNotApproved = _handleNotApproved;
     WidgetsBinding.instance.addObserver(this);
+    _session.addListener(_showSignOutNotice);
     _session.restore();
   }
 
   @override
   void dispose() {
+    _session.removeListener(_showSignOutNotice);
     if (DriverApiService.onUnauthorized == _handleUnauthorized) DriverApiService.onUnauthorized = null;
+    if (DriverApiService.onSuspended == _handleSuspended) DriverApiService.onSuspended = null;
     if (DriverApiService.onNotApproved == _handleNotApproved) DriverApiService.onNotApproved = null;
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -136,23 +140,44 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   }
 
   /// A 401 came back from an authenticated call: back to login with an explanation.
-  void _handleUnauthorized() {
+  void _handleUnauthorized() => _endSession(DriverApiService.sessionExpiredMessage);
+
+  /// A 401 that says an admin paused this account: same, but with the true reason.
+  void _handleSuspended() => _endSession(DriverApiService.accountPausedMessage);
+
+  void _endSession(String message) {
     if (!mounted || _session.status != SessionStatus.signedIn) return;
-    // Close the runner pass / dialogs that sit above the gate.
+    // Close the runner pass, the code keypad and any sheet that sits above the gate.
     Navigator.of(context).popUntil((route) => route.isFirst);
     _session.expire();
+    _snack(message);
+  }
+
+  void _snack(String message) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        const SnackBar(
-          duration: Duration(seconds: 5),
+        SnackBar(
+          duration: const Duration(seconds: 5),
           content: Row(children: [
-            Icon(LucideIcons.logIn, size: 22, color: Colors.white),
-            SizedBox(width: 10),
-            Expanded(child: Text(DriverApiService.sessionExpiredMessage)),
+            const Icon(LucideIcons.logIn, size: 22, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(child: Text(message)),
           ]),
         ),
       );
+  }
+
+  /// The session ended on its own (a profile check found the account paused): say why on the login screen.
+  void _showSignOutNotice() {
+    if (_session.status != SessionStatus.signedOut) return;
+    final notice = _session.takeSignOutNotice();
+    if (notice == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      _snack(notice);
+    });
   }
 
   @override
@@ -175,7 +200,8 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
                 key: ValueKey('application-${me.approval.name}'),
                 session: me,
                 onRefresh: _session.refreshApproval,
-                onEdit: () => _openSignup(existing: me),
+                // Read the profile at tap time: it may have been completed by a profile check after this build.
+                onEdit: () => _openSignup(existing: _session.session ?? me),
                 onLogout: _session.logout,
               );
             }

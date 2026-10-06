@@ -2,7 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import '../config/support_config.dart';
 import '../services/partner_auth_service.dart';
+import '../widgets/support_sheet.dart';
 import '../widgets/ui/phone_input.dart';
 
 /// Delivery partner login: phone + password on the OLED-dark driver theme.
@@ -293,13 +295,19 @@ class _LoginScreenState extends State<LoginScreen> {
                     KReveal(
                       index: 6,
                       child: KCard(
+                        key: const ValueKey('login-support-card'),
                         color: k.brandSoft,
                         elevated: false,
+                        onTap: () => emailSupport(context, subject: 'Kraveo rider login help'),
                         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Icon(LucideIcons.headset, size: 24, color: k.brand),
+                          Icon(LucideIcons.mail, size: 24, color: k.brand),
                           const SizedBox(width: 12),
                           Expanded(
-                            child: Text('Forgot password? Ask Kraveo support.', style: KraveoType.titleMd.copyWith(color: k.ink, fontSize: 16)),
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text('Forgot password? Ask Kraveo support.', style: KraveoType.titleMd.copyWith(color: k.ink, fontSize: 16)),
+                              const SizedBox(height: 2),
+                              Text('Email ${SupportConfig.email}', style: KraveoType.bodySm.copyWith(color: k.brand, fontSize: 14)),
+                            ]),
                           ),
                         ]),
                       ),
