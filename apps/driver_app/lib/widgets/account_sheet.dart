@@ -9,6 +9,7 @@ Future<void> showAccountSheet(
   required PartnerSession partner,
   required VoidCallback onOpenPass,
   required VoidCallback onLogout,
+  VoidCallback? onOpenPayout,
 }) {
   return showKSheet<void>(
     context,
@@ -42,6 +43,20 @@ Future<void> showAccountSheet(
               onOpenPass();
             },
           ),
+          if (onOpenPayout != null) ...[
+            const SizedBox(height: 12),
+            KButton(
+              key: const ValueKey('account-payout-button'),
+              label: 'Payout details',
+              icon: LucideIcons.landmark,
+              kind: KButtonKind.tonal,
+              large: true,
+              onPressed: () {
+                Navigator.of(sheetContext).pop();
+                onOpenPayout();
+              },
+            ),
+          ],
           const SizedBox(height: 12),
           KButton(
             key: const ValueKey('account-logout-button'),

@@ -8,6 +8,7 @@ import 'screens/application_status_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
 import 'services/driver_api_service.dart';
+import 'services/payout/payout_api.dart';
 import 'services/push/firebase_push_messaging.dart';
 import 'services/push/push_controller.dart';
 import 'services/push/push_device_api.dart';
@@ -37,7 +38,10 @@ class KraveoDriverApp extends StatefulWidget {
   /// [auth] is the network layer for login / session checks; tests pass a fake.
   /// [riderServices] builds the order API, socket and GPS for the home screen (null = the real ones).
   /// [push] is the notification layer (null = none, as in the screen tests). The app takes ownership of it.
-  const KraveoDriverApp({super.key, this.auth, this.riderServices, this.push});
+  const KraveoDriverApp({super.key, this.auth, this.riderServices, this.push, this.payoutApi});
+
+  /// Payout details (tests pass a fake; null = the real API).
+  final PayoutApi? payoutApi;
 
   final PushController? push;
   final PartnerAuthService? auth;
@@ -73,7 +77,7 @@ class _KraveoDriverAppState extends State<KraveoDriverApp> {
           title: 'Kraveo Delivery Partner',
           debugShowCheckedModeBanner: false,
           theme: KraveoTheme.driver(),
-          home: AuthGate(session: _session, riderServices: widget.riderServices),
+          home: AuthGate(session: _session, riderServices: widget.riderServices, payoutApi: widget.payoutApi),
         ),
       ),
     );
@@ -83,10 +87,11 @@ class _KraveoDriverAppState extends State<KraveoDriverApp> {
 /// Decides between splash, login, the "can't reach Kraveo" retry state and the app, and wires
 /// session expiry (HTTP 401 on any authenticated call) to the login screen.
 class AuthGate extends StatefulWidget {
-  const AuthGate({super.key, required this.session, this.riderServices});
+  const AuthGate({super.key, required this.session, this.riderServices, this.payoutApi});
 
   final SessionController session;
   final RiderServices Function()? riderServices;
+  final PayoutApi? payoutApi;
 
   @override
   State<AuthGate> createState() => _AuthGateState();
@@ -205,7 +210,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
                 onLogout: _session.logout,
               );
             }
-            return DriverHomeScreen(services: widget.riderServices?.call());
+            return DriverHomeScreen(services: widget.riderServices?.call(), payoutApi: widget.payoutApi);
         }
       },
     );

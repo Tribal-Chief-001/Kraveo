@@ -1,0 +1,40 @@
+{
+  "_source": "Shapes asserted in backend/test/e2e/payout_accounts.test.ts (PARTNER_KEYS). A rider uses the same GET/PUT /api/partner/payout-account as a restaurant.",
+  "account_none": {
+    "success": true,
+    "data": null
+  },
+  "account_upi": {
+    "success": true,
+    "changed": true,
+    "message": "Payout details saved. Kraveo will check them before the first payout.",
+    "data": {
+      "method": "UPI",
+      "upiId": "ram@okhdfcbank",
+      "accountHolder": "Ram Singh",
+      "accountLast4": null,
+      "ifsc": null,
+      "bankName": null,
+      "verifiedAt": null,
+      "updatedAt": "2026-10-06T10:00:00.000Z"
+    }
+  },
+  "account_bank_verified": {
+    "success": true,
+    "data": {
+      "method": "BANK",
+      "upiId": null,
+      "accountHolder": "Ram Singh",
+      "accountLast4": "7890",
+      "ifsc": "HDFC0001234",
+      "bankName": "HDFC Bank",
+      "verifiedAt": "2026-10-06T12:30:00.000Z",
+      "updatedAt": "2026-10-06T10:00:00.000Z"
+    }
+  },
+  "encryption_missing": {
+    "success": false,
+    "code": "PAYOUT_ENCRYPTION_NOT_CONFIGURED",
+    "message": "Payout encryption is not configured on the server, so bank accounts cannot be saved yet. UPI ids still work."
+  }
+}

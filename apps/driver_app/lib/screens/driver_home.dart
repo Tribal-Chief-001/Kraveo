@@ -13,6 +13,8 @@ import '../widgets/ui/icon_action.dart';
 import '../widgets/ui/radar_pulse.dart';
 import '../widgets/ui/screen_header.dart';
 import '../services/driver_api_service.dart';
+import '../services/payout/payout_api.dart';
+import '../services/payout/payout_controller.dart';
 import '../services/push/push_controller.dart';
 import '../services/push/push_payload.dart';
 import '../widgets/notifications_banner.dart';
@@ -23,14 +25,18 @@ import 'active_delivery.dart';
 import 'earnings_history.dart';
 import 'trip_logs.dart';
 import 'runner_id_card_screen.dart';
+import 'payout_details_screen.dart';
 
 /// The rider's home: duty switch, GPS state, real offers from the pool, the delivery in progress,
 /// and today's delivery fees. All order data comes from [RiderController] (server truth).
 class DriverHomeScreen extends StatefulWidget {
   /// Network, socket and GPS. Null means the real ones; tests pass fakes.
-  const DriverHomeScreen({super.key, this.services});
+  const DriverHomeScreen({super.key, this.services, this.payoutApi});
 
   final RiderServices? services;
+
+  /// Payout details; tests pass a fake. Null = the real Kraveo API.
+  final PayoutApi? payoutApi;
 
   @override
   State<DriverHomeScreen> createState() => _DriverHomeScreenState();
@@ -38,6 +44,7 @@ class DriverHomeScreen extends StatefulWidget {
 
 class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBindingObserver implements PushUiHandler {
   late final RiderController _rider;
+  PayoutController? _payout;
   PushController? _push;
   bool _explaining = false;
   StreamSubscription<String>? _messages;
@@ -170,6 +177,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
     _push?.detachUi(this);
     _sessionCtl?.dutyReading.removeListener(_syncDutyFromSession);
     _rider.dispose();
+    _payout?.dispose();
     super.dispose();
   }
 
@@ -207,10 +215,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
     );
   }
 
+  /// "Payout details": one controller for the life of this home screen, so reopening shows what was just saved.
+  void _openPayoutDetails() {
+    final partner = SessionScope.maybeOf(context)?.session;
+    final controller = _payout ??= PayoutController(api: widget.payoutApi ?? HttpPayoutApi());
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PayoutDetailsScreen(controller: controller, suggestedUpi: partner?.upiId),
+    ));
+  }
+
   void _openAccountSheet() {
     final partner = SessionScope.maybeOf(context)?.session;
     if (partner == null) return;
-    showAccountSheet(context, partner: partner, onOpenPass: _openRunnerPass, onLogout: _confirmLogout);
+    showAccountSheet(context, partner: partner, onOpenPass: _openRunnerPass, onLogout: _confirmLogout, onOpenPayout: _openPayoutDetails);
   }
 
   /// Asks first, then signs out. Going off duty on the server is part of the sign-out, so a
