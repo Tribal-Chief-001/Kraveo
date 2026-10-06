@@ -1,0 +1,52 @@
+{
+  "_source": "Shapes asserted in backend/test/e2e/payout_accounts.test.ts (PARTNER_KEYS) and backend/test/e2e/settlement.test.ts (LIST_KEYS + detail keys). Amounts are the restaurant side only.",
+  "account_none": { "success": true, "data": null },
+  "account_upi": {
+    "success": true,
+    "changed": true,
+    "message": "Payout details saved. Kraveo will check them before the first payout.",
+    "data": { "method": "UPI", "upiId": "ram@okhdfcbank", "accountHolder": "Ram Singh", "accountLast4": null, "ifsc": null, "bankName": null, "verifiedAt": null, "updatedAt": "2026-10-06T10:00:00.000Z" }
+  },
+  "account_bank_verified": {
+    "success": true,
+    "data": { "method": "BANK", "upiId": null, "accountHolder": "Ram Singh", "accountLast4": "7890", "ifsc": "HDFC0001234", "bankName": "HDFC Bank", "verifiedAt": "2026-10-06T12:30:00.000Z", "updatedAt": "2026-10-06T10:00:00.000Z" }
+  },
+  "encryption_missing": {
+    "success": false,
+    "code": "PAYOUT_ENCRYPTION_NOT_CONFIGURED",
+    "message": "Payout encryption is not configured on the server, so bank accounts cannot be saved yet. UPI ids still work."
+  },
+  "settlements_list": {
+    "success": true,
+    "total": 3,
+    "page": 1,
+    "pageSize": 25,
+    "pages": 1,
+    "count": 3,
+    "data": [
+      { "id": "11111111-1111-4111-8111-111111111111", "periodStart": "2026-10-05T14:00:00.000Z", "periodEnd": "2026-10-06T16:30:00.000Z", "status": "ON_HOLD", "orderCount": 1, "vendorAmount": 198.22, "adjustmentTotal": -3, "netPayable": 195.22, "paidAt": null, "paymentReference": null, "createdAt": "2026-10-06T16:31:00.000Z" },
+      { "id": "22222222-2222-4222-8222-222222222222", "periodStart": "2026-10-04T13:00:00.000Z", "periodEnd": "2026-10-05T16:30:00.000Z", "status": "PAID", "orderCount": 12, "vendorAmount": 2450.5, "adjustmentTotal": 0, "netPayable": 2450.5, "paidAt": "2026-10-06T04:45:00.000Z", "paymentReference": "UTR402611223344", "createdAt": "2026-10-05T16:31:00.000Z" },
+      { "id": "33333333-3333-4333-8333-333333333333", "periodStart": "2026-10-03T13:00:00.000Z", "periodEnd": "2026-10-04T16:30:00.000Z", "status": "PENDING", "orderCount": 7, "vendorAmount": 1240, "adjustmentTotal": 0, "netPayable": 1240, "paidAt": null, "paymentReference": null, "createdAt": "2026-10-04T16:31:00.000Z" }
+    ]
+  },
+  "settlement_detail": {
+    "success": true,
+    "data": {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "periodStart": "2026-10-05T14:00:00.000Z",
+      "periodEnd": "2026-10-06T16:30:00.000Z",
+      "status": "ON_HOLD",
+      "orderCount": 1,
+      "vendorAmount": 198.22,
+      "adjustmentTotal": -3,
+      "netPayable": 195.22,
+      "paidAt": null,
+      "paymentReference": null,
+      "createdAt": "2026-10-06T16:31:00.000Z",
+      "orders": [ { "id": "abcdef12-0000-4000-8000-000000000001", "deliveredAt": "2026-10-06T14:10:00.000Z", "amount": 198.22 } ],
+      "ordersTruncated": false,
+      "adjustments": [ { "amount": -3, "reason": "Missing item credit", "createdAt": "2026-10-06T17:00:00.000Z" } ],
+      "dishes": [ { "name": "Thali", "units": 2, "amount": 198.22 } ]
+    }
+  }
+}

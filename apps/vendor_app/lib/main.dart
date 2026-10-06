@@ -12,6 +12,7 @@ import 'services/location/vendor_location_api.dart';
 import 'services/order_queue_controller.dart';
 import 'services/order_queue_service.dart';
 import 'services/order_socket.dart';
+import 'services/payout/payout_api.dart';
 import 'services/push/device_registry.dart';
 import 'services/push/firebase_push_messaging.dart';
 import 'services/push/local_alarm_notifications.dart';
@@ -37,13 +38,16 @@ void main() {
 class KraveoVendorApp extends StatefulWidget {
   /// [auth] is the network layer for login / session checks; [backend], [socketFactory] and [alarm] drive the
   /// order screens. Tests pass fakes; the app uses the real Kraveo API, Socket.io and the loud alarm.
-  const KraveoVendorApp({super.key, this.auth, this.backend, this.socketFactory, this.alarm, this.push, this.locationServices, this.locationApi});
+  const KraveoVendorApp({super.key, this.auth, this.backend, this.socketFactory, this.alarm, this.push, this.locationServices, this.locationApi, this.payoutApi});
 
   /// The phone's GPS + the maps link opener for "Detect my location" (tests pass fakes; null = the real ones).
   final LocationServices? locationServices;
 
   /// `PUT /partner/vendor/location` (tests pass a fake; null = the real API).
   final VendorLocationApi? locationApi;
+
+  /// Payout details and settlements (tests pass a fake; null = the real API).
+  final PayoutApi? payoutApi;
 
   /// Push notifications (device token, permission, taps). Null = no push at all (tests, and the app still works on
   /// the live connection and polling). The caller owns it; the app does not dispose it.
@@ -77,7 +81,7 @@ class _KraveoVendorAppState extends State<KraveoVendorApp> {
         // The vendor theme already renders type ~12% larger; cap the system font scale so
         // huge accessibility settings enlarge text without breaking the fixed 64px targets.
         builder: (context, child) => MediaQuery.withClampedTextScaling(maxScaleFactor: 1.3, child: child ?? const SizedBox.shrink()),
-        home: AuthGate(session: _session, push: widget.push, backend: widget.backend, socketFactory: widget.socketFactory, alarm: widget.alarm),
+        home: AuthGate(session: _session, push: widget.push, backend: widget.backend, payoutApi: widget.payoutApi, socketFactory: widget.socketFactory, alarm: widget.alarm),
       );
     final push = widget.push;
     return SessionScope(
@@ -93,11 +97,12 @@ class _KraveoVendorAppState extends State<KraveoVendorApp> {
 /// Decides between splash, login, the "can't reach Kraveo" retry state and the app, and wires
 /// session expiry (HTTP 401 on any authenticated call) and sign-out to the rest of the app.
 class AuthGate extends StatefulWidget {
-  const AuthGate({super.key, required this.session, this.push, this.backend, this.socketFactory, this.alarm});
+  const AuthGate({super.key, required this.session, this.push, this.backend, this.payoutApi, this.socketFactory, this.alarm});
 
   final SessionController session;
   final PushController? push;
   final VendorBackend? backend;
+  final PayoutApi? payoutApi;
   final OrderSocketFactory? socketFactory;
   final AlarmSink? alarm;
 
@@ -262,6 +267,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
             return VendorHomeScreen(
               key: ValueKey('home-${me?.vendorId}'),
               backend: widget.backend,
+              payoutApi: widget.payoutApi,
               socketFactory: widget.socketFactory,
               alarm: widget.alarm,
             );

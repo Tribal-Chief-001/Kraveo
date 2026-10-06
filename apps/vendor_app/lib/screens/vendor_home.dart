@@ -10,6 +10,9 @@ import '../services/menu_stock_controller.dart';
 import '../services/order_queue_controller.dart';
 import '../services/order_queue_service.dart';
 import '../services/order_socket.dart';
+import '../services/payout/payout_api.dart';
+import '../services/payout/payout_controller.dart';
+import '../services/payout/settlements_controller.dart';
 import '../services/push/push_controller.dart';
 import '../services/support_contact.dart';
 import '../services/vendor_backend.dart';
@@ -18,10 +21,13 @@ import '../models/partner_session.dart';
 import '../models/order_model.dart';
 import 'kitchen_queue.dart';
 import 'stock_manager.dart';
+import 'payout_details_screen.dart';
+import 'settlements_screen.dart';
 import 'sales_analytics.dart';
 import '../widgets/first_run_card.dart';
 import '../widgets/location_flow.dart';
 import '../widgets/order_cancelled_notice.dart';
+import '../widgets/payout_banner.dart';
 import '../widgets/push_status_cards.dart';
 import '../widgets/ui/support_email_link.dart';
 import '../widgets/ui/ui.dart';
@@ -29,6 +35,9 @@ import '../widgets/ui/ui.dart';
 class VendorHomeScreen extends StatefulWidget {
   /// Network layer; tests pass a fake. Defaults to the real Kraveo API.
   final VendorBackend? backend;
+
+  /// Payout details and settlements; tests pass a fake. Defaults to the real Kraveo API.
+  final PayoutApi? payoutApi;
 
   /// Live order events; tests pass a fake. Defaults to Socket.io. Pass a factory returning null-free fakes.
   final OrderSocketFactory? socketFactory;
@@ -41,7 +50,7 @@ class VendorHomeScreen extends StatefulWidget {
 
   final Duration pollInterval;
 
-  const VendorHomeScreen({super.key, this.backend, this.socketFactory, this.alarm, this.vendorId, this.pollInterval = const Duration(seconds: 15)});
+  const VendorHomeScreen({super.key, this.backend, this.payoutApi, this.socketFactory, this.alarm, this.vendorId, this.pollInterval = const Duration(seconds: 15)});
 
   @override
   State<VendorHomeScreen> createState() => _VendorHomeScreenState();
@@ -52,6 +61,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
   late final VendorBackend _backend = widget.backend ?? const HttpVendorBackend();
   OrderQueueController? _orders;
   MenuStockController? _menu;
+  late final PayoutApi _payoutApi = widget.payoutApi ?? HttpPayoutApi();
+  PayoutController? _payout;
   String? _vendorId;
   bool _initialised = false;
 
@@ -108,6 +119,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
     orders.addListener(_onOrdersChanged);
     _orders = orders;
     _menu = MenuStockController(backend: _backend, vendorId: id);
+    _payout = PayoutController(api: _payoutApi);
     orders.start();
     _syncStoreStatus();
   }
@@ -120,6 +132,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
     _orders?.removeListener(_onOrdersChanged);
     _orders?.dispose();
     _menu?.dispose();
+    _payout?.dispose();
     super.dispose();
   }
 
@@ -403,6 +416,16 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
     messenger.hideCurrentSnackBar();
   }
 
+  void _openPayoutDetails() {
+    final c = _payout;
+    if (c == null) return;
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PayoutDetailsScreen(controller: c)));
+  }
+
+  void _openSettlements() {
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => _SettlementsRoute(api: _payoutApi)));
+  }
+
   void _openHelpSheet() {
     final partner = SessionScope.maybeOf(context)?.session;
     showKSheet<void>(
@@ -456,6 +479,34 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
             if (partner != null) ...[
               const SizedBox(height: 20),
               _AccountCard(partner: partner),
+              if (_payout != null) ...[
+                const SizedBox(height: 12),
+                KButton(
+                  key: const ValueKey('payout-details-row'),
+                  label: 'Payout details',
+                  sublabel: 'पेआउट की जानकारी',
+                  icon: LucideIcons.landmark,
+                  kind: KButtonKind.tonal,
+                  large: true,
+                  onPressed: () {
+                    Navigator.of(sheetContext).pop();
+                    if (mounted) _openPayoutDetails();
+                  },
+                ),
+                const SizedBox(height: 12),
+                KButton(
+                  key: const ValueKey('settlements-row'),
+                  label: 'My settlements',
+                  sublabel: 'मेरे भुगतान',
+                  icon: LucideIcons.wallet,
+                  kind: KButtonKind.tonal,
+                  large: true,
+                  onPressed: () {
+                    Navigator.of(sheetContext).pop();
+                    if (mounted) _openSettlements();
+                  },
+                ),
+              ],
               if (partner.hasLocation != null) ...[
                 const SizedBox(height: 12),
                 KButton(
@@ -603,13 +654,20 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
                           builder: (context, _) {
                             final now = DateTime.now();
                             final today = DateTime(now.year, now.month, now.day);
-                            return SalesAnalyticsScreen(
+                            final earnings = SalesAnalyticsScreen(
                               orders: orders.allOrders,
                               now: now,
                               complete: orders.historyCovers(today),
                               loading: orders.historyLoading,
                               onRetry: () => orders.loadHistorySince(today),
                             );
+                            final payout = _payout;
+                            if (payout == null) return earnings;
+                            // A small, closable reminder above the earnings while no payout details are saved.
+                            return Column(children: [
+                              VMaxWidth(child: PayoutBanner(controller: payout, onAdd: _openPayoutDetails)),
+                              Expanded(child: earnings),
+                            ]);
                           },
                         ),
                       ],
@@ -627,6 +685,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
                 onChanged: (index) {
                   setState(() => _currentIndex = index);
                   if (index == 2) {
+                    final payout = _payout;
+                    if (payout != null && !payout.loaded && !payout.loading) payout.load();
                     final now = DateTime.now();
                     orders.loadHistorySince(DateTime(now.year, now.month, now.day));
                   }
@@ -687,4 +747,27 @@ class _AccountCard extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// Owns the settlements list controller for as long as the "My settlements" page is open.
+class _SettlementsRoute extends StatefulWidget {
+  const _SettlementsRoute({required this.api});
+
+  final PayoutApi api;
+
+  @override
+  State<_SettlementsRoute> createState() => _SettlementsRouteState();
+}
+
+class _SettlementsRouteState extends State<_SettlementsRoute> {
+  late final SettlementsController _controller = SettlementsController(api: widget.api);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SettlementsScreen(controller: _controller, api: widget.api);
 }
