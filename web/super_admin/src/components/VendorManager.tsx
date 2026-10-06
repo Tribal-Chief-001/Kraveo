@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { MapPin, Plus, SearchX, Star, Store } from 'lucide-react';
+import { ChevronDown, ChevronUp, Landmark, MapPin, Plus, SearchX, Star, Store } from 'lucide-react';
 import { Order, Vendor } from '../types';
 import { activeOrderCountByVendor } from '../lib/dashboardStats';
 import type { SavedPin } from '../lib/vendorLocation';
@@ -7,6 +7,7 @@ import { VendorLocationEditor } from './VendorLocationEditor';
 import { CommissionEditor } from './CommissionEditor';
 import type { VendorCommission } from '../lib/catalogParse';
 import { AddPartnerDrawer } from './AddPartnerDrawer';
+import { PayoutAccountPanel } from './PayoutAccountPanel';
 import { ApprovalPill } from './ui/ApprovalPill';
 import { Avatar } from './ui/Avatar';
 import { EmptyState } from './ui/EmptyState';
@@ -34,6 +35,20 @@ interface VendorManagerProps {
 }
 
 type VendorFilter = 'ALL' | 'OPEN' | 'CLOSED';
+
+/** Payout details (UPI / bank) of an approved restaurant's owner. Closed by default so the list does not call the server per card. */
+const VendorPayout: React.FC<{ vendor: Vendor; onAuthError?: (error: unknown) => void }> = ({ vendor, onAuthError }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-3">
+      <button type="button" className="k-btn-ghost !min-h-[36px] w-full justify-between text-xs" aria-expanded={open} onClick={() => setOpen((v) => !v)} aria-label={`Payout details of ${vendor.name}`}>
+        <span className="flex items-center gap-2"><Landmark className="h-3.5 w-3.5" aria-hidden="true" />Payout details</span>
+        {open ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />}
+      </button>
+      {open && <div className="mt-2"><PayoutAccountPanel userId={vendor.userId} name={vendor.name} kind="restaurant" onAuthError={onAuthError} /></div>}
+    </div>
+  );
+};
 
 const NO_ORDERS: Order[] = [];
 const NOT_BUSY: ReadonlySet<string> = new Set();
@@ -121,6 +136,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, orders = 
 
             <VendorLocationEditor id={v.id} name={v.name} pin={v} onSaved={onLocationSaved} />
             {onCommissionSaved && <CommissionEditor id={v.id} name={v.name} commissionType={v.commissionType} commissionValue={v.commissionValue} onSaved={onCommissionSaved} onAuthError={onAuthError} />}
+            {v.approvalStatus === 'APPROVED' && <VendorPayout vendor={v} onAuthError={onAuthError} />}
 
             <div className="mt-4 flex items-center justify-between gap-3 border-t border-kraveo-line pt-4">
               <div className="flex items-center gap-2">

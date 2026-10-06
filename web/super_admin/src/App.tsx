@@ -11,6 +11,7 @@ import { ApplicationsPanel } from './components/ApplicationsPanel';
 import { CustomersPanel } from './components/CustomersPanel';
 import { CatalogPanel } from './components/CatalogPanel';
 import { SettingsPanel } from './components/SettingsPanel';
+import { FinancePanel } from './components/FinancePanel';
 import type { PendingCounts, VendorCommission } from './lib/catalogParse';
 import { AdminProfile, AttentionEntry, DriverPartner, DriverPin, Order, OrderStatus, TabType, Vendor, normalizeDriverPin, normalizeOrderPartial } from './types';
 import { ApiError, apiService, clearAuthToken, getAuthToken, isAuthenticated as hasSession, SOCKET_URL } from './services/api';
@@ -62,6 +63,7 @@ export const App: React.FC = () => {
   const [drivers, setDrivers] = useState<DriverPin[]>([]);
   const [pendingApplications, setPendingApplications] = useState(0);
   const [pendingDishes, setPendingDishes] = useState<PendingCounts>({ pending: 0, changePending: 0, total: 0 });
+  const [pendingSettlements, setPendingSettlements] = useState(0);
   const [applicationsKey, setApplicationsKey] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   // The stored session could not be checked because the server was unreachable (the token is kept and the check retried).
@@ -124,6 +126,15 @@ export const App: React.FC = () => {
     } catch { /* the badge is a nicety */ }
   }, []);
 
+  // Settlements waiting to be paid (sidebar badge). Quiet on failure: the Finance tab shows real errors.
+  const refreshPendingSettlements = useCallback(async () => {
+    if (!getAuthToken()) return;
+    try {
+      const count = await apiService.fetchPendingSettlementCount();
+      setPendingSettlements((current) => (current === count ? current : count));
+    } catch { /* the badge is a nicety */ }
+  }, []);
+
   const loadAttention = useCallback(async () => {
     if (!getAuthToken()) return;
     setAttention((current) => ({ ...current, loading: true }));
@@ -163,8 +174,9 @@ export const App: React.FC = () => {
     // Rider positions too: after a missed socket event the next poll puts every marker right again (no change = no re-render).
     apiService.fetchDriverLocations().then((fresh) => setDrivers((current) => replaceRiderPins(current, fresh))).catch(() => { /* the live socket or the next poll catches up */ });
     refreshPendingDishes();
+    refreshPendingSettlements();
     loadAttention();
-  }, [handleSessionError, loadAttention, refreshPendingDishes]);
+  }, [handleSessionError, loadAttention, refreshPendingDishes, refreshPendingSettlements]);
 
   const fetchBackendData = useCallback(async () => {
     if (!getAuthToken()) return;
@@ -189,8 +201,9 @@ export const App: React.FC = () => {
     setIsLoading(false);
     refreshPendingCount();
     refreshPendingDishes();
+    refreshPendingSettlements();
     loadAttention();
-  }, [handleAuthFailure, refreshPendingCount, refreshPendingDishes, loadAttention]);
+  }, [handleAuthFailure, refreshPendingCount, refreshPendingDishes, refreshPendingSettlements, loadAttention]);
 
   // Check the stored session. Only a rejected token (401/403) ends it; if the server or network is down the token is
   // kept and the check retries with a growing delay, so a blip never throws away a valid 30-day session.
@@ -596,7 +609,7 @@ export const App: React.FC = () => {
         isLiveConnected={isLiveConnected}
         mobileOpen={mobileNavOpen}
         onCloseMobile={closeMobileNav}
-        badges={{ orders: activeOrderCount, attention: attentionEntries.length + locationGaps.length, applications: pendingApplications, catalog: pendingDishes.total }}
+        badges={{ orders: activeOrderCount, attention: attentionEntries.length + locationGaps.length, applications: pendingApplications, catalog: pendingDishes.total, finance: pendingSettlements }}
         alertBadges={{ attention: true }}
       />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -646,6 +659,7 @@ export const App: React.FC = () => {
             {activeTab === 'drivers' && <DriverManager drivers={driverPartners} orders={orders} now={now} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'customers' && <CustomersPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} />}
             {activeTab === 'catalog' && <CatalogPanel vendors={vendors} query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} pendingCounts={pendingDishes} onPendingChanged={refreshPendingDishes} />}
+            {activeTab === 'finance' && <FinancePanel vendors={vendors} driverPartners={driverPartners} pendingSettlements={pendingSettlements} onSettlementsChanged={refreshPendingSettlements} onAuthError={handleSessionError} />}
             {activeTab === 'settings' && <SettingsPanel onAuthError={handleSessionError} />}
             {activeTab === 'analytics' && <AnalyticsPanel />}
           </div>

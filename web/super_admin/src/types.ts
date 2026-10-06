@@ -1,6 +1,6 @@
 import { readPin } from './lib/vendorLocation';
 
-export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'drivers' | 'customers' | 'analytics' | 'catalog' | 'settings';
+export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'drivers' | 'customers' | 'analytics' | 'catalog' | 'finance' | 'settings';
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED';
 export type PartnerKind = 'VENDOR' | 'DRIVER';

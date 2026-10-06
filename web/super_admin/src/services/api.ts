@@ -25,6 +25,12 @@ import {
   CatalogDish, CatalogPage, PendingCounts, PricePreview, RecalcResult, SettingSaveResult, SettingView, VendorCommission, VendorCommissionResult,
   parseDishList, parseDishResponse, parsePendingCounts, parsePreview, parseRecalc, parseSettingSave, parseSettingView, parseVendorCommission,
 } from '../lib/catalogParse';
+import {
+  DateRange, DishSort, FinanceRiders, FinanceSummary, PayoutAccountResult, PayoutProvider, RevealedAccount, RiderPayout, RiderPayoutPage, RunResult, SettlementAction,
+  SettlementDetail, SettlementPage, parseByDay, parseByDish, parseByRestaurant, parseFinanceSummary, parsePayoutAccountResult, parsePendingSettlementCount, parseProviders,
+  parseReveal, parseRiderPayoutPage, parseRiderPayoutResult, parseRiders, parseRunResult, parseSettlementAction, parseSettlementDetail, parseSettlementPage,
+} from '../lib/financeParse';
+import type { AdjustmentInput, MarkPaidInput, PayoutAccountInput, RiderPayoutInput } from '../lib/financeInput';
 import type { CommissionType } from '../lib/pricing';
 import type { DropPointInfo } from '../lib/campus';
 import type { SavedPin } from '../lib/vendorLocation';
@@ -125,6 +131,28 @@ async function requestFull<T>(path: string, init: RequestInit = {}): Promise<T> 
   return body as T;
 }
 
+/** Downloads a file with the admin's auth header (a plain link cannot send it). Returns the bytes and the file name the server chose. */
+async function download(path: string): Promise<{ blob: Blob; filename: string }> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { signal: controller.signal, headers: getHeaders({ Accept: 'text/csv' }) });
+  } catch {
+    if (controller.signal.aborted) throw new ApiError(0, 'The server took too long to answer. Check the connection and try again.', 'TIMEOUT');
+    throw new ApiError(0, 'The operations API is unreachable. Check the network connection and try again.', 'NETWORK');
+  } finally {
+    window.clearTimeout(timer);
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, body?.message || `The download failed (${response.status}).`, typeof body?.code === 'string' ? body.code : undefined);
+  }
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = /filename="?([^";]+)"?/i.exec(disposition);
+  return { blob: await response.blob(), filename: match ? match[1] : 'kraveo-export.csv' };
+}
+
 /** What the catalog API accepts to create or change a dish (only fields that changed are sent on an update). */
 export interface DishWrite {
   vendorId?: string;
@@ -145,6 +173,9 @@ export type SettingsGroup = 'fees' | 'commission' | 'rounding' | 'settlement';
 const unexpected = (what: string) => new ApiError(502, `The server answered, but not in the shape the dashboard expects (${what}). Refresh and try again; if it keeps happening the server and dashboard versions do not match.`, 'UNEXPECTED_RESPONSE');
 const json = (value: unknown) => JSON.stringify(value);
 const dishPath = (id: string) => `/api/admin/catalog/${encodeURIComponent(id)}`;
+const rangeQuery = (range: DateRange) => `from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`;
+const settlementPath = (id: string) => `/api/admin/settlements/${encodeURIComponent(id)}`;
+const accountPath = (userId: string) => `/api/admin/partners/${encodeURIComponent(userId)}/payout-account`;
 
 /** An order from an action response, or null when the server answered without one (e.g. `{ success: true }`). */
 const orderOrNull = (raw: any): Order | null => {
@@ -416,5 +447,148 @@ export const apiService = {
   async setVendorCommission(vendorId: string, input: VendorCommission): Promise<VendorCommissionResult> {
     const body = await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/commission`, { method: 'PATCH', body: json(input) });
     return parseVendorCommission(body, input);
+  },
+
+  // ── Finance, settlements, payout accounts (Docs/21 section 5). Response parsing lives in lib/financeParse.ts ──
+  async fetchFinanceSummary(range: DateRange): Promise<FinanceSummary> {
+    const parsed = parseFinanceSummary(await requestFull<any>(`/api/admin/finance/summary?${rangeQuery(range)}`), range);
+    if (!parsed) throw unexpected('finance summary');
+    return parsed;
+  },
+
+  async fetchFinanceByDay(range: DateRange) {
+    const parsed = parseByDay(await requestFull<any>(`/api/admin/finance/by-day?${rangeQuery(range)}`), range);
+    if (!parsed) throw unexpected('finance by day');
+    return parsed;
+  },
+
+  async fetchFinanceByRestaurant(range: DateRange, limit = 100) {
+    const parsed = parseByRestaurant(await requestFull<any>(`/api/admin/finance/by-restaurant?${rangeQuery(range)}&limit=${limit}`), range);
+    if (!parsed) throw unexpected('finance by restaurant');
+    return parsed;
+  },
+
+  async fetchFinanceByDish(range: DateRange, opts: { sort: DishSort; top: number; vendorId?: string }) {
+    const vendor = opts.vendorId ? `&vendorId=${encodeURIComponent(opts.vendorId)}` : '';
+    const parsed = parseByDish(await requestFull<any>(`/api/admin/finance/by-dish?${rangeQuery(range)}&sort=${opts.sort}&top=${opts.top}${vendor}`), range);
+    if (!parsed) throw unexpected('finance by dish');
+    return parsed;
+  },
+
+  async fetchFinanceRiders(range: DateRange, limit = 100): Promise<FinanceRiders> {
+    const parsed = parseRiders(await requestFull<any>(`/api/admin/finance/riders?${rangeQuery(range)}&limit=${limit}`), range);
+    if (!parsed) throw unexpected('rider finance');
+    return parsed;
+  },
+
+  /** `range: null` = every settlement ever created. `status` and `vendorId` are left out when empty. */
+  async fetchSettlements(filter: { status?: string; vendorId?: string; range?: DateRange | null; page?: number; pageSize?: number }): Promise<SettlementPage> {
+    const params = new URLSearchParams();
+    if (filter.status) params.set('status', filter.status);
+    if (filter.vendorId) params.set('vendorId', filter.vendorId);
+    if (filter.range) { params.set('from', filter.range.from); params.set('to', filter.range.to); }
+    const page = filter.page && filter.page > 0 ? filter.page : 1;
+    params.set('page', String(page));
+    params.set('pageSize', String(filter.pageSize ?? 25));
+    const parsed = parseSettlementPage(await requestFull<any>(`/api/admin/settlements?${params.toString()}`), page);
+    if (!parsed) throw unexpected('settlement list');
+    return parsed;
+  },
+
+  /** Number of PENDING settlements (sidebar badge). */
+  async fetchPendingSettlementCount(): Promise<number> {
+    const count = parsePendingSettlementCount(await requestFull<any>('/api/admin/settlements?status=PENDING&page=1&pageSize=1'));
+    if (count === null) throw unexpected('pending settlements');
+    return Math.max(0, Math.round(count));
+  },
+
+  async fetchSettlement(id: string): Promise<SettlementDetail> {
+    const parsed = parseSettlementDetail(await requestFull<any>(settlementPath(id)));
+    if (!parsed) throw unexpected('settlement');
+    return parsed;
+  },
+
+  async markSettlementPaid(id: string, input: MarkPaidInput): Promise<SettlementAction> {
+    return parseSettlementAction(await requestFull<any>(`${settlementPath(id)}/mark-paid`, { method: 'POST', body: json(input) }));
+  },
+
+  async holdSettlement(id: string, input: { note?: string } = {}): Promise<SettlementAction> {
+    return parseSettlementAction(await requestFull<any>(`${settlementPath(id)}/hold`, { method: 'POST', body: json(input) }));
+  },
+
+  async releaseSettlement(id: string): Promise<SettlementAction> {
+    return parseSettlementAction(await requestFull<any>(`${settlementPath(id)}/release`, { method: 'POST', body: '{}' }));
+  },
+
+  /** `requestId` makes a double click or a retry add the adjustment once. */
+  async addSettlementAdjustment(id: string, input: AdjustmentInput & { requestId?: string }): Promise<SettlementAction> {
+    return parseSettlementAction(await requestFull<any>(`${settlementPath(id)}/adjustments`, { method: 'POST', body: json(input) }));
+  },
+
+  /** Frees the settlement's orders so the next run settles them again. A paid settlement is refused by the server. */
+  async cancelSettlement(id: string): Promise<SettlementAction> {
+    return parseSettlementAction(await requestFull<any>(`${settlementPath(id)}/cancel`, { method: 'POST', body: '{}' }));
+  },
+
+  /** "Create settlements now" for every restaurant with delivered, paid, unsettled orders. Idempotent on the server. */
+  async runSettlements(): Promise<RunResult> {
+    return parseRunResult(await requestFull<any>('/api/admin/settlements/run', { method: 'POST', body: '{}' }));
+  },
+
+  downloadSettlementCsv(id: string) {
+    return download(`${settlementPath(id)}/export.csv`);
+  },
+
+  downloadSettlementsCsv(range: DateRange | null) {
+    return download(`/api/admin/settlements/export.csv${range ? `?${rangeQuery(range)}` : ''}`);
+  },
+
+  async fetchRiderPayouts(filter: { driverUserId?: string; range?: DateRange | null; page?: number; pageSize?: number }): Promise<RiderPayoutPage> {
+    const params = new URLSearchParams();
+    if (filter.driverUserId) params.set('driverUserId', filter.driverUserId);
+    if (filter.range) { params.set('from', filter.range.from); params.set('to', filter.range.to); }
+    const page = filter.page && filter.page > 0 ? filter.page : 1;
+    params.set('page', String(page));
+    params.set('pageSize', String(filter.pageSize ?? 25));
+    const parsed = parseRiderPayoutPage(await requestFull<any>(`/api/admin/rider-payouts?${params.toString()}`), page);
+    if (!parsed) throw unexpected('rider payouts');
+    return parsed;
+  },
+
+  /** Records a payout that was made outside the app. The same reference twice for one rider is the same payment (`changed: false`). */
+  async recordRiderPayout(input: RiderPayoutInput): Promise<{ payout: RiderPayout | null; changed: boolean; message: string }> {
+    return parseRiderPayoutResult(await requestFull<any>('/api/admin/rider-payouts', { method: 'POST', body: json(input) }));
+  },
+
+  async fetchPayoutProviders(): Promise<PayoutProvider[]> {
+    const parsed = parseProviders(await requestFull<any>('/api/admin/payout-providers'));
+    if (!parsed) throw unexpected('payout providers');
+    return parsed;
+  },
+
+  /** The partner's payout details, masked. `account: null` = nothing saved yet. */
+  async fetchPayoutAccount(userId: string): Promise<PayoutAccountResult> {
+    const parsed = parsePayoutAccountResult(await requestFull<any>(accountPath(userId)), userId);
+    if (!parsed) throw unexpected('payout account');
+    return parsed;
+  },
+
+  async savePayoutAccount(userId: string, input: PayoutAccountInput): Promise<PayoutAccountResult> {
+    const parsed = parsePayoutAccountResult(await requestFull<any>(accountPath(userId), { method: 'PUT', body: json(input) }), userId);
+    if (!parsed) throw unexpected('payout account');
+    return parsed;
+  },
+
+  async setPayoutVerified(userId: string, verified: boolean): Promise<PayoutAccountResult> {
+    const parsed = parsePayoutAccountResult(await requestFull<any>(`${accountPath(userId)}/verify`, { method: 'PATCH', body: json({ verified }) }), userId);
+    if (!parsed) throw unexpected('payout account');
+    return parsed;
+  },
+
+  /** The full account number. The server writes an audit row first. The caller must not keep the result after the dialog closes. */
+  async revealPayoutAccount(userId: string): Promise<RevealedAccount> {
+    const parsed = parseReveal(await requestFull<any>(`${accountPath(userId)}/reveal`, { method: 'POST', body: '{}' }));
+    if (!parsed) throw unexpected('payout account reveal');
+    return parsed;
   },
 };

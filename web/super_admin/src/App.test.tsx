@@ -191,3 +191,34 @@ describe('WEB-04 assigning an offline rider', () => {
     expect(document.body.textContent).not.toContain('raw server text');
   });
 });
+
+describe('Finance section wiring', () => {
+  it('the sidebar shows the number of PENDING settlements, and opening Finance shows its tabs with the same number', async () => {
+    mockApi();
+    const pending = vi.spyOn(apiService, 'fetchPendingSettlementCount').mockResolvedValue(3);
+    vi.spyOn(apiService, 'fetchFinanceSummary').mockResolvedValue({ range: { from: '2026-10-01', to: '2026-10-07', days: 7 }, orders: 2, foodGross: 200, vendorAmount: 180, commission: 20, feesCollected: 50, discounts: 0, platformRevenue: 70, customerPaid: 250, refunds: { count: 0, amount: 0 }, settledAmount: 0, unsettledAmount: 180, paidOutAmount: 0 });
+    const empty = { range: { from: '', to: '', days: 0 }, rows: [] };
+    vi.spyOn(apiService, 'fetchFinanceByDay').mockResolvedValue(empty);
+    vi.spyOn(apiService, 'fetchFinanceByRestaurant').mockResolvedValue(empty);
+    vi.spyOn(apiService, 'fetchFinanceByDish').mockResolvedValue({ ...empty, sort: 'units' });
+    const h = await mount();
+    await flush();
+    expect(pending).toHaveBeenCalled();
+    const nav = h.querySelector('nav[aria-label="Primary"] button[aria-label="Finance (3)"]') as HTMLElement;
+    expect(nav).not.toBeNull();
+    await click(nav);
+    await flush();
+    expect(h.querySelector('[role="tablist"][aria-label="Finance sections"]')).not.toBeNull();
+    expect(h.querySelector('[role="tab"][aria-label], [role="tab"]#finance-tab-settlements')!.textContent).toContain('3');
+    expect(h.textContent).toContain('Platform revenue');
+    expect(h.textContent).toContain('₹70');
+  });
+
+  it('a failing badge request is silent and leaves no number', async () => {
+    mockApi();
+    vi.spyOn(apiService, 'fetchPendingSettlementCount').mockRejectedValue(new ApiError(500, 'down'));
+    const h = await mount();
+    await flush();
+    expect(h.querySelector('nav[aria-label="Primary"] button[aria-label="Finance"]')).not.toBeNull();
+  });
+});

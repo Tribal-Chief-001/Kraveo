@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Plus, Trash2 } from 'lucide-react';
 import { apiService, SettingsGroup } from '../services/api';
+import { parseSettlementSettings, PayoutProvider } from '../lib/financeParse';
+import { validateSettlementSettings, MAX_HOLD_DAYS } from '../lib/financeInput';
+import { Switch } from './ui/Switch';
 import { asNum, parseFeeLines, RecalcResult } from '../lib/catalogParse';
 import {
   CommissionType, FeesForm, ROUNDING_STEPS, RoundingStep, amountText, isRoundingStep, rupees, validateCommissionSetting, validateFees,
@@ -357,12 +360,105 @@ const RecalcCard: React.FC<{ settingsVersion: number; recommended: boolean; onSe
   );
 };
 
+// ───────────────────────────── Settlements ─────────────────────────────
+
+type Providers = { status: 'loading' } | { status: 'error' } | { status: 'ready'; list: PayoutProvider[] };
+
+const SettlementCard: React.FC<{ raw: Raw; onSaved: (raw: Raw) => void; onAuthError: (error: unknown) => void }> = ({ raw, onSaved, onAuthError }) => {
+  const toast = useToast();
+  const initial = parseSettlementSettings(raw);
+  const toForm = (v: ReturnType<typeof parseSettlementSettings>) => ({ time: v.time ?? '', mode: v.mode ?? '', autoCreate: v.autoCreate ?? false, holdDays: v.holdDays === null ? '' : String(v.holdDays) });
+  const [form, setForm] = useState(() => toForm(initial));
+  const [baseline, setBaseline] = useState(() => JSON.stringify(toForm(initial)));
+  const [touched, setTouched] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [error, setError] = useState('');
+  const [providers, setProviders] = useState<Providers>({ status: 'loading' });
+  const checked = validateSettlementSettings(form);
+  const errors = !checked.ok ? checked.errors : {};
+  const dirty = JSON.stringify(form) !== baseline;
+
+  useEffect(() => {
+    let cancelled = false;
+    apiService.fetchPayoutProviders()
+      .then((list) => { if (!cancelled) setProviders({ status: 'ready', list }); })
+      .catch((failure) => { if (cancelled) return; onAuthError(failure); setProviders({ status: 'error' }); });
+    return () => { cancelled = true; };
+  }, [onAuthError]);
+
+  const razorpayx = providers.status === 'ready' ? providers.list.find((p) => p.name === 'razorpayx') : undefined;
+  // Automatic payout is only offered when the server says a provider that can send money is switched on.
+  const autoBlocked = providers.status === 'ready' && !razorpayx?.enabled;
+
+  const save = async () => {
+    setTouched(true);
+    if (!checked.ok || savingRef.current) return;
+    savingRef.current = true; setSaving(true); setError('');
+    try {
+      const saved = await apiService.saveSettings('settlement', { ...checked.value });
+      const next = toForm(parseSettlementSettings(saved.value));
+      setForm(next); setBaseline(JSON.stringify(next)); setTouched(false);
+      onSaved(saved.value);
+      toast.success('Settlement settings saved', saved.message || 'The daily job uses these settings from now on.');
+    } catch (failure) {
+      onAuthError(failure);
+      setError(plain(failure)); // the server's own words, e.g. "Automatic payout is not available yet"
+    } finally { savingRef.current = false; setSaving(false); }
+  };
+  const undo = () => { setForm(JSON.parse(baseline)); setTouched(false); setError(''); };
+  const shown = (key: 'time' | 'mode' | 'holdDays') => (touched ? (errors as Record<string, string>)[key] : undefined);
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label="Daily settlement time (India time, HH:MM)" htmlFor="settle-time" required error={shown('time')} hint="Orders delivered up to this time are grouped into that day's settlements.">
+          <input id="settle-time" className="k-input" inputMode="numeric" placeholder="22:00" value={form.time} onChange={(e) => { setForm((f) => ({ ...f, time: e.target.value })); setError(''); }} aria-invalid={Boolean(shown('time'))} aria-describedby="settle-time-msg" autoComplete="off" />
+        </Field>
+        <Field label={`Hold days (0 to ${MAX_HOLD_DAYS})`} htmlFor="settle-hold" required error={shown('holdDays')} hint="Orders must be at least this many days old before they are settled.">
+          <input id="settle-hold" className="k-input" inputMode="numeric" value={form.holdDays} onChange={(e) => { setForm((f) => ({ ...f, holdDays: e.target.value })); setError(''); }} aria-invalid={Boolean(shown('holdDays'))} aria-describedby="settle-hold-msg" autoComplete="off" />
+        </Field>
+      </div>
+
+      <fieldset className="space-y-2">
+        <legend className="k-label mb-1">How settlements are paid</legend>
+        <div role="radiogroup" aria-label="Payout mode" className="space-y-2">
+          <label className={`k-inset flex cursor-pointer items-start gap-3 px-4 py-3 text-sm ${form.mode === 'MANUAL_PAYOUT' ? 'border-kraveo-g400/60' : ''}`}>
+            <input type="radio" name="settle-mode" className="mt-0.5 h-4 w-4 accent-kraveo-g400" checked={form.mode === 'MANUAL_PAYOUT'} onChange={() => { setForm((f) => ({ ...f, mode: 'MANUAL_PAYOUT' })); setError(''); }} />
+            <span><b className="text-kraveo-ink">Manual payout</b><span className="block text-xs text-kraveo-ink3">You pay by bank or UPI and record the reference on each settlement.</span></span>
+          </label>
+          <label className={`k-inset flex items-start gap-3 px-4 py-3 text-sm ${autoBlocked ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'} ${form.mode === 'AUTO_PAYOUT' ? 'border-kraveo-g400/60' : ''}`}>
+            <input type="radio" name="settle-mode" className="mt-0.5 h-4 w-4 accent-kraveo-g400" checked={form.mode === 'AUTO_PAYOUT'} disabled={autoBlocked} aria-describedby="settle-auto-note" onChange={() => { setForm((f) => ({ ...f, mode: 'AUTO_PAYOUT' })); setError(''); }} />
+            <span><b className="text-kraveo-ink">Automatic payout</b><span className="block text-xs text-kraveo-ink3">Money is sent through a payout provider.</span></span>
+          </label>
+        </div>
+        <p id="settle-auto-note" className={`text-xs ${autoBlocked ? 'font-semibold text-kraveo-status-placed' : 'text-kraveo-ink3'}`}>
+          {providers.status === 'loading' && 'Checking which payout providers are available.'}
+          {providers.status === 'error' && 'The payout providers could not be checked. If automatic payout is not available the server will refuse to save it.'}
+          {providers.status === 'ready' && (autoBlocked ? `Automatic payout is not available: ${razorpayx?.reason ?? 'no payout provider is configured.'} Use manual payout until the provider is connected.` : 'A payout provider is connected.')}
+        </p>
+        {shown('mode') && <p role="alert" className="text-xs font-semibold text-kraveo-danger">{shown('mode')}</p>}
+      </fieldset>
+
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-bold text-kraveo-ink">Create settlements every day</p>
+          <p className="text-xs text-kraveo-ink3">When off, nothing is created until you press Create settlements now in Finance.</p>
+        </div>
+        <Switch checked={form.autoCreate} onChange={() => { setForm((f) => ({ ...f, autoCreate: !f.autoCreate })); setError(''); }} label="Create settlements every day" />
+      </div>
+      <SaveBar dirty={dirty} saving={saving} error={error} onSave={save} onUndo={undo} />
+    </div>
+  );
+};
+
 // ───────────────────────────── Panel ─────────────────────────────
 
 export const SettingsPanel: React.FC<Props> = ({ onAuthError }) => {
   const fees = useGroup('fees', onAuthError);
   const commission = useGroup('commission', onAuthError);
   const rounding = useGroup('rounding', onAuthError);
+  const settlement = useGroup('settlement', onAuthError);
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
   const [pricingChanged, setPricingChanged] = useState(0);
   const [recommended, setRecommended] = useState(false);
@@ -391,6 +487,9 @@ export const SettingsPanel: React.FC<Props> = ({ onAuthError }) => {
       </Card>
       <Card title="Recalculate prices" description="After changing the default commission, a restaurant's commission or the rounding, apply the new prices to the dishes already on the menu.">
         <RecalcCard settingsVersion={pricingChanged} recommended={recommended} onSettled={settled} unsaved={Boolean(dirty.commission || dirty.rounding)} onAuthError={onAuthError} />
+      </Card>
+      <Card title="Settlements" description="When restaurant settlements are created and how they are paid. Changes apply from the next daily run.">
+        <Loading load={settlement.load} onRetry={settlement.retry}>{(raw) => <SettlementCard raw={raw} onSaved={settlement.saved} onAuthError={onAuthError} />}</Loading>
       </Card>
     </div>
   );

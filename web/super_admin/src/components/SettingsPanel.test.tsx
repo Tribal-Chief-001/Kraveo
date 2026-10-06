@@ -4,15 +4,18 @@ import { act } from 'react';
 import { SettingsPanel } from './SettingsPanel';
 import { apiService, ApiError } from '../services/api';
 import { byId, byText, click, flush, mount, type, unmount } from '../test/dom';
-import { settingView } from '../test/fixtures';
+import { rawProviders, settingView } from '../test/fixtures';
+import { parseProviders } from '../lib/financeParse';
 
 const FEES = { baseFee: 25, lines: [], extraRestaurantFee: 15, freeFeeAbove: 0, smallOrderBelow: 0, smallOrderFee: 0, gstOnFeesPercent: 18, gstOnFoodPercent: 5, futureField: 'keep me' };
+const SETTLEMENT = { time: '22:00', mode: 'MANUAL_PAYOUT', autoCreate: true, holdDays: 0 };
 let save: ReturnType<typeof vi.spyOn>;
 let recalc: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.spyOn(apiService, 'fetchSettings').mockImplementation(async (group) => settingView(group, (
-    group === 'fees' ? { ...FEES } : group === 'commission' ? { type: 'PERCENT', value: 10 } : { step: 1 }) as any) as any);
+    group === 'fees' ? { ...FEES } : group === 'commission' ? { type: 'PERCENT', value: 10 } : group === 'settlement' ? { ...SETTLEMENT } : { step: 1 }) as any) as any);
+  vi.spyOn(apiService, 'fetchPayoutProviders').mockResolvedValue(parseProviders(rawProviders())!);
   save = vi.spyOn(apiService, 'saveSettings').mockImplementation(async (_g, value) => ({ value, view: null, changed: true, recalculateRecommended: false, message: 'Saved.' })) as any;
   recalc = vi.spyOn(apiService, 'recalculatePrices') as any;
 });
@@ -219,5 +222,88 @@ describe('real response details', () => {
     await click(saveButton('Fees'));
     await flush();
     expect(save.mock.calls[0][1]).toMatchObject({ lines: [{ key: 'delivery_fee', label: 'Rider charge', amount: 15 }, { key: 'rest', label: 'Rest', amount: 10 }] });
+  });
+});
+
+describe('settlements', () => {
+  const saveSettlement = () => saveButton('Settlements');
+  const settlementSaves = () => save.mock.calls.filter((call) => call[0] === 'settlement');
+
+  it('loads the server values; Save is off until something changes', async () => {
+    await render();
+    expect((byId('settle-time') as HTMLInputElement).value).toBe('22:00');
+    expect((byId('settle-hold') as HTMLInputElement).value).toBe('0');
+    expect((document.querySelector('input[name="settle-mode"]:checked') as HTMLInputElement | null)?.parentElement?.textContent).toContain('Manual payout');
+    expect(document.querySelector('section[aria-label="Settlements"] button[role="switch"]')!.getAttribute('aria-checked')).toBe('true');
+    expect(saveSettlement().disabled).toBe(true);
+  });
+
+  it('automatic payout is disabled with the server reason while the provider is not enabled', async () => {
+    await render();
+    const auto = document.querySelectorAll('input[name="settle-mode"]')[1] as HTMLInputElement;
+    expect(auto.disabled).toBe(true);
+    expect(document.getElementById('settle-auto-note')!.textContent).toContain('RazorpayX payouts are not configured.');
+    expect(document.getElementById('settle-auto-note')!.textContent).toContain('Use manual payout');
+  });
+
+  it('automatic payout can be chosen and saved when the provider is enabled', async () => {
+    vi.spyOn(apiService, 'fetchPayoutProviders').mockResolvedValue(parseProviders(rawProviders(true))!);
+    await render();
+    const auto = document.querySelectorAll('input[name="settle-mode"]')[1] as HTMLInputElement;
+    expect(auto.disabled).toBe(false);
+    await click(auto);
+    await click(saveSettlement());
+    await flush();
+    expect(settlementSaves()).toHaveLength(1);
+    expect(settlementSaves()[0][1]).toEqual({ time: '22:00', mode: 'AUTO_PAYOUT', autoCreate: true, holdDays: 0 });
+  });
+
+  it('saves exactly time, mode, autoCreate and holdDays (nothing else)', async () => {
+    await render();
+    await type(byId('settle-time'), '21:15');
+    await type(byId('settle-hold'), '3');
+    await click(document.querySelector('section[aria-label="Settlements"] button[role="switch"]'));
+    await click(saveSettlement());
+    await flush();
+    expect(settlementSaves()[0][1]).toEqual({ time: '21:15', mode: 'MANUAL_PAYOUT', autoCreate: false, holdDays: 3 });
+  });
+
+  it('never sends a bad time or hold days', async () => {
+    await render();
+    for (const [time, hold] of [['25:00', '0'], ['9:00', '0'], ['22:00', '31'], ['22:00', '-1'], ['22:00', '1.5'], ['22:00', '']]) {
+      await type(byId('settle-time'), time);
+      await type(byId('settle-hold'), hold);
+      await click(saveSettlement());
+    }
+    expect(settlementSaves()).toHaveLength(0);
+    expect(document.querySelector('section[aria-label="Settlements"]')!.textContent).toContain('HH:MM');
+    expect(document.querySelector('section[aria-label="Settlements"]')!.textContent).toContain('0 to 30');
+  });
+
+  it('shows the server refusal in plain words and keeps the form', async () => {
+    (save as any).mockImplementation(async (group: any) => { if (group === 'settlement') throw new ApiError(400, 'Automatic payout is not available yet: no payout provider is connected. Use MANUAL_PAYOUT.', 'BAD_REQUEST', 'mode'); return { value: {}, view: null, changed: true, recalculateRecommended: false, message: '' }; });
+    await render();
+    await type(byId('settle-hold'), '2');
+    await click(saveSettlement());
+    await flush();
+    const card = document.querySelector('section[aria-label="Settlements"]')!;
+    expect(card.querySelector('[role="alert"]')?.textContent).toContain('Automatic payout is not available yet');
+    expect((byId('settle-hold') as HTMLInputElement).value).toBe('2');
+  });
+
+  it('if the providers cannot be checked it says so and leaves the choice to the server', async () => {
+    vi.spyOn(apiService, 'fetchPayoutProviders').mockRejectedValue(new ApiError(500, 'down'));
+    await render();
+    expect((document.querySelectorAll('input[name="settle-mode"]')[1] as HTMLInputElement).disabled).toBe(false);
+    expect(document.getElementById('settle-auto-note')!.textContent).toContain('could not be checked');
+  });
+
+  it('a server that sends no settlement values leaves the fields empty instead of inventing them', async () => {
+    (apiService.fetchSettings as any).mockImplementation(async (group: string) => settingView(group, group === 'fees' ? { ...FEES } : group === 'commission' ? { type: 'PERCENT', value: 10 } : { step: 1 }) as any);
+    await render();
+    expect((byId('settle-time') as HTMLInputElement).value).toBe('');
+    expect((byId('settle-hold') as HTMLInputElement).value).toBe('');
+    await click(saveSettlement());
+    expect(settlementSaves()).toHaveLength(0);
   });
 });
