@@ -96,6 +96,11 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
 
   void _onTick() {
     if (!mounted || _closing) return;
+    // The screens behind this pop-up were torn down (session ended): never leave a dead full-screen over the login.
+    if (_c.isDisposed) {
+      _close();
+      return;
+    }
     final o = _c.byId(widget.orderId);
     if (o != null && o.isIncoming && !_askedAfterDeadline && !_c.now().isBefore(o.acceptDeadline)) {
       // Time is up: Kraveo cancels within about a minute. Ask now so the screen follows quickly.
@@ -228,7 +233,7 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
     final ss = (late ? 0 : left.inSeconds.remainder(60)).toString().padLeft(2, '0');
     return Semantics(
       liveRegion: true,
-      label: 'New order ${order.shortCode}, total ${formatRupees(order.totalAmount)}',
+      label: 'New order ${order.shortCode}, food ${formatRupees(order.foodValue)}, customer pays ${formatRupees(order.totalAmount)}',
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.fromLTRB(KSpace.gutter, 12, KSpace.gutter, 14),
@@ -277,7 +282,7 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
                       child: FittedBox(
                         fit: BoxFit.scaleDown,
                         child: Column(mainAxisSize: MainAxisSize.min, children: [
-                          Text('Order total  ·  कुल राशि', maxLines: 1, style: KraveoType.label.copyWith(color: k.onBrand.withValues(alpha: 0.9), fontSize: 13)),
+                          Text('Customer pays  ·  ग्राहक देगा', maxLines: 1, style: KraveoType.label.copyWith(color: k.onBrand.withValues(alpha: 0.9), fontSize: 13)),
                           Text(formatRupees(order.totalAmount), style: KraveoType.displayLg.copyWith(fontSize: 64, height: 1.05, color: k.accent)),
                         ]),
                       ),
@@ -285,6 +290,16 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
                   ]),
                 ),
               ),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  'Food ${formatRupees(order.foodValue)}  ·  खाने का दाम  (rest is delivery and packaging)',
+                  key: const ValueKey('food-amount'),
+                  maxLines: 1,
+                  style: KraveoType.titleMd.copyWith(color: k.onBrand, fontSize: 15, fontWeight: FontWeight.w800),
+                ),
+              ),
+              const SizedBox(height: 6),
               Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                 Icon(LucideIcons.mapPin, size: 18, color: k.onBrand.withValues(alpha: 0.9)),
                 const SizedBox(width: 6),

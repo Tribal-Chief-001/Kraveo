@@ -5,13 +5,13 @@
       "id": "6c1f0e9a-3b7d-4c2e-9f10-2d5a8b7c1e44",
       "status": "PLACED", "paymentStatus": "PAID",
       "totalAmount": 245.0, "deliveryFee": 25.0, "subtotal": 205.0, "taxAndPackaging": 15.0, "discount": 0.0,
-      "dropoffHostel": "Block 2", "dropoffNotes": "Ring twice",
+      "dropoffHostel": "BH1", "dropoffNotes": "Ring twice",
       "createdAt": "2026-10-02T13:00:00.000Z", "updatedAt": "2026-10-02T13:01:10.000Z", "paidAt": "2026-10-02T13:01:10.000Z",
       "acceptedAt": null, "pickedUpAt": null, "deliveredAt": null,
       "cancelledAt": null, "cancelledBy": null, "cancelReason": null,
       "items": [ { "id": "i1", "menuItemId": "m1", "name": "Veg Thali", "quantity": 2, "price": 90.0 }, { "id": "i2", "menuItemId": "m2", "name": "Lassi", "quantity": 1, "price": 25.0 } ],
       "vendor": { "id": "ven-42", "name": "Sharma Dhaba", "address": "Ashta Road", "lat": 23.07, "lng": 76.85 },
-      "customer": { "id": "u-77", "name": "Ananya", "phone": null, "hostelBlock": "Block 2" },
+      "customer": { "id": "u-77", "name": "Ananya", "phone": null, "hostelBlock": "BH1" },
       "driver": null
     },
     "ready_with_rider": {
@@ -31,13 +31,13 @@
       "id": "7d7d7d7d-2222-4c2e-9f10-2d5a8b7c0000",
       "status": "CANCELLED", "paymentStatus": "REFUNDED",
       "totalAmount": 245.0, "deliveryFee": 25.0, "subtotal": 205.0, "taxAndPackaging": 15.0, "discount": 0.0,
-      "dropoffHostel": "Block 4", "dropoffNotes": "",
+      "dropoffHostel": "GH1", "dropoffNotes": "",
       "createdAt": "2026-10-02T11:00:00.000Z", "updatedAt": "2026-10-02T11:12:00.000Z", "paidAt": "2026-10-02T11:01:00.000Z",
       "acceptedAt": null, "pickedUpAt": null, "deliveredAt": null,
       "cancelledAt": "2026-10-02T11:12:00.000Z", "cancelledBy": "SYSTEM", "cancelReason": "Restaurant did not respond",
       "items": [ { "id": "i4", "menuItemId": "m1", "name": "Veg Thali", "quantity": 2, "price": 90.0 } ],
       "vendor": { "id": "ven-42", "name": "Sharma Dhaba", "address": "Ashta Road", "lat": 23.07, "lng": 76.85 },
-      "customer": { "id": "u-79", "name": "Siddharth", "phone": null, "hostelBlock": "Block 4" },
+      "customer": { "id": "u-79", "name": "Siddharth", "phone": null, "hostelBlock": "GH1" },
       "driver": null
     }
   }

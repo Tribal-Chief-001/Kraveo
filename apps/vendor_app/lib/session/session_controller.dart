@@ -42,6 +42,10 @@ class SessionController extends ChangeNotifier {
   /// The push layer uses it to `DELETE /devices` while the JWT is still valid.
   Future<void> Function()? beforeLogout;
 
+  /// Called after the session was ended by the server (a 401), not by the owner's own log out. The gate uses it to
+  /// explain why the login screen appeared.
+  VoidCallback? onExpired;
+
   SessionStatus _status = SessionStatus.checking;
   PartnerSession? _session;
   bool _expiring = false;
@@ -154,8 +158,20 @@ class SessionController extends ChangeNotifier {
     if (token == null || token.isEmpty) return const SignupResult.failure(SignupFailure.unauthorized);
     final result = await auth.resubmit(token, form);
     if (result.ok) {
-      await _persist(result.session!);
-      _set(SessionStatus.signedIn, result.session);
+      final answered = result.session;
+      final now = _session;
+      // The server accepted it and reset the application to pending. If its answer has no readable account, keep what
+      // we know and mark it pending, then re-read the real profile from /partner/me.
+      final next = answered != null ? _mergeFresh(now, answered) : now?.copyWith(approval: PartnerApproval.pending, clearReason: true);
+      if (next != null) {
+        await _persist(next);
+        _set(SessionStatus.signedIn, next);
+      }
+      if (answered == null) {
+        try {
+          await refreshApproval();
+        } catch (_) {}
+      }
     } else if (result.failure == SignupFailure.unauthorized) {
       await expire();
     }
@@ -176,6 +192,11 @@ class SessionController extends ChangeNotifier {
         final changed = before == null ||
             before.approval != fresh.approval ||
             before.rejectionReason != fresh.rejectionReason ||
+            before.name != fresh.name ||
+            before.vendorName != fresh.vendorName ||
+            before.address != fresh.address ||
+            before.category != fresh.category ||
+            before.fssaiNumber != fresh.fssaiNumber ||
             before.hasLocation != fresh.hasLocation ||
             before.lat != fresh.lat ||
             before.lng != fresh.lng;
@@ -221,6 +242,7 @@ class SessionController extends ChangeNotifier {
     try {
       await _clearAll();
       _set(SessionStatus.signedOut);
+      onExpired?.call();
     } finally {
       _expiring = false;
     }

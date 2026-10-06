@@ -219,7 +219,7 @@ void main() {
       await _tapKey(tester, 'signup-button');
       await _settle(tester);
       expect(find.byType(SignupScreen), findsOneWidget);
-      expect(find.textContaining('already has an account'), findsOneWidget);
+      expect(find.textContaining('already registered in another Kraveo app'), findsOneWidget);
       await _unmount(tester);
     });
 

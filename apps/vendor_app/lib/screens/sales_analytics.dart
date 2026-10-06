@@ -29,8 +29,10 @@ class SalesAnalyticsScreen extends StatelessWidget {
     return _ampm(h) == _ampm(next) ? '${_h12(h)}-${_h12(next)} ${_ampm(h)}' : '${_h12(h)} ${_ampm(h)}-${_h12(next)} ${_ampm(next)}';
   }
 
-  /// Orders that count as sales: paid and not cancelled.
-  static bool _counts(OrderModel o) => o.status != OrderStatus.cancelled && o.status != OrderStatus.unknown && o.isPaid;
+  /// Orders that count as sales: paid, not cancelled, and already accepted (a new order still waiting for an answer
+  /// can expire, so it is not counted yet; otherwise the number would go up and then back down by itself).
+  static bool _counts(OrderModel o) =>
+      o.status != OrderStatus.cancelled && o.status != OrderStatus.unknown && o.status != OrderStatus.placed && o.isPaid;
 
   @override
   Widget build(BuildContext context) {

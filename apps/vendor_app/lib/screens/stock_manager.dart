@@ -52,8 +52,8 @@ class _StockManagerScreenState extends State<StockManagerScreen> {
       context,
       builder: (sheetContext) {
         return AddDishModal(
-          onSubmit: (name, category, price, inStock) async {
-            final problem = await _c.addDish(name: name, category: category, price: price, inStock: inStock);
+          onSubmit: (name, category, price, inStock, {bool isVeg = true}) async {
+            final problem = await _c.addDish(name: name, category: category, price: price, inStock: inStock, isVeg: isVeg);
             if (problem == null && mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text('$name added to menu!  ·  मेनू में जुड़ गया')),

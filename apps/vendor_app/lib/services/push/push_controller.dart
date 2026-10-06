@@ -414,6 +414,13 @@ class PushController extends ChangeNotifier {
     }
   }
 
+  /// Removes the tray notification for [orderId] (the order was cancelled and the screen already told the cook).
+  Future<void> dismissOrderNotification(String orderId) async {
+    try {
+      await notifications.cancelOrder(orderId);
+    } catch (_) {}
+  }
+
   /// The home screen starts listening. A tap that arrived before it existed is delivered now. Returns the detach function.
   VoidCallback attachHome(void Function(PushAction) handler) {
     _home = handler;

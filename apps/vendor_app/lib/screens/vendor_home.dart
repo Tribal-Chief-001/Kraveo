@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -9,14 +11,19 @@ import '../services/order_queue_controller.dart';
 import '../services/order_queue_service.dart';
 import '../services/order_socket.dart';
 import '../services/push/push_controller.dart';
+import '../services/support_contact.dart';
 import '../services/vendor_backend.dart';
 import '../session/session_controller.dart';
 import '../models/partner_session.dart';
+import '../models/order_model.dart';
 import 'kitchen_queue.dart';
 import 'stock_manager.dart';
 import 'sales_analytics.dart';
+import '../widgets/first_run_card.dart';
 import '../widgets/location_flow.dart';
+import '../widgets/order_cancelled_notice.dart';
 import '../widgets/push_status_cards.dart';
+import '../widgets/ui/support_email_link.dart';
 import '../widgets/ui/ui.dart';
 
 class VendorHomeScreen extends StatefulWidget {
@@ -59,6 +66,14 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
   bool? _storeOpen;
   bool _storeBusy = false;
 
+  /// Back pressed once on the home screen: a second press within [_exitWindow] leaves the app.
+  DateTime? _lastBackPress;
+  static const Duration _exitWindow = Duration(seconds: 2);
+
+  /// Orders the kitchen was working on that Kraveo cancelled, waiting for the cook to acknowledge.
+  final List<OrderModel> _cancelNotices = [];
+  bool _noticeOpen = false;
+
   @override
   void initState() {
     super.initState();
@@ -100,6 +115,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    unawaited(_disableScreenWakeLock());
     _detachPush?.call();
     _orders?.removeListener(_onOrdersChanged);
     _orders?.dispose();
@@ -111,7 +127,9 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Back from the background (or the phone woke up): reload at once, never wait for the next tick.
     // The in-app alarm only rings while the app is on screen; in the background the system notification rings instead.
-    _orders?.setAppInForeground(state == AppLifecycleState.resumed);
+    // `inactive` (notification shade pulled down, a permission dialog, a call overlay, split screen) still has the
+    // order on screen, so the alarm keeps ringing; only paused / hidden / detached count as background.
+    _orders?.setAppInForeground(state == AppLifecycleState.resumed || state == AppLifecycleState.inactive);
     if (state == AppLifecycleState.resumed) {
       _orders?.onResumed();
       _syncStoreStatus();
@@ -124,10 +142,53 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
     } catch (_) {}
   }
 
+  Future<void> _disableScreenWakeLock() async {
+    try {
+      await WakelockPlus.disable();
+    } catch (_) {}
+  }
+
+  /// Kitchen orders that Kraveo cancelled: remove their tray notification and tell the cook to stop (the one short
+  /// sound is played by the controller).
+  void _collectKitchenCancellations(OrderQueueController c) {
+    final cancelled = c.takeKitchenCancellations();
+    if (cancelled.isEmpty) return;
+    final push = PushScope.maybeOf(context);
+    for (final o in cancelled) {
+      if (push != null) unawaited(push.dismissOrderNotification(o.id));
+      _cancelNotices.add(o);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showCancelNotices());
+  }
+
+  Future<void> _showCancelNotices() async {
+    if (_noticeOpen) return;
+    _noticeOpen = true;
+    while (mounted && _cancelNotices.isNotEmpty) {
+      final o = _cancelNotices.removeAt(0);
+      await showKitchenOrderCancelledNotice(context, o);
+    }
+    _noticeOpen = false;
+  }
+
+  /// Back on the home screen asks once before leaving: leaving stops the alarm, the live connection and the order checks.
+  void _onBackPressed(bool didPop, Object? result) {
+    if (didPop) return;
+    final now = DateTime.now();
+    final last = _lastBackPress;
+    if (last != null && now.difference(last) < _exitWindow) {
+      SystemNavigator.pop();
+      return;
+    }
+    _lastBackPress = now;
+    _toast('Press back again to exit  ·  बाहर निकलने के लिए फिर से बैक दबाएं');
+  }
+
   /// A paid order is waiting: open its full-screen takeover (queued one after another).
   void _onOrdersChanged() {
     final c = _orders;
     if (c == null || !mounted) return;
+    _collectKitchenCancellations(c);
     final waiting = c.incoming;
     if (waiting.isEmpty) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -231,7 +292,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
     final id = _vendorId;
     if (_storeBusy) return;
     if (id == null) {
-      _toast('This login is not linked to a restaurant. Call Kraveo.  ·  Kraveo को फ़ोन करें', error: true);
+      _toast('This login is not linked to a restaurant. Email $kSupportEmail  ·  Kraveo को ईमेल करें', error: true);
       return;
     }
     if (!newValue) {
@@ -247,6 +308,26 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
         confirmSublabel: 'हाँ, बंद करें',
       );
       if (!confirmed || !mounted) return;
+    }
+
+    if (newValue && await _menuIsEmpty()) {
+      if (!mounted) return;
+      final open = await showConfirmSheet(
+        context,
+        icon: LucideIcons.utensils,
+        title: 'Open with no dishes?',
+        hindiTitle: 'बिना व्यंजन के दुकान खोलें?',
+        message: 'You have no dishes yet - customers will see an empty menu. Open anyway?\nअभी कोई व्यंजन नहीं है - ग्राहकों को खाली मेनू दिखेगा। फिर भी खोलें?',
+        safeLabel: 'Add a dish first',
+        safeSublabel: 'पहले व्यंजन जोड़ें',
+        confirmLabel: 'Open anyway',
+        confirmSublabel: 'फिर भी खोलें',
+      );
+      if (!mounted) return;
+      if (!open) {
+        setState(() => _currentIndex = 1);
+        return;
+      }
     }
 
     final before = _storeOpen;
@@ -268,6 +349,14 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
     }
   }
 
+  /// True when Kraveo's menu for this restaurant loaded and has no dishes. Unknown (not loaded / failed) is not "empty".
+  Future<bool> _menuIsEmpty() async {
+    final menu = _menu;
+    if (menu == null) return false;
+    if (!menu.loadedOnce) await menu.load();
+    return menu.loadedOnce && menu.dishes.isEmpty;
+  }
+
   /// Plays the alarm so the owner can check the volume. No order is created.
   Future<void> _testAlarm() async {
     await AudioAlertService.startLoudAlarm();
@@ -287,21 +376,6 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
     await AudioAlertService.stopAlarm();
     // A real order may be waiting: let it ring again.
     _orders?.resyncAlarm();
-  }
-
-  void _callCampusAdminSupport() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(LucideIcons.phone, color: context.k.onBrand),
-            const SizedBox(width: 10),
-            const Expanded(child: Text('Kraveo Campus Ops helpline: +91 98765 43214')),
-          ],
-        ),
-        duration: const Duration(seconds: 4),
-      ),
-    );
   }
 
   /// Asks first (a mis-tap would stop order alerts on this phone), then signs out. The session
@@ -349,21 +423,22 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('Kraveo Campus Ops', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
-                    FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text('+91 98765 43214', style: KraveoType.headlineSm.copyWith(color: k.ink))),
+                    Text('Kraveo support', style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
+                    FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text(kSupportEmail, key: const ValueKey('support-email'), style: KraveoType.titleLg.copyWith(color: k.ink, fontWeight: FontWeight.w800))),
                   ]),
                 ),
               ]),
             ),
             const SizedBox(height: 16),
             KButton(
-              label: 'Call helpline',
-              sublabel: 'मदद के लिए फ़ोन',
-              icon: LucideIcons.phoneCall,
+              key: const ValueKey('email-support'),
+              label: 'Email Kraveo support',
+              sublabel: 'Kraveo सपोर्ट को ईमेल करें',
+              icon: LucideIcons.mail,
               large: true,
               onPressed: () {
                 Navigator.of(sheetContext).pop();
-                _callCampusAdminSupport();
+                if (mounted) SupportContact.openEmail(context);
               },
             ),
             const SizedBox(height: 12),
@@ -432,7 +507,10 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
     final orders = _orders;
     final menu = _menu;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: _onBackPressed,
+      child: Scaffold(
       body: SafeArea(
         bottom: false,
         child: Column(
@@ -499,7 +577,24 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
                   : IndexedStack(
                       index: _currentIndex,
                       children: [
-                        KitchenQueueScreen(controller: orders, onOpenIncoming: _openIncoming),
+                        KitchenQueueScreen(
+                          controller: orders,
+                          onOpenIncoming: _openIncoming,
+                          firstRun: ListenableBuilder(
+                            listenable: menu,
+                            builder: (context, _) {
+                              final noDishes = menu.loadedOnce && menu.dishes.isEmpty;
+                              final closed = _storeOpen == false;
+                              if (!noDishes && !closed) return const SizedBox.shrink();
+                              return FirstRunCard(
+                                hasDishes: !noDishes,
+                                isOpen: !closed,
+                                onAddDish: () => setState(() => _currentIndex = 1),
+                                onOpenStore: () => _toggleStoreStatusWithConfirmation(true),
+                              );
+                            },
+                          ),
+                        ),
                         StockManagerScreen(controller: menu),
                         ListenableBuilder(
                           listenable: orders,
@@ -541,6 +636,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> with WidgetsBinding
                 ],
               ),
             ),
+      ),
     );
   }
 }
@@ -556,7 +652,8 @@ class _NoRestaurantLinked extends StatelessWidget {
         child: KEmptyState(
           icon: LucideIcons.store,
           title: 'No restaurant linked',
-          message: 'This login is not linked to a restaurant yet. Call Kraveo Campus Ops.\nयह खाता किसी रेस्टोरेंट से जुड़ा नहीं है। Kraveo को फ़ोन करें।',
+          message: 'This login is not linked to a restaurant yet. Email Kraveo support.\nयह खाता किसी रेस्टोरेंट से जुड़ा नहीं है। Kraveo सपोर्ट को ईमेल करें।',
+          action: SupportEmailLink(),
         ),
       ),
     );

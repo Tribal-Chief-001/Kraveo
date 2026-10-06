@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/partner_session.dart';
 import '../session/session_controller.dart';
 import '../widgets/location_flow.dart';
+import '../widgets/ui/support_email_link.dart';
 
 /// What a restaurant sees after creating an account until Kraveo approves it, or when the application was
 /// rejected or the account suspended. Pending applications are re-checked every [pollEvery] and when the
@@ -43,6 +44,11 @@ class _ApplicationStatusScreenState extends State<ApplicationStatusScreen> with 
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _timer = Timer.periodic(widget.pollEvery, (_) => _check(silent: true));
+    // A login answer may not carry the restaurant's address / category / FSSAI: load the full profile once so the
+    // rows below and "Update details" are filled in.
+    if ((widget.session.address ?? '').isEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _check(silent: true));
+    }
     _maybePromptForLocation();
   }
 
@@ -113,8 +119,8 @@ class _ApplicationStatusScreenState extends State<ApplicationStatusScreen> with 
           KraveoPalette.warning,
           'Your account is paused',
           'आपका अकाउंट रुका हुआ है',
-          'You cannot take orders right now. Ask Kraveo support to open it again.',
-          'अभी आप ऑर्डर नहीं ले सकते। दोबारा चालू करने के लिए Kraveo सपोर्ट से पूछें।',
+          'You cannot take orders right now. Email Kraveo support to open it again.',
+          'अभी आप ऑर्डर नहीं ले सकते। दोबारा चालू करने के लिए Kraveo सपोर्ट को ईमेल करें।',
         ),
       _ => (
           LucideIcons.hourglass,
@@ -270,8 +276,10 @@ class _ApplicationStatusScreenState extends State<ApplicationStatusScreen> with 
                   ),
                 ),
                 const SizedBox(height: 18),
-                Text('Need help? Ask Kraveo support.  ·  मदद चाहिए? Kraveo सपोर्ट से पूछें।',
+                Text('Need help? Email Kraveo support.  ·  मदद चाहिए? Kraveo सपोर्ट को ईमेल करें।',
                     style: KraveoType.bodySm.copyWith(color: k.inkMuted, fontSize: 14)),
+                const SizedBox(height: 4),
+                const SupportEmailLink(key: ValueKey('status-support-email')),
               ]),
             ),
           ),

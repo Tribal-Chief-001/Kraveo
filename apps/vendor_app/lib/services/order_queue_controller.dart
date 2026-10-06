@@ -83,6 +83,7 @@ class OrderQueueController extends ChangeNotifier {
     this.pollInterval = const Duration(seconds: 15),
     DateTime Function()? clock,
     AlarmSink? alarm,
+    this.chimeDuration = const Duration(seconds: 2),
   })  : _tokenProvider = tokenProvider ?? VendorApiService.getSavedToken,
         _clock = clock ?? DateTime.now,
         alarm = alarm ?? const AudioAlarmSink();
@@ -98,6 +99,9 @@ class OrderQueueController extends ChangeNotifier {
   final OrderSocket? socket;
   final Duration pollInterval;
   final AlarmSink alarm;
+
+  /// How long the alarm tone plays for the one short "order cancelled" sound.
+  final Duration chimeDuration;
   final Future<String?> Function() _tokenProvider;
   final DateTime Function() _clock;
 
@@ -107,6 +111,11 @@ class OrderQueueController extends ChangeNotifier {
   final Map<String, DateTime> _receivedAt = {};
   final Map<String, int> _prepMinutes = {};
   final Map<String, Set<int>> _ticked = {};
+
+  /// Orders that were in the kitchen (accepted / cooking / ready) and were then cancelled by someone other than this
+  /// restaurant. The home screen takes them with [takeKitchenCancellations] and tells the cook to stop.
+  final List<OrderModel> _kitchenCancellations = [];
+  Timer? _chimeTimer;
 
   Timer? _pollTimer;
   Future<void>? _refreshing;
@@ -181,6 +190,14 @@ class OrderQueueController extends ChangeNotifier {
   /// Every order the app knows about (for the earnings screen).
   List<OrderModel> get allOrders => _all.toList();
 
+  /// Kitchen orders cancelled by Kraveo (or the system) since the last call; the list is cleared by reading it.
+  List<OrderModel> takeKitchenCancellations() {
+    if (_kitchenCancellations.isEmpty) return const [];
+    final out = List<OrderModel>.of(_kitchenCancellations);
+    _kitchenCancellations.clear();
+    return out;
+  }
+
   int prepMinutesFor(String id) => _prepMinutes[id] ?? defaultPrepMinutes;
 
   /// When the kitchen's own "ready in N minutes" target runs out (a kitchen aid; the server does not use it).
@@ -241,11 +258,13 @@ class OrderQueueController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _pollTimer?.cancel();
+    _chimeTimer?.cancel();
     socket?.dispose();
-    if (_ringing) {
+    if (_ringing || _chimeTimer != null) {
       _ringing = false;
       alarm.stop();
     }
+    _chimeTimer = null;
     super.dispose();
   }
 
@@ -337,6 +356,10 @@ class OrderQueueController extends ChangeNotifier {
     if (!fromPoll) _receivedAt[o.id] = DateTime.now();
     final existing = _orders[o.id];
     if (existing != null && !existing.isSupersededBy(o)) return false;
+    if (existing != null && existing.status.isKitchen && o.status == OrderStatus.cancelled && o.cancelledBy != CancelledBy.vendor) {
+      _kitchenCancellations.add(o);
+      _chime();
+    }
     _orders[o.id] = o;
     if (o.status.isTerminal) _ticked.remove(o.id);
     return true;
@@ -510,6 +533,18 @@ class OrderQueueController extends ChangeNotifier {
       _ringing = false;
       alarm.stop();
     }
+  }
+
+  /// One short sound for "the kitchen must stop": the alarm tone for [chimeDuration]. Skipped when the app is not on
+  /// screen (the quiet system notification covers that) or when the loud new-order alarm is already ringing.
+  void _chime() {
+    if (_disposed || !_appInForeground || _chimeTimer != null || _ringing || alarm.isRinging) return;
+    alarm.start();
+    _chimeTimer = Timer(chimeDuration, () {
+      _chimeTimer = null;
+      // A real order may have started the alarm meanwhile: leave that one ringing.
+      if (!_disposed && !_ringing) alarm.stop();
+    });
   }
 
   void _notify() {

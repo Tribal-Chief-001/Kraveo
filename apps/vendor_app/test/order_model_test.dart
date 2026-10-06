@@ -20,7 +20,7 @@ void main() {
       expect(o.subtotal, 205);
       expect(o.items.length, 2);
       expect(o.items[1].totalPrice, 25);
-      expect(o.dropoffHostel, 'Block 2');
+      expect(o.dropoffHostel, 'BH1');
       expect(o.customerNote, 'No onions please');
       expect(o.rider!.name, 'Ramesh Kumar');
       expect(o.rider!.phone, '+91 9876500000');

@@ -168,10 +168,18 @@ class _OrderCardState extends State<OrderCard> {
                 ),
                 const SizedBox(height: 8),
                 Wrap(spacing: 10, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                  KStatusPill(status: pill.$1, label: pill.$2),
+                  // FittedBox: a longer label ("Preparing") at 360 px and large text shrinks a little instead of overflowing.
+                  FittedBox(fit: BoxFit.scaleDown, child: KStatusPill(status: pill.$1, label: pill.$2)),
                   Text(pill.$3, style: KraveoType.titleMd.copyWith(color: k.inkMuted)),
-                  Text(formatRupees(order.totalAmount), style: KraveoType.titleLg.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
                 ]),
+                const SizedBox(height: 6),
+                Text.rich(
+                  TextSpan(children: [
+                    TextSpan(text: 'Food ${formatRupees(order.foodValue)}', style: KraveoType.titleMd.copyWith(color: k.inkMuted, fontWeight: FontWeight.w700)),
+                    TextSpan(text: '  ·  ', style: KraveoType.titleMd.copyWith(color: k.inkFaint)),
+                    TextSpan(text: 'Customer pays ${formatRupees(order.totalAmount)}', style: KraveoType.titleLg.copyWith(color: k.ink, fontWeight: FontWeight.w800)),
+                  ]),
+                ),
               ]),
             ),
           ]),
@@ -227,7 +235,7 @@ class _OrderCardState extends State<OrderCard> {
               icon: LucideIcons.flame,
               large: true,
               loading: busy,
-              onPressed: busy ? null : () => _run(() => _c.startCooking(order.id), 'Order ${order.shortCode}: cooking  ·  बन रहा है'),
+              onPressed: busy ? null : () => _run(() => _c.startCooking(order.id), 'Order ${order.shortCode}: preparing  ·  बन रहा है'),
             )
           else if (isPreparing)
             KButton(
@@ -250,7 +258,7 @@ class _OrderCardState extends State<OrderCard> {
   (KStatus, String, String, String) _pillFor(OrderModel o) => switch (o.status) {
         OrderStatus.placed => (KStatus.placed, 'New', 'नया', 'Waiting for your answer · जवाब दें'),
         OrderStatus.accepted => (KStatus.accepted, 'Accepted', 'स्वीकार', ''),
-        OrderStatus.preparing => (KStatus.preparing, 'Cooking', 'बन रहा है', ''),
+        OrderStatus.preparing => (KStatus.preparing, 'Preparing', 'बन रहा है', ''),
         OrderStatus.readyForPickup => (
             KStatus.ready,
             'Ready',

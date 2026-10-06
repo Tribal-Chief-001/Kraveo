@@ -109,11 +109,18 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   SessionController get _session => widget.session;
   SessionStatus? _lastStatus;
 
+  /// The order screens were showing (signed in AND approved) at the last session change.
+  bool _wasWorking = false;
+
+  bool get _working => _session.status == SessionStatus.signedIn && (_session.session?.isApproved ?? false);
+
   @override
   void initState() {
     super.initState();
     _lastStatus = _session.status;
+    _wasWorking = _working;
     _session.addListener(_onSessionChanged);
+    _session.onExpired = _showSessionExpired;
     VendorApiService.onUnauthorized = _handleUnauthorized;
     VendorApiService.onNotApproved = _handleNotApproved;
     WidgetsBinding.instance.addObserver(this);
@@ -128,6 +135,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   @override
   void dispose() {
     _session.removeListener(_onSessionChanged);
+    if (_session.onExpired == _showSessionExpired) _session.onExpired = null;
     if (_session.beforeLogout == widget.push?.unregisterForLogout) _session.beforeLogout = null;
     if (VendorApiService.onUnauthorized == _handleUnauthorized) VendorApiService.onUnauthorized = null;
     if (VendorApiService.onNotApproved == _handleNotApproved) VendorApiService.onNotApproved = null;
@@ -143,6 +151,14 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     _lastStatus = _session.status;
     if (was != SessionStatus.signedOut && _session.status == SessionStatus.signedOut) {
       OrderQueueService.clearQueue();
+    }
+    // The order screens are going away (session ended, logout, suspended): close every pop-up and page that sits
+    // above them, such as a "New order" takeover, so nothing is left over the login / status screen.
+    final wasWorking = _wasWorking;
+    _wasWorking = _working;
+    if (wasWorking && !_wasWorking && mounted) {
+      OrderQueueService.clearQueue();
+      Navigator.of(context).popUntil((route) => route.isFirst);
     }
   }
 
@@ -199,6 +215,11 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     // Close dialogs / pushed pages that sit above the gate.
     Navigator.of(context).popUntil((route) => route.isFirst);
     _session.expire();
+  }
+
+  /// The session ended on the server's side (HTTP 401 on any call, including the profile check): say so on the login screen.
+  void _showSessionExpired() {
+    if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(

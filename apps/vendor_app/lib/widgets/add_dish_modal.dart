@@ -9,7 +9,7 @@ import 'ui/ui.dart';
 class AddDishModal extends StatefulWidget {
   /// Saves the dish on Kraveo. Resolves to null on success (the sheet closes) or to what went wrong
   /// (the sheet stays open with the message, nothing typed is lost).
-  final Future<FailureText?> Function(String name, String category, double price, bool inStock) onSubmit;
+  final Future<FailureText?> Function(String name, String category, double price, bool inStock, {bool isVeg}) onSubmit;
 
   const AddDishModal({super.key, required this.onSubmit});
 
@@ -23,6 +23,9 @@ class _AddDishModalState extends State<AddDishModal> {
   final _priceController = TextEditingController();
   String _selectedCategory = 'Main Course';
   bool _inStock = true;
+
+  /// Veg by default; the customer app shows the green or red mark from this.
+  bool _isVeg = true;
   bool _saving = false;
   FailureText? _error;
 
@@ -48,7 +51,7 @@ class _AddDishModalState extends State<AddDishModal> {
       _saving = true;
       _error = null;
     });
-    final problem = await widget.onSubmit(_nameController.text.trim(), _selectedCategory, double.parse(_priceController.text.trim()), _inStock);
+    final problem = await widget.onSubmit(_nameController.text.trim(), _selectedCategory, double.parse(_priceController.text.trim()), _inStock, isVeg: _isVeg);
     if (!mounted) return;
     if (problem == null) {
       Navigator.pop(context);
@@ -130,6 +133,30 @@ class _AddDishModalState extends State<AddDishModal> {
                   selected: _selectedCategory == cat,
                   onTap: () => setState(() => _selectedCategory = cat),
                 ),
+            ]),
+            const SizedBox(height: 18),
+
+            _fieldLabel(k, 'Veg or non-veg?', 'शाकाहारी या मांसाहारी?'),
+            Row(children: [
+              Expanded(
+                child: VChoiceChip(
+                  key: const ValueKey('dish-veg'),
+                  label: 'Veg',
+                  sublabel: 'शाकाहारी',
+                  selected: _isVeg,
+                  onTap: () => setState(() => _isVeg = true),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: VChoiceChip(
+                  key: const ValueKey('dish-nonveg'),
+                  label: 'Non-veg',
+                  sublabel: 'मांसाहारी',
+                  selected: !_isVeg,
+                  onTap: () => setState(() => _isVeg = false),
+                ),
+              ),
             ]),
             const SizedBox(height: 18),
 

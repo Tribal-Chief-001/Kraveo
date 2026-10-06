@@ -104,8 +104,8 @@ class MenuStockController extends ChangeNotifier {
   }
 
   /// Creates a dish on the server. Returns null on success, or what went wrong.
-  Future<FailureText?> addDish({required String name, required String category, required double price, required bool inStock}) async {
-    final res = await backend.addDish(vendorId, name: name, category: category, price: price);
+  Future<FailureText?> addDish({required String name, required String category, required double price, required bool inStock, bool isVeg = true}) async {
+    final res = await backend.addDish(vendorId, name: name, category: category, price: price, isVeg: isVeg);
     if (_disposed) return null;
     if (!res.ok) return failureText(res.failure!, serverMessage: res.message, code: res.code);
     final dish = res.data!;

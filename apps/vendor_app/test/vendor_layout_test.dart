@@ -219,7 +219,8 @@ void main() {
   testWidgets('closing the store asks first; opening does not', (tester) async {
     smallPhone(tester, textScale: 1.0);
     mockSignedInPrefs();
-    final backend = FakeBackend();
+    // A restaurant with a dish: opening it needs no "no dishes yet" question (that case has its own test in bugfix_ve_test).
+    final backend = FakeBackend()..menu = [DishModel(id: 'm1', name: 'Dal', category: 'Main Course', price: 90)];
     await tester.pumpWidget(KraveoVendorApp(auth: SignedInAuth(), backend: backend, socketFactory: FakeSocket.new, alarm: FakeAlarm()));
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));

@@ -204,8 +204,37 @@ class _PriceEditSheet extends StatefulWidget {
   State<_PriceEditSheet> createState() => _PriceEditSheetState();
 }
 
+/// Highest price the server accepts for a dish.
+const double kMaxDishPrice = 10000;
+
+/// What the owner typed in the price box as a number, or null when it is not a usable price. Accepts Devanagari
+/// digits (a Hindi keyboard), a comma as the decimal mark, a leading rupee sign and spaces; at most 2 decimals are kept.
+double? parseDishPrice(String raw) {
+  final buf = StringBuffer();
+  for (final unit in raw.trim().runes) {
+    if (unit >= 0x0966 && unit <= 0x096F) {
+      buf.writeCharCode(0x30 + unit - 0x0966); // Devanagari digit -> ASCII
+    } else if (unit == 0x20 || unit == 0xA0 || unit == 0x20B9) {
+      continue; // space, no-break space, rupee sign
+    } else if (unit == 0x2C) {
+      buf.write('.');
+    } else {
+      buf.writeCharCode(unit);
+    }
+  }
+  final text = buf.toString();
+  if (!RegExp(r'^\d+(\.\d*)?$|^\.\d+$').hasMatch(text)) return null;
+  final value = double.tryParse(text);
+  if (value == null || !value.isFinite) return null;
+  return (value * 100).round() / 100;
+}
+
+/// "49" for a whole price, "49.50" when it has paise, so opening the sheet never silently rounds a price.
+String priceFieldText(double price) => price == price.roundToDouble() ? price.toStringAsFixed(0) : price.toStringAsFixed(2);
+
 class _PriceEditSheetState extends State<_PriceEditSheet> {
-  late final TextEditingController _controller = TextEditingController(text: widget.dish.price.toStringAsFixed(0));
+  late final TextEditingController _controller = TextEditingController(text: priceFieldText(widget.dish.price));
+  String? _error;
 
   @override
   void dispose() {
@@ -214,10 +243,12 @@ class _PriceEditSheetState extends State<_PriceEditSheet> {
   }
 
   void _save() {
-    final double? parsed = double.tryParse(_controller.text);
-    if (parsed != null && parsed > 0) {
-      widget.onSave(parsed);
+    final parsed = parseDishPrice(_controller.text);
+    if (parsed == null || parsed <= 0 || parsed > kMaxDishPrice) {
+      setState(() => _error = 'Enter a price from ₹1 to ₹10,000, like 120 or 49.50.\nसही दाम डालें, जैसे 120 या 49.50');
+      return;
     }
+    if (parsed != widget.dish.price) widget.onSave(parsed);
     Navigator.pop(context);
   }
 
@@ -238,7 +269,13 @@ class _PriceEditSheetState extends State<_PriceEditSheet> {
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           style: KraveoType.displayMd.copyWith(color: k.ink, fontSize: 36),
+          onChanged: (_) {
+            if (_error != null) setState(() => _error = null);
+          },
+          onSubmitted: (_) => _save(),
           decoration: InputDecoration(
+            errorText: _error,
+            errorMaxLines: 3,
             prefixIcon: Padding(
               padding: const EdgeInsets.only(left: 18, right: 6),
               child: Icon(LucideIcons.indianRupee, size: 30, color: k.brand),

@@ -9,7 +9,10 @@ import '../widgets/ui/ui.dart';
 
 /// The Orders tab: everything comes from [OrderQueueController] (the server's copy of each order).
 class KitchenQueueScreen extends StatefulWidget {
-  const KitchenQueueScreen({super.key, required this.controller, this.onOpenIncoming});
+  const KitchenQueueScreen({super.key, required this.controller, this.onOpenIncoming, this.firstRun});
+
+  /// A card shown above the "No orders right now" text on the Active tab ("1. Add a dish  2. Tap OPEN").
+  final Widget? firstRun;
 
   final OrderQueueController controller;
 
@@ -21,7 +24,7 @@ class KitchenQueueScreen extends StatefulWidget {
 }
 
 class _KitchenQueueScreenState extends State<KitchenQueueScreen> {
-  int _selectedTab = 0; // 0 = Active (new, cooking, ready), 1 = History
+  int _selectedTab = 0; // 0 = Active (new, preparing, ready), 1 = History
   String _searchQuery = '';
   bool _searchOpen = false;
   final TextEditingController _searchController = TextEditingController();
@@ -93,7 +96,7 @@ class _KitchenQueueScreenState extends State<KitchenQueueScreen> {
         children.addAll(toStart.map(card));
       }
       if (cooking.isNotEmpty) {
-        children.add(VSectionLabel(english: 'Cooking', hindi: 'बन रहे हैं', count: cooking.length));
+        children.add(VSectionLabel(english: 'Preparing', hindi: 'बन रहे हैं', count: cooking.length));
         children.addAll(cooking.map(card));
       }
       if (ready.isNotEmpty) {
@@ -135,6 +138,8 @@ class _KitchenQueueScreenState extends State<KitchenQueueScreen> {
       body = RefreshIndicator(
         onRefresh: _selectedTab == 0 ? _c.refresh : _c.reloadHistory,
         child: ListView(children: [
+          if (_selectedTab == 0 && _searchQuery.isEmpty && widget.firstRun != null)
+            Padding(padding: const EdgeInsets.fromLTRB(KSpace.gutter, 4, KSpace.gutter, 0), child: widget.firstRun),
           KEmptyState(
             icon: _selectedTab == 0 ? LucideIcons.chefHat : LucideIcons.history,
             title: _searchQuery.isNotEmpty

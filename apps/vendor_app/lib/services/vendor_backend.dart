@@ -109,7 +109,7 @@ abstract class VendorBackend {
   Future<ApiResult<List<DishModel>>> fetchMenu(String vendorId);
 
   /// `POST /vendors/:id/items`.
-  Future<ApiResult<DishModel>> addDish(String vendorId, {required String name, required String category, required double price});
+  Future<ApiResult<DishModel>> addDish(String vendorId, {required String name, required String category, required double price, bool isVeg = true});
 
   /// `PATCH /vendors/items/:itemId` `{isAvailable?, price?}`.
   Future<ApiResult<DishModel>> updateDish(String itemId, {bool? isAvailable, double? price});
@@ -275,8 +275,8 @@ class HttpVendorBackend implements VendorBackend {
   }
 
   @override
-  Future<ApiResult<DishModel>> addDish(String vendorId, {required String name, required String category, required double price}) async {
-    final res = await _send('POST', '/vendors/${Uri.encodeComponent(vendorId)}/items', body: {'name': name, 'category': category, 'price': price});
+  Future<ApiResult<DishModel>> addDish(String vendorId, {required String name, required String category, required double price, bool isVeg = true}) async {
+    final res = await _send('POST', '/vendors/${Uri.encodeComponent(vendorId)}/items', body: {'name': name, 'category': category, 'price': price, 'isVeg': isVeg});
     if (!res.ok) return res.cast();
     final json = res.data;
     final dish = DishModel.fromJson(json is Map ? (json['data'] ?? json['item'] ?? json) : null);

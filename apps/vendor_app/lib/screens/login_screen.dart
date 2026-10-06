@@ -4,6 +4,7 @@ import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../services/partner_auth_service.dart';
 import '../widgets/ui/phone_input.dart';
+import '../widgets/ui/support_email_link.dart';
 import '../widgets/ui/vendor_ui.dart';
 
 /// Restaurant partner login: phone + password. Large, bilingual, one obvious action.
@@ -330,6 +331,8 @@ class _LoginScreenState extends State<LoginScreen> {
                               const SizedBox(height: 2),
                               Text('पासवर्ड भूल गए? Kraveo सपोर्ट से पूछें।',
                                   style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 15)),
+                              const SizedBox(height: 6),
+                              const SupportEmailLink(key: ValueKey('login-support-email')),
                             ]),
                           ),
                         ]),

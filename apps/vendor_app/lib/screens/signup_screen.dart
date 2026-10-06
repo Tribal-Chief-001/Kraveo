@@ -108,14 +108,26 @@ class _SignupScreenState extends State<SignupScreen> {
       _errors.clear();
       _problem = null;
     });
+    final category = (_category == null || _category == 'Other') ? '' : _category!;
+    final fssai = _fssai.text.replaceAll(RegExp(r'\s'), '');
+    final old = widget.existing;
     final form = PartnerSignupForm(
+      edited: old == null
+          ? null
+          : {
+              if (_owner.text.trim() != old.name) 'name',
+              if (_restaurant.text.trim() != (old.vendorName ?? '')) 'restaurantName',
+              if (_address.text.trim() != (old.address ?? '')) 'address',
+              if (category != (old.category ?? '')) 'category',
+              if (fssai != (old.fssaiNumber ?? '')) 'fssaiNumber',
+            },
       ownerName: _owner.text.trim(),
       phone: _phone.text.trim(),
       password: _password.text,
       restaurantName: _restaurant.text.trim(),
       address: _address.text.trim(),
-      category: (_category == null || _category == 'Other') ? '' : _category!,
-      fssaiNumber: _fssai.text.replaceAll(RegExp(r'\s'), ''),
+      category: category,
+      fssaiNumber: fssai,
       lat: _fix?.lat,
       lng: _fix?.lng,
       locationAccuracyM: _fix?.accuracyM,
@@ -148,7 +160,7 @@ class _SignupScreenState extends State<SignupScreen> {
             _problem = result.message ?? 'Please check the details and try again.\nजानकारी जाँचकर फिर कोशिश करें।';
           }
         case SignupFailure.phoneTaken:
-          _errors['phone'] = 'This number already has an account. Go back and log in.\nइस नंबर का अकाउंट पहले से है। वापस जाकर लॉग इन करें।';
+          _errors['phone'] = 'This number is already registered in another Kraveo app or account. Use a different number, or go back and log in with the right app.\nयह नंबर किसी और Kraveo ऐप या अकाउंट में पहले से है। दूसरा नंबर डालें, या वापस जाकर सही ऐप से लॉग इन करें।';
         case SignupFailure.rateLimited:
           _problem = 'Too many tries. Please try again in an hour.\nबहुत कोशिशें हो गईं। एक घंटे बाद फिर कोशिश करें।';
         case SignupFailure.unauthorized:

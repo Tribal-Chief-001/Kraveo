@@ -55,6 +55,7 @@ class PartnerSignupForm {
     this.lat,
     this.lng,
     this.locationAccuracyM,
+    this.edited,
   });
 
   final String ownerName;
@@ -71,6 +72,10 @@ class PartnerSignupForm {
 
   /// How close the GPS said it was, in metres.
   final double? locationAccuracyM;
+
+  /// When updating an application: which fields the owner actually changed (`name`, `restaurantName`, `address`,
+  /// `category`, `fssaiNumber`). Null means "unknown": every non-empty field is sent.
+  final Set<String>? edited;
 
   bool get hasLocation => lat != null && lng != null;
 
@@ -92,21 +97,32 @@ class PartnerSignupForm {
         },
       };
 
-  /// Body for `PUT /partner/application` (phone and password cannot change there).
-  Map<String, dynamic> toUpdateJson() => {
-        'name': ownerName,
-        'restaurantName': restaurantName,
-        'category': category,
-        'address': address,
-        'fssaiNumber': fssaiNumber,
-      };
+  /// Body for `PUT /partner/application` (phone and password cannot change there). The server merges the body over
+  /// what it stores, so only fields the owner edited are sent, and an empty category / FSSAI number is never sent
+  /// (it would wipe the stored value).
+  Map<String, dynamic> toUpdateJson() {
+    final all = <String, String>{
+      'name': ownerName,
+      'restaurantName': restaurantName,
+      'address': address,
+      'category': category,
+      'fssaiNumber': fssaiNumber,
+    };
+    final out = <String, dynamic>{};
+    all.forEach((key, value) {
+      if (edited != null && !edited!.contains(key)) return;
+      if ((key == 'category' || key == 'fssaiNumber') && value.trim().isEmpty) return;
+      out[key] = value;
+    });
+    return out;
+  }
 }
 
 enum SignupFailure { invalid, phoneTaken, rateLimited, unauthorized, offline, server }
 
 /// Outcome of creating an account or re-sending an application.
 class SignupResult {
-  const SignupResult.success({this.token, required PartnerSession this.session})
+  const SignupResult.success({this.token, this.session})
       : failure = null,
         field = null,
         message = null;
@@ -117,6 +133,9 @@ class SignupResult {
 
   /// Present for a new account (sign-up); null when an existing account re-sent its application.
   final String? token;
+
+  /// The account as the server answered. Always present for sign-up; for a re-sent application it can be null when the
+  /// server's 200 carries no readable `user` (the caller then re-reads the profile).
   final PartnerSession? session;
   final SignupFailure? failure;
 
@@ -241,9 +260,12 @@ class ApiPartnerAuthService implements PartnerAuthService {
       case 201:
         final session = json == null ? null : PartnerSession.fromMeJson(json);
         final token = json?['token'];
-        if (session == null) return const SignupResult.failure(SignupFailure.server);
-        if (expectToken && (token is! String || token.isEmpty)) return const SignupResult.failure(SignupFailure.server);
-        return SignupResult.success(token: token is String ? token : null, session: session);
+        if (expectToken) {
+          if (session == null || token is! String || token.isEmpty) return const SignupResult.failure(SignupFailure.server);
+          return SignupResult.success(token: token, session: session);
+        }
+        // Re-sent application: the server accepted it (200). A body without a readable `user` is still a success.
+        return SignupResult.success(session: session);
       case 400:
         return SignupResult.failure(SignupFailure.invalid, field: field, message: message);
       case 401:

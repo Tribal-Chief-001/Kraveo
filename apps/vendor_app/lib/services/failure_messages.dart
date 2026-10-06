@@ -19,7 +19,7 @@ FailureText failureText(ApiFailure failure, {String? serverMessage, String? code
     case 'PAYMENT_NOT_CONFIRMED':
       return const FailureText('Payment is not confirmed. Do not cook this order.', 'पेमेंट पक्का नहीं हुआ, यह ऑर्डर न बनाएं');
     case 'CANNOT_REJECT':
-      return const FailureText('An accepted order cannot be declined. Call Kraveo to cancel it.', 'स्वीकार किया ऑर्डर मना नहीं हो सकता, Kraveo को फ़ोन करें');
+      return const FailureText('An accepted order cannot be declined. Email kraveo.contact@gmail.com to cancel it.', 'स्वीकार किया ऑर्डर मना नहीं हो सकता, kraveo.contact@gmail.com पर ईमेल करें');
     case 'ORDER_CLOSED':
       return const FailureText('This order is already finished or cancelled.', 'यह ऑर्डर पहले ही पूरा या रद्द हो चुका है');
     case 'ROLE_NOT_ALLOWED':

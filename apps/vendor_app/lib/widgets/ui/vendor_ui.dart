@@ -23,11 +23,14 @@ class VMaxWidth extends StatelessWidget {
       );
 }
 
-/// Indian-grouped rupee text: 1240 -> "₹1,240", 125000 -> "₹1,25,000".
-String formatRupees(num value) {
-  final n = value.round();
-  final neg = n < 0;
-  final digits = n.abs().toString();
+/// Indian-grouped rupee text: 1240 -> "₹1,240", 125000 -> "₹1,25,000". Paise are shown only when the amount has any
+/// (49.5 -> "₹49.50"); pass [paise] false for a rounded whole-rupee figure (the count-up animation).
+String formatRupees(num value, {bool paise = true}) {
+  final totalPaise = (value * 100).round();
+  final showPaise = paise && totalPaise % 100 != 0;
+  final whole = showPaise ? totalPaise.abs() ~/ 100 : value.abs().round();
+  final neg = showPaise ? totalPaise < 0 : value.round() < 0;
+  final digits = whole.toString();
   String grouped;
   if (digits.length <= 3) {
     grouped = digits;
@@ -42,7 +45,8 @@ String formatRupees(num value) {
     if (rest.isNotEmpty) parts.insert(0, rest);
     grouped = '${parts.join(',')},$last3';
   }
-  return '${neg ? '-' : ''}₹$grouped';
+  final cents = showPaise ? '.${(totalPaise.abs() % 100).toString().padLeft(2, '0')}' : '';
+  return '${neg ? '-' : ''}₹$grouped$cents';
 }
 
 /// Hindi name for the menu categories the app knows about (falls back to '').
@@ -57,7 +61,7 @@ String hindiCategory(String category) => switch (category) {
       _ => '',
     };
 
-/// Small bilingual section label: "Cooking  बन रहे हैं   2".
+/// Small bilingual section label: "Preparing  बन रहे हैं   2".
 class VSectionLabel extends StatelessWidget {
   const VSectionLabel({super.key, required this.english, required this.hindi, this.count, this.color});
   final String english;
@@ -145,7 +149,8 @@ class VMoneyCount extends StatelessWidget {
       tween: Tween(begin: 0, end: value.toDouble()),
       duration: KMotion.slow,
       curve: KMotion.emphasized,
-      builder: (_, v, __) => Text(formatRupees(v), style: style),
+      // Whole rupees while counting up, the exact amount (with paise) once it has arrived.
+      builder: (_, v, __) => Text(formatRupees(v, paise: v == value.toDouble()), style: style),
     );
   }
 }

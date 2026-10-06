@@ -32,7 +32,7 @@ Map<String, dynamic> orderJson({
     'subtotal': 205.0,
     'taxAndPackaging': 15.0,
     'discount': 0.0,
-    'dropoffHostel': 'Block 2',
+    'dropoffHostel': 'BH1',
     'dropoffNotes': dropoffNotes,
     'createdAt': created.toUtc().toIso8601String(),
     'updatedAt': (updatedAt ?? created).toUtc().toIso8601String(),
@@ -49,7 +49,7 @@ Map<String, dynamic> orderJson({
           {'id': 'oi-2', 'menuItemId': 'm-2', 'name': 'Tandoori Roti', 'quantity': 2, 'price': 12.5},
         ],
     'vendor': {'id': 'ven-42', 'name': 'Sharma Dhaba', 'address': 'Ashta Road', 'lat': 23.07, 'lng': 76.85},
-    'customer': {'id': 'cust-1', 'name': customerName, 'phone': null, 'hostelBlock': 'Block 2'},
+    'customer': {'id': 'cust-1', 'name': customerName, 'phone': null, 'hostelBlock': 'BH1'},
     'driver': driver,
     'vendorId': 'ven-42',
     // Like the server: the accept deadline is only sent while PLACED + PAID.
@@ -92,6 +92,7 @@ class FakeBackend implements VendorBackend {
   ApiResult<bool>? storeAnswer;
   List<DishModel> menu = [];
   ApiResult<DishModel>? dishAnswer;
+  bool? lastIsVeg;
   ApiFailure? menuFailure;
 
   int _version = 0;
@@ -182,8 +183,9 @@ class FakeBackend implements VendorBackend {
   }
 
   @override
-  Future<ApiResult<DishModel>> addDish(String vendorId, {required String name, required String category, required double price}) async {
+  Future<ApiResult<DishModel>> addDish(String vendorId, {required String name, required String category, required double price, bool isVeg = true}) async {
     calls.add('dish:add:$vendorId:$name');
+    lastIsVeg = isVeg;
     if (dishAnswer != null) return dishAnswer!;
     final d = DishModel(id: 'new-${menu.length}', name: name, category: category, price: price);
     return ApiResult.success(d);
