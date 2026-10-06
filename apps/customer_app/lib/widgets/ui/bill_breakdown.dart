@@ -66,8 +66,8 @@ class BillBreakdown extends StatelessWidget {
         Text('Bill details', style: KraveoType.titleMd.copyWith(color: k.ink)),
         const SizedBox(height: 12),
         _Row('Items subtotal', rupee(subtotal)),
-        _Row('Delivery to your gate', rupee(deliveryFee)),
-        _Row('Packaging & taxes', rupee(taxAndPackaging)),
+        // One all-in line (older orders may still carry a separate packaging amount: it is folded in, never hidden).
+        _Row('Delivery & service fee', rupee(deliveryFee + taxAndPackaging)),
         if (discount > 0) _Row(couponCode != null ? 'Coupon ($couponCode)' : 'Discount', '-${rupee(discount)}', discount: true),
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),

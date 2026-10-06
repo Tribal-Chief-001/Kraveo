@@ -57,15 +57,15 @@ void main() {
       expect(cart.itemCount, equals(1));
       expect(cart.subtotal, equals(180.0));
       expect(cart.deliveryFee, equals(25.0));
-      expect(cart.taxAndPackaging, equals(15.0));
-      expect(cart.grandTotal, equals(220.0)); // 180 + 25 + 15
+      expect(cart.taxAndPackaging, equals(0.0));
+      expect(cart.grandTotal, equals(205.0)); // 180 + 25 (one all-in fee)
     });
 
     test('Adding item from different Dhaba clears existing cart', () {
       cart.addItem(item: dummyItem1, dhabaId: 'ven-1', dhabaName: 'Sharma Dhaba');
       expect(cart.dhabaId, equals('ven-1'));
 
-      final newItem = const MenuItemModel(
+      const newItem = MenuItemModel(
         id: 'item-201',
         vendorId: 'ven-2',
         name: 'Paneer Roll',
@@ -100,7 +100,7 @@ void main() {
       expect(result, isTrue);
       expect(cart.appliedCouponCode, equals('VITFIRST'));
       expect(cart.couponDiscountAmount, equals(36.0)); // 20% of 180
-      expect(cart.grandTotal, equals(184.0)); // 180 + 25 + 15 - 36
+      expect(cart.grandTotal, equals(169.0)); // 180 + 25 - 36
     });
 
     test('Promo Code VITFIRST - discount capped at ₹50', () {
@@ -119,7 +119,7 @@ void main() {
       expect(result, isFalse);
       expect(cart.appliedCouponCode, isNull);
       expect(cart.couponDiscountAmount, equals(0.0));
-      expect(cart.grandTotal, equals(220.0));
+      expect(cart.grandTotal, equals(205.0));
       expect(cart.couponError, isNot(contains('KRAVEO20')), reason: 'the hint must not advertise it');
     });
 
@@ -155,7 +155,7 @@ void main() {
       cart.setKraveoCoins(120);
       cart.addItem(item: dummyItem1, dhabaId: 'ven-1', dhabaName: 'Sharma Dhaba'); // ₹180 subtotal
       expect(cart.userKraveoCoins, 120);
-      expect(cart.grandTotal, equals(220.0)); // 180 + 25 + 15, same formula as the server
+      expect(cart.grandTotal, equals(205.0)); // 180 + 25 (one all-in fee)
     });
 
     test('Decrementing item invalidates coupon when subtotal falls below threshold', () {

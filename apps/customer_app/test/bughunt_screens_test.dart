@@ -433,21 +433,21 @@ void main() {
     }
 
     testWidgets('the server refuses the coupon: it is removed, checkout stays open, one line gives the reason and the new total', (tester) async {
-      final cart = _cartWith(price: 120)..applyCoupon('VITFIRST'); // 120 + 25 + 15 - 24 = 136
+      final cart = _cartWith(price: 120)..applyCoupon('VITFIRST'); // 120 + 25 - 24 = 121
       final (api, _) = await open(tester, cart: cart);
       api.onCreate = (r) async => const OrderResult.fail(OrderApiError(OrderErrorKind.rejected, statusCode: 400, code: 'COUPON_NOT_APPLICABLE', message: 'VITFIRST is only for your first order.'));
-      expect(_button('Pay ₹136'), findsOneWidget);
+      expect(_button('Pay ₹121'), findsOneWidget);
 
-      await pay(tester, 'Pay ₹136');
+      await pay(tester, 'Pay ₹121');
       expect(cart.appliedCouponCode, isNull, reason: 'the refused coupon is dropped by itself');
       expect(find.text('Checkout'), findsOneWidget, reason: 'still on the checkout screen');
-      expect(_button('Pay ₹160'), findsOneWidget, reason: 'the button shows the new total');
-      expect(find.textContaining('Coupon removed. VITFIRST is only for your first order. Your total is now ₹160.'), findsWidgets);
+      expect(_button('Pay ₹145'), findsOneWidget, reason: 'the button shows the new total');
+      expect(find.textContaining('Coupon removed. VITFIRST is only for your first order. Your total is now ₹145.'), findsWidgets);
       expect(tester.takeException(), isNull);
 
       // The next tap places the order without the coupon (new idempotency key).
       api.onCreate = null;
-      await pay(tester, 'Pay ₹160');
+      await pay(tester, 'Pay ₹145');
       expect(api.creates, hasLength(2));
       expect(api.creates.last.couponCode, isNull);
       expect(api.creates.last.clientRequestId, isNot(api.creates.first.clientRequestId));
@@ -460,33 +460,33 @@ void main() {
       const uuid = '9f3c2d1e-0000-4000-8000-000000000001';
       api.onCreate = (r) async => const OrderResult.fail(OrderApiError(OrderErrorKind.rejected, statusCode: 400, code: 'INVALID_ITEMS', message: "Item '9f3c2d1e-0000-4000-8000-000000000001' is not available at this dhaba."));
       final before = server.vendorRequests;
-      await pay(tester, 'Pay ₹160');
+      await pay(tester, 'Pay ₹145');
       expect(find.textContaining(uuid), findsNothing);
       expect(find.textContaining('no longer available'), findsWidgets);
       expect(server.vendorRequests, greaterThan(before), reason: 'the menu is refreshed after INVALID_ITEMS');
 
       final afterFirst = server.vendorRequests;
       api.onCreate = (r) async => const OrderResult.fail(OrderApiError(OrderErrorKind.rejected, statusCode: 400, code: 'VENDOR_CLOSED', message: 'This Dhaba is currently CLOSED for new orders.'));
-      await pay(tester, 'Pay ₹160');
+      await pay(tester, 'Pay ₹145');
       expect(find.textContaining('closed for new orders'), findsWidgets);
       expect(find.textContaining('Dhaba is currently CLOSED'), findsNothing, reason: 'customer wording, not the raw server text');
       expect(server.vendorRequests, greaterThan(afterFirst), reason: 'and after VENDOR_CLOSED');
     });
 
-    testWidgets('paise are shown everywhere: Pay button, bill rows and total (₹190.40)', (tester) async {
-      final cart = _cartWith(price: 188)..applyCoupon('VITFIRST'); // 37.6 off -> 190.40
+    testWidgets('paise are shown everywhere: Pay button, bill rows and total (₹175.40)', (tester) async {
+      final cart = _cartWith(price: 188)..applyCoupon('VITFIRST'); // 37.6 off -> 175.40
       await open(tester, cart: cart);
-      expect(_button('Pay ₹190.40'), findsOneWidget);
+      expect(_button('Pay ₹175.40'), findsOneWidget);
       await tester.scrollUntilVisible(find.text('To pay'), 200, scrollable: find.byType(Scrollable).first);
       await tester.pump(const Duration(seconds: 2));
       expect(find.text('-₹37.60'), findsOneWidget);
-      expect(find.text('₹190.40'), findsOneWidget);
+      expect(find.text('₹175.40'), findsOneWidget);
       expect(find.text('₹190'), findsNothing);
     });
 
     testWidgets('a double tap on Pay opens ONE delivery-point sheet; its button is disabled for the first moments', (tester) async {
       final (api, _) = await open(tester);
-      final payButton = _button('Pay ₹160');
+      final payButton = _button('Pay ₹145');
       await tester.tap(payButton);
       await tester.tap(payButton); // the second tap of the double tap
       await tester.pump(const Duration(milliseconds: 100));
@@ -512,8 +512,8 @@ void main() {
       final api = FakeOrderApi();
       final gateway = FakeGateway()..next = const GatewayResult.failed();
       final orders = fakeOrders(api, gateway: gateway);
-      await _pump(tester, const CheckoutScreen(selectedHostel: 'BH2'), orders: orders, cart: _cartWith(price: 205));
-      await pay(tester, 'Pay ₹245'); // a 245 server total equals the 205+25+15 estimate: the sheet opens and fails
+      await _pump(tester, const CheckoutScreen(selectedHostel: 'BH2'), orders: orders, cart: _cartWith(price: 220));
+      await pay(tester, 'Pay ₹245'); // a 245 server total equals the 220+25 estimate: the sheet opens and fails
       expect(find.text('Payment not completed'), findsWidgets);
 
       await _tap(tester, _button('Cancel order'));
@@ -532,7 +532,7 @@ void main() {
       testWidgets('keyboard open on 360x640 at ${scale}x text: no overflow, the Pay button stays above the keyboard and the notice moves into the list', (tester) async {
         final (api, _) = await open(tester, textScale: scale);
         api.onCreate = (r) async => const OrderResult.fail(OrderApiError(OrderErrorKind.rejected, statusCode: 400, code: 'VENDOR_CLOSED', message: 'closed'));
-        await pay(tester, 'Pay ₹160');
+        await pay(tester, 'Pay ₹145');
         expect(find.textContaining('closed for new orders'), findsWidgets, reason: 'the notice (and the snackbar) show the error');
         await tester.pump(const Duration(seconds: 4)); // the snackbar has gone
 
@@ -542,7 +542,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 400));
         expect(tester.takeException(), isNull, reason: 'no RenderFlex overflow');
 
-        final payRect = tester.getRect(_button('Pay ₹160'));
+        final payRect = tester.getRect(_button('Pay ₹145'));
         expect(payRect.bottom, lessThanOrEqualTo(640 - 280 + 0.5), reason: 'the button is not hidden under the keyboard');
         expect(find.textContaining('Placing your order'), findsNothing, reason: 'the caption is dropped while typing');
         expect(find.textContaining('Next: Kraveo confirms'), findsNothing);

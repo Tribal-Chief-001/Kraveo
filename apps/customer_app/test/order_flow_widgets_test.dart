@@ -55,7 +55,7 @@ CartProvider cartWithThali() {
     dhabaId: 'ven-1',
     dhabaName: 'Sharma Highway Dhaba',
   );
-  return cart; // estimate: 120 + 25 + 15 = 160
+  return cart; // estimate: 120 + 25 = 145
 }
 
 DhabaProvider liveDhabas() => DhabaProvider()..markLiveForTest(['ven-1']);
@@ -123,7 +123,7 @@ void main() {
       await pumpApp(tester, const CheckoutScreen(selectedHostel: 'Block 2'), orders: orders, cart: cart);
 
       expect(find.textContaining('Estimate'), findsNothing, reason: 'below the fold until scrolled');
-      await tapButton(tester, 'Pay ₹160');
+      await tapButton(tester, 'Pay ₹145');
       expect(api.creates, hasLength(1));
       expect(gateway.opened, isEmpty, reason: 'server total (₹245) differs from the estimate: show it first');
       expect(find.text('Updated total: ₹245'), findsOneWidget);
@@ -165,29 +165,29 @@ void main() {
     testWidgets('same total: payment opens straight away', (tester) async {
       final api = FakeOrderApi();
       api.onCreate = (r) async {
-        final o = orderModel(id: 'same', totalAmount: 160);
+        final o = orderModel(id: 'same', totalAmount: 145);
         api.server[o.id] = o;
         return OrderResult.ok(o);
       };
       final gateway = FakeGateway()..next = const GatewayResult.cancelled();
       final orders = fakeOrders(api, gateway: gateway);
       await pumpApp(tester, const CheckoutScreen(selectedHostel: 'Block 2'), orders: orders, cart: cartWithThali());
-      await tapButton(tester, 'Pay ₹160');
+      await tapButton(tester, 'Pay ₹145');
       expect(gateway.opened, hasLength(1));
-      expect(button('Try payment again · ₹160'), findsOneWidget);
+      expect(button('Try payment again · ₹145'), findsOneWidget);
     });
 
     testWidgets('server refusals and offline show clear messages and never a stuck spinner', (tester) async {
       final api = FakeOrderApi()..onCreate = (r) async => const OrderResult.fail(OrderApiError(OrderErrorKind.rateLimited, statusCode: 429, message: 'You already have 3 unpaid orders.'));
       final orders = fakeOrders(api);
       await pumpApp(tester, const CheckoutScreen(selectedHostel: 'Block 2'), orders: orders, cart: cartWithThali());
-      await tapButton(tester, 'Pay ₹160');
+      await tapButton(tester, 'Pay ₹145');
       expect(find.text('You already have 3 unpaid orders.'), findsWidgets);
-      expect(tester.widget<KButton>(button('Pay ₹160')).loading, isFalse);
-      expect(tester.widget<KButton>(button('Pay ₹160')).onPressed, isNotNull);
+      expect(tester.widget<KButton>(button('Pay ₹145')).loading, isFalse);
+      expect(tester.widget<KButton>(button('Pay ₹145')).onPressed, isNotNull);
 
       api.onCreate = (r) async => const OrderResult.fail(OrderApiError(OrderErrorKind.offline));
-      await tapButton(tester, 'Pay ₹160');
+      await tapButton(tester, 'Pay ₹145');
       expect(find.textContaining('No internet connection'), findsWidgets);
       expect(find.textContaining('won\'t get a duplicate order'), findsWidgets);
       expect(api.creates[0].clientRequestId, api.creates[1].clientRequestId);
@@ -198,12 +198,12 @@ void main() {
       final api = FakeOrderApi()..onCreatePayment = (id) async => const OrderResult.fail(OrderApiError(OrderErrorKind.conflict, statusCode: 409, code: 'PAYMENT_WINDOW_EXPIRED'));
       final orders = fakeOrders(api);
       await pumpApp(tester, const CheckoutScreen(selectedHostel: 'Block 2'), orders: orders, cart: cartWithThali());
-      await tapButton(tester, 'Pay ₹160');
+      await tapButton(tester, 'Pay ₹145');
       await tapButton(tester, 'Pay ₹245');
       expect(find.textContaining('15 minutes to pay'), findsWidgets);
-      expect(button('Pay ₹160'), findsOneWidget);
+      expect(button('Pay ₹145'), findsOneWidget);
       api.onCreatePayment = null;
-      await tapButton(tester, 'Pay ₹160');
+      await tapButton(tester, 'Pay ₹145');
       expect(api.creates, hasLength(2));
       expect(api.creates[1].clientRequestId, isNot(api.creates[0].clientRequestId));
       expect(tester.takeException(), isNull);
@@ -212,7 +212,7 @@ void main() {
     testWidgets('a kitchen that is not in the live catalog cannot be ordered from', (tester) async {
       final api = FakeOrderApi();
       await pumpApp(tester, const CheckoutScreen(selectedHostel: 'Block 2'), orders: fakeOrders(api), cart: cartWithThali(), dhabas: DhabaProvider());
-      await tapButton(tester, 'Pay ₹160');
+      await tapButton(tester, 'Pay ₹145');
       expect(api.creates, isEmpty);
       expect(find.textContaining('live menu'), findsWidgets);
     });
@@ -229,7 +229,7 @@ void main() {
       );
       await tester.tap(find.text('open'));
       await settle(tester);
-      await tapButton(tester, 'Pay ₹160');
+      await tapButton(tester, 'Pay ₹145');
       expect(find.text('Updated total: ₹245'), findsOneWidget);
       tester.state<NavigatorState>(find.byType(Navigator)).pop();
       await settle(tester);
@@ -244,14 +244,14 @@ void main() {
       final api = FakeOrderApi();
       final orders = fakeOrders(api);
       await pumpApp(tester, const CheckoutScreen(selectedHostel: 'Block 2'), orders: orders, cart: cartWithThali());
-      await tapButton(tester, 'Pay ₹160');
+      await tapButton(tester, 'Pay ₹145');
       await tapButton(tester, 'Cancel order');
       await tester.tap(find.descendant(of: find.byType(KButton), matching: find.text('Cancel order')).last);
       await settle(tester);
       expect(api.cancels, hasLength(1));
-      expect(button('Pay ₹160'), findsOneWidget);
+      expect(button('Pay ₹145'), findsOneWidget);
       // A new attempt gets a new idempotency key.
-      await tapButton(tester, 'Pay ₹160');
+      await tapButton(tester, 'Pay ₹145');
       expect(api.creates, hasLength(2));
       expect(api.creates[1].clientRequestId, isNot(api.creates[0].clientRequestId));
     });

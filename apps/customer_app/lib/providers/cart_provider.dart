@@ -37,7 +37,8 @@ class CartProvider with ChangeNotifier {
   double get subtotal => _items.fold(0.0, (sum, item) => sum + item.totalPrice);
 
   double get deliveryFee => _items.isEmpty ? 0.0 : 25.0;
-  double get taxAndPackaging => _items.isEmpty ? 0.0 : 15.0;
+  // Docs/21: delivery, GST, packaging and the restaurant charge are one all-in Rs 25 (deliveryFee), so there is no second fee line.
+  double get taxAndPackaging => 0.0;
 
   /// Local estimate only (same formula as the server today). Checkout always shows and charges
   /// the server's totals from `POST /orders`.

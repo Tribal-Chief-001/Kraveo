@@ -195,7 +195,7 @@ class _OrderCard extends StatelessWidget {
 
   String get _summary {
     if (order.items.isEmpty) {
-      return 'Items ${rupee(order.subtotal)} · Delivery ${rupee(order.deliveryFee)} · Packaging ${rupee(order.taxAndPackaging)}';
+      return 'Items ${rupee(order.subtotal)} · Fees ${rupee(order.deliveryFee + order.taxAndPackaging)}';
     }
     final parts = order.items.map((i) => '${i.quantity} × ${i.name}').toList();
     if (parts.length <= 2) return parts.join(', ');

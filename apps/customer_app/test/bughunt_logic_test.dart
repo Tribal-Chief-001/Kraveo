@@ -78,9 +78,9 @@ void main() {
       expect(rupee(-37.6), '-₹37.60');
     });
 
-    test('the VITFIRST example from the report: ₹188 + 25 + 15 - 37.60 = ₹190.40, shown the same everywhere', () {
-      const total = 188 + 25 + 15 - 37.6;
-      expect(rupee(total), '₹190.40');
+    test('the VITFIRST example from the report: ₹188 + 25 - 37.60 = ₹175.40, shown the same everywhere', () {
+      const total = 188 + 25 - 37.6;
+      expect(rupee(total), '₹175.40');
       expect(rupee(37.6), '₹37.60');
       expect(OrderModel.tryParse(orderJson(totalAmount: 190.4))!.totalPaise, 19040);
     });
