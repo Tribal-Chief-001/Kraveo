@@ -9,6 +9,8 @@ import { Skeleton } from './ui/Skeleton';
 import { StatusPill } from './ui/StatusPill';
 import { OtpLockedPill, PaymentPill, RefundPill, TonePill } from './ui/OrderBadges';
 import { AdvanceHandler, NextStepControl, shortId } from './OrderControls';
+import { GroupBadge } from './ui/GroupBadge';
+import { groupSearchTerms } from '../lib/orderGroups';
 
 interface OrdersTableProps {
   orders: Order[];
@@ -98,7 +100,7 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, attentionIds, 
   const filteredOrders = useMemo(() => {
     const q = query.trim().toLowerCase();
     return orders.filter((o) => {
-      const matchesSearch = !q || [o.id, o.customerName, o.customerPhone, o.vendorName, o.dropoffHostel, o.driverName, o.razorpayPaymentId, o.razorpayOrderId, o.cancelReason]
+      const matchesSearch = !q || [o.id, o.customerName, o.customerPhone, o.vendorName, o.dropoffHostel, o.driverName, o.razorpayPaymentId, o.razorpayOrderId, o.cancelReason, ...groupSearchTerms(o.group)]
         .some((value) => Boolean(value) && String(value).toLowerCase().includes(q));
       if (!matchesSearch) return false;
       if (filter === 'ALL') return true;
@@ -186,6 +188,7 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, attentionIds, 
                         <span className="block text-[11px] text-kraveo-ink3">{timeAgo(order.createdAt)}</span>
                       </span>
                     </button>
+                    {order.group && <div className="mt-1.5"><GroupBadge group={order.group} /></div>}
                   </td>
                   <td className={`${cell} min-w-[10rem] max-w-[18rem]`}>
                     <div className="font-bold text-kraveo-ink [overflow-wrap:anywhere]">{order.customerName}</div>
@@ -193,7 +196,7 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, attentionIds, 
                   </td>
                   <td className={`${cell} font-semibold text-kraveo-ink2 [overflow-wrap:anywhere]`}>{order.vendorName}</td>
                   <td className={cell}><RunnerCell name={order.driverName} unpaid={order.paymentStatus !== 'PAID'} finished={isTerminal(order.status)} /></td>
-                  <td className={`k-num ${cell} text-base text-kraveo-ink`}>{inr(order.totalAmount)}</td>
+                  <td className={`k-num ${cell} text-base text-kraveo-ink`}>{inr(order.totalAmount)}{order.group && <span className="block font-sans text-[10px] font-medium text-kraveo-ink3">this restaurant's share</span>}</td>
                   <td className={cell}><PaymentCell order={order} /></td>
                   <td className={cell}><StatusCell order={order} now={now} attention={attention} /></td>
                   <td className={`${cell} text-right`}>
@@ -219,12 +222,13 @@ export const OrdersTable: React.FC<OrdersTableProps> = ({ orders, attentionIds, 
                   <p className="font-mono text-xs font-bold text-kraveo-ink" title={order.id}>{shortId(order.id)} <span className="font-sans font-medium text-kraveo-ink3">· {timeAgo(order.createdAt)}</span></p>
                   <p className="mt-1 truncate font-bold text-kraveo-ink">{order.customerName}</p>
                   <p className="flex items-center gap-1 text-xs text-kraveo-ink2"><MapPin className="h-3 w-3 text-kraveo-ink3" aria-hidden="true" /><span className="truncate">{order.dropoffHostel}</span></p>
+                  {order.group && <div className="mt-1.5"><GroupBadge group={order.group} /></div>}
                 </div>
                 <StatusCell order={order} now={now} attention={attention} />
               </div>
               <div className="mt-3 flex items-center justify-between gap-3 text-sm">
                 <span className="truncate text-kraveo-ink2">{order.vendorName}</span>
-                <span className="k-num shrink-0 text-lg text-kraveo-ink">{inr(order.totalAmount)}</span>
+                <span className="k-num shrink-0 text-lg text-kraveo-ink">{inr(order.totalAmount)}{order.group && <span className="block text-right font-sans text-[10px] font-medium text-kraveo-ink3">share</span>}</span>
               </div>
               <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                 <RunnerCell name={order.driverName} unpaid={order.paymentStatus !== 'PAID'} finished={isTerminal(order.status)} />

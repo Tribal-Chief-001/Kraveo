@@ -6,7 +6,7 @@ import { validateSettlementSettings, MAX_HOLD_DAYS } from '../lib/financeInput';
 import { Switch } from './ui/Switch';
 import { asNum, parseFeeLines, RecalcResult } from '../lib/catalogParse';
 import {
-  CommissionType, FeesForm, ROUNDING_STEPS, RoundingStep, amountText, isRoundingStep, rupees, validateCommissionSetting, validateFees,
+  CommissionType, DEFAULT_RESTAURANTS_PER_ORDER, FeesForm, MAX_EXTRA_RESTAURANT_FEE, MAX_RESTAURANTS_PER_ORDER, MIN_RESTAURANTS_PER_ORDER, ROUNDING_STEPS, RoundingStep, amountText, isRoundingStep, rupees, validateCommissionSetting, validateFees,
 } from '../lib/pricing';
 import { Field } from './ui/Field';
 import { Skeleton } from './ui/Skeleton';
@@ -94,7 +94,21 @@ const feesFormFrom = (raw: Raw): FeesForm => ({
   smallOrderFee: amountText(asNum(raw.smallOrderFee)),
   gstOnFeesPercent: amountText(asNum(raw.gstOnFeesPercent)),
   gstOnFoodPercent: amountText(asNum(raw.gstOnFoodPercent)),
+  // A stored row from before Docs/22 has no value: the server then uses 3, so the form shows 3.
+  maxRestaurantsPerOrder: raw.maxRestaurantsPerOrder === undefined || raw.maxRestaurantsPerOrder === null ? String(DEFAULT_RESTAURANTS_PER_ORDER) : amountText(asNum(raw.maxRestaurantsPerOrder)),
 });
+
+const MAX_OPTIONS = Array.from({ length: MAX_RESTAURANTS_PER_ORDER - MIN_RESTAURANTS_PER_ORDER + 1 }, (_, i) => String(MIN_RESTAURANTS_PER_ORDER + i));
+
+/** Plain explanation under the "most restaurants" field, for the value currently chosen. */
+const maxRestaurantsHint = (text: string): string => {
+  const n = Number(text);
+  if (n === 1) return 'Off: customers can order from one restaurant at a time. Orders already placed are not affected.';
+  if (Number.isInteger(n) && n > 1 && n <= MAX_RESTAURANTS_PER_ORDER) {
+    return `Customers can combine up to ${n} restaurants in one checkout: one payment, one rider, one gate code. If any restaurant cannot accept, the whole order is cancelled and fully refunded. 1 turns this off.`;
+  }
+  return `Choose a whole number from ${MIN_RESTAURANTS_PER_ORDER} to ${MAX_RESTAURANTS_PER_ORDER}. 1 turns combined orders off.`;
+};
 
 const feesKey = (form: FeesForm): string => JSON.stringify({ ...form, lines: form.lines.map(({ label, amount }) => [label, amount]) });
 
@@ -109,6 +123,7 @@ const FeesCard: React.FC<{ raw: Raw; onSaved: (raw: Raw, outcome: Outcome) => vo
   const result = useMemo(() => validateFees(form), [form]);
   const dirty = feesKey(form) !== baseline;
   useEffect(() => { onDirty(dirty); }, [dirty, onDirty]);
+  const maxHint = maxRestaurantsHint(form.maxRestaurantsPerOrder);
 
   const field = (key: keyof Omit<FeesForm, 'lines'>) => (event: React.ChangeEvent<HTMLInputElement>) => { setForm((f) => ({ ...f, [key]: event.target.value })); setError(''); };
   const err = (key: keyof Omit<FeesForm, 'lines'>) => (touched ? (result.errors[key] as string | undefined) : undefined);
@@ -140,7 +155,24 @@ const FeesCard: React.FC<{ raw: Raw; onSaved: (raw: Raw, outcome: Outcome) => vo
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="All-in fee per order (₹)" htmlFor="fee-base" required error={err('baseFee')} hint="One line for the customer: delivery, GST, packaging and the restaurant charge together.">{input('baseFee', 'fee-base')}</Field>
-        <Field label="Extra fee for each additional restaurant (₹)" htmlFor="fee-extra" required error={err('extraRestaurantFee')} hint="Used when an order has more than one restaurant.">{input('extraRestaurantFee', 'fee-extra')}</Field>
+        <Field label="Extra fee for each additional restaurant (₹)" htmlFor="fee-extra" required error={err('extraRestaurantFee')} hint={`Added once for every restaurant after the first in a combined order (0 to ${MAX_EXTRA_RESTAURANT_FEE}). Example: ₹15 and 3 restaurants adds ₹30 on top of the all-in fee. Not used while combined orders are off.`}>{input('extraRestaurantFee', 'fee-extra')}</Field>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label="Most restaurants in one order" htmlFor="fee-max-restaurants" required error={err('maxRestaurantsPerOrder')} hint={maxHint}>
+          <select
+            id="fee-max-restaurants"
+            className="k-select"
+            value={form.maxRestaurantsPerOrder}
+            onChange={(event) => { setForm((f) => ({ ...f, maxRestaurantsPerOrder: event.target.value })); setError(''); }}
+            aria-invalid={Boolean(err('maxRestaurantsPerOrder'))}
+            aria-describedby="fee-max-restaurants-msg"
+          >
+            {/* A stored value outside 1-5 stays visible (and fails validation) instead of silently showing another number. */}
+            {!MAX_OPTIONS.includes(form.maxRestaurantsPerOrder) && <option value={form.maxRestaurantsPerOrder}>{form.maxRestaurantsPerOrder || 'Not set'} (not allowed)</option>}
+            {MAX_OPTIONS.map((value) => <option key={value} value={value}>{value === '1' ? '1 (combined orders off)' : value}</option>)}
+          </select>
+        </Field>
       </div>
 
       <fieldset className="space-y-3">

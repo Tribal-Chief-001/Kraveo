@@ -27,6 +27,7 @@ import { sameData } from './lib/dashboardStats';
 import { isSessionRejected, reassignFailureMessage, sessionRetryDelayMs } from './lib/adminMessages';
 import { useConfirm } from './components/ui/ConfirmDialog';
 import { localAttention, pruneWithLiveOrders } from './lib/orderProblems';
+import { CancelOutcome, cancelToastText, reassignWholeGroupText } from './lib/orderGroups';
 import { SavedPin, vendorsNeedingLocation } from './lib/vendorLocation';
 import { mergeRiderPins, newestPerRider, replaceRiderPins } from './lib/riderMarkers';
 
@@ -390,18 +391,19 @@ export const App: React.FC = () => {
     { ok: (updated) => ['Order updated', `Now ${ORDER_STATUS_LABEL[updated?.status ?? status] ?? status}.`], fail: 'Status not changed' },
   );
 
-  const askAssignOffline = (name?: string) => confirm({
+  const askAssignOffline = (name?: string, order?: Order | null) => confirm({
     title: name ? `Assign ${name}?` : 'Assign this rider?',
-    message: 'This rider is offline. Assign anyway?',
+    message: `This rider is offline. Assign anyway?${order?.group ? ` ${reassignWholeGroupText(order.group)}` : ''}`,
     confirmLabel: 'Assign anyway',
   });
 
   const handleReassignDriver = async (orderId: string, driverId: string | null) => {
     const rider = driverId ? driverPartners.find((driver) => driver.id === driverId) : undefined;
+    const target = ordersRef.current.find((order) => order.id === orderId) ?? (drawerFallback?.id === orderId ? drawerFallback : null);
     // The roster already says offline: ask before anything changes on screen.
     let force = false;
     if (driverId && rider?.dutyStatus === 'OFFLINE') {
-      if (!(await askAssignOffline(rider.name))) return false;
+      if (!(await askAssignOffline(rider.name, target))) return false;
       force = true;
     }
     return runOrderAction(
@@ -413,31 +415,49 @@ export const App: React.FC = () => {
         } catch (error) {
           // The roster was out of date and the server knows the rider is offline: same question, then resend with force.
           if (driverId && !force && error instanceof ApiError && error.code === 'RIDER_OFFLINE') {
-            if (!(await askAssignOffline(rider?.name))) throw new ActionCancelled();
+            if (!(await askAssignOffline(rider?.name, target))) throw new ActionCancelled();
             try { return await apiService.reassignOrderDriver(orderId, driverId, true); } catch (second) { throw plainReassignError(second); }
           }
           throw plainReassignError(error);
         }
       },
-      { ok: (updated) => [driverId ? 'Rider assigned' : 'Rider unassigned', updated?.driverName ? `${updated.driverName} is on this order.` : undefined], fail: 'Rider not changed' },
-    );
+      {
+        ok: (updated) => {
+          const group = updated?.group ?? target?.group;
+          const who = updated?.driverName ? `${updated.driverName} is on ` : '';
+          return [driverId ? 'Rider assigned' : 'Rider unassigned', group
+            ? `${who ? `${who}all ${group.size} orders of the combined order.` : `All ${group.size} orders of the combined order were updated together.`}`
+            : who ? `${who}this order.` : undefined];
+        },
+        fail: 'Rider not changed',
+      },
+    ).then((ok) => { if (ok && target?.group) silentRefresh(); return ok; });
   };
 
   const handleCancelOrder = async (orderId: string, reason: string): Promise<string | null> => {
-    const paid = (ordersRef.current.find((order) => order.id === orderId) ?? drawerFallback)?.paymentStatus === 'PAID';
+    const before = ordersRef.current.find((order) => order.id === orderId) ?? drawerFallback;
+    const paid = before?.paymentStatus === 'PAID';
     let failure: string | null = null;
-    await runOrderAction(
+    let outcome: CancelOutcome = { groupId: null, cancelledOrders: null };
+    const ok = await runOrderAction(
       orderId,
       { status: 'CANCELLED', cancelledBy: 'ADMIN', cancelReason: reason, cancelledAt: new Date().toISOString() },
-      () => apiService.cancelOrder(orderId, reason),
+      async () => {
+        const result = await apiService.cancelOrderWithResult(orderId, reason);
+        outcome = result.outcome;
+        return result.order;
+      },
       {
-        ok: (updated) => ['Order cancelled', updated?.refundStatus === 'FAILED'
-          ? 'The refund failed. It is listed under Needs attention and retried automatically.'
-          : paid ? 'The customer is being refunded automatically.' : 'No payment was captured, nothing to refund.'],
+        ok: (updated) => {
+          const text = cancelToastText(outcome, { size: before?.group?.size, paid, refundFailed: updated?.refundStatus === 'FAILED' });
+          return [text.title, text.description];
+        },
         fail: 'Order not cancelled',
       },
       (message) => { failure = message; },
     );
+    // The server cancelled every restaurant of a combined order: reload the list so the other parts show as cancelled too.
+    if (ok && (outcome.groupId || before?.group)) silentRefresh();
     return failure;
   };
 
@@ -680,6 +700,7 @@ export const App: React.FC = () => {
         onCancel={handleCancelOrder}
         onResetOtpLock={handleResetOtpLock}
         onRetryRefund={handleRetryRefund}
+        onOpenOrder={(id) => openOrder(id)}
       />
       {confirmDialog}
     </div>

@@ -35,7 +35,7 @@ export const rawList = (data: unknown[], over: Record<string, unknown> = {}) => 
 
 /** `GET/PUT /admin/settings/:group` data. */
 export const settingView = (group: string, value: Record<string, unknown>, over: Record<string, unknown> = {}) => ({ group, value, isDefault: false, updatedAt: '2026-10-06T10:00:00.000Z', updatedBy: 'admin1', ...over });
-export const FEES_DEFAULT = { baseFee: 25, lines: [], extraRestaurantFee: 15, freeFeeAbove: 0, smallOrderBelow: 0, smallOrderFee: 0, gstOnFeesPercent: 18, gstOnFoodPercent: 5 };
+export const FEES_DEFAULT = { baseFee: 25, lines: [], extraRestaurantFee: 15, freeFeeAbove: 0, smallOrderBelow: 0, smallOrderFee: 0, gstOnFeesPercent: 18, gstOnFoodPercent: 5, maxRestaurantsPerOrder: 3 };
 
 // ───────────────────────────── Finance (Docs/21 section 5) ─────────────────────────────
 // Shapes copied from backend/src/routes/finance.ts and services/{settlement,finance,payoutAccount,payoutProvider}.ts
@@ -125,3 +125,63 @@ export const rawProviders = (razorpayxEnabled = false) => ({
 export const rawAccountResponse = (account: unknown = rawAccount()) => ({ success: true, partner: { userId: 'u-owner1', name: 'PA Owner One', role: 'VENDOR' }, data: account });
 /** POST .../reveal */
 export const rawReveal = () => ({ success: true, data: { userId: 'u-owner1', partnerType: 'VENDOR', method: 'BANK', upiId: null, accountHolder: 'Ram Singh', accountNumber: '50100234567890', ifsc: 'HDFC0001234', bankName: 'HDFC Bank' } });
+
+// ───────────────────────────── Order groups (Docs/22 section 10) ─────────────────────────────
+// Shapes copied from backend/src/services/orderView.ts (admin OrderView + groupFull), orderGroups.ts (groupView),
+// routes/orders.ts (admin cancel answer, needs-attention rows) and backend/test/e2e/order_groups_*.test.ts.
+
+export const GROUP_ID = 'cgroup00000000000000000001';
+export const GROUP_ORDER_IDS = ['cgrpord00000000000000000a1', 'cgrpord00000000000000000b2'];
+
+/** `OrderView.group` for the admin: 2 restaurants, `index` is the order it is attached to. */
+export const rawGroup = (index = 0, over: Record<string, unknown> = {}, statuses: string[] = ['ACCEPTED', 'PLACED']) => ({
+  id: GROUP_ID, index, size: 2, primary: index === 0,
+  stops: [
+    { orderId: GROUP_ORDER_IDS[0], index: 0, status: statuses[0], vendor: { name: 'Kitchen 1', address: 'Gate 1', lat: 23.0768, lng: 76.8524 }, itemCount: 2 },
+    { orderId: GROUP_ORDER_IDS[1], index: 1, status: statuses[1], vendor: { name: 'Kitchen 2', address: 'Gate 2', lat: 23.0741, lng: 76.8601 }, itemCount: 1 },
+  ],
+  ...over,
+});
+
+/** Admin `OrderView` of one part of a 2-restaurant combined order (child 0 carries the base fee 25 and the payment, child 1 the extra fee 15). */
+export const rawGroupOrder = (index = 0, over: Record<string, unknown> = {}) => ({
+  id: GROUP_ORDER_IDS[index], status: index === 0 ? 'ACCEPTED' : 'PLACED', paymentStatus: 'PAID',
+  totalAmount: index === 0 ? 190 : 70, deliveryFee: index === 0 ? 25 : 15, subtotal: index === 0 ? 180 : 90, taxAndPackaging: 0, discount: index === 0 ? 15 : 35,
+  dropoffHostel: 'BH2', dropoff: null, dropoffNotes: 'Room 214',
+  createdAt: '2026-10-07T03:43:08.677Z', updatedAt: '2026-10-07T03:44:00.000Z', paidAt: '2026-10-07T03:43:30.000Z', acceptedAt: index === 0 ? '2026-10-07T03:44:00.000Z' : null,
+  pickedUpAt: null, deliveredAt: null, cancelledAt: null, cancelledBy: null, cancelReason: null,
+  items: [{ id: `it${index}`, menuItemId: 'm1', name: index === 0 ? 'Paneer Roll' : 'Veg Burger', quantity: index === 0 ? 2 : 1, price: index === 0 ? 90 : 90, vendorUnitPrice: 80, commissionUnit: 10 }],
+  vendorId: `gx-ven-${index + 1}`,
+  vendor: { id: `gx-ven-${index + 1}`, name: `Kitchen ${index + 1}`, address: `Gate ${index + 1}`, lat: 23.0768, lng: 76.8524, hasLocation: true, phone: '9000000001' },
+  customer: { id: 'cust1', name: 'Asha Verma', phone: '9000000002', hostelBlock: 'GH1' },
+  driver: null, otpCode: null, payBy: null, acceptBy: null,
+  group: rawGroup(index), groupId: GROUP_ID,
+  vendorSubtotal: 160, commissionTotal: 20, feeBreakdown: null, couponCode: index === 0 ? 'KRAVEO50' : null, customerId: 'cust1', driverId: null,
+  isReviewed: false, otpAttempts: 0, otpLocked: false, refundStatus: 'NONE', refundError: null, refundAttempts: 0,
+  payments: index === 0 ? [{ id: 'pay1', razorpayOrderId: 'order_x', razorpayPaymentId: 'pay_x', razorpayRefundId: null, amount: 260, capturedAmountPaise: 26000, status: 'PAID', createdAt: '2026-10-07T03:43:20.000Z', refundedAt: null }] : [],
+  ...over,
+});
+
+/** `GET /api/order-groups/:id` data (admin view): group total 260 = 270 food + 40 fees - 50 coupon. */
+export const rawGroupView = (over: Record<string, unknown> = {}) => ({
+  id: GROUP_ID, status: 'AWAITING_RESTAURANTS', paymentStatus: 'PAID', total: 260, subtotal: 270, feeTotal: 40, discount: 50, couponCode: 'KRAVEO50',
+  restaurantCount: 2, dropoffHostel: 'BH2', dropoffNotes: 'Room 214', createdAt: '2026-10-07T03:43:08.677Z', payOrderId: GROUP_ORDER_IDS[0],
+  orders: [rawGroupOrder(0), rawGroupOrder(1)],
+  ...over,
+});
+
+/** `POST /admin/orders/:id/cancel` on a combined order. */
+export const rawGroupCancel = (over: Record<string, unknown> = {}) => ({
+  success: true, message: 'Combined order cancelled (2 orders).', groupId: GROUP_ID, cancelledOrders: 2,
+  data: rawGroupOrder(1, { status: 'CANCELLED', cancelledBy: 'ADMIN', cancelReason: 'Admin decision', cancelledAt: '2026-10-07T04:00:00.000Z' }),
+  ...over,
+});
+
+/** One `GET /admin/orders/needs-attention` row for the primary of a combined order with a failed refund. */
+export const rawGroupAttentionRow = (over: Record<string, unknown> = {}) => ({
+  problem: 'REFUND_FAILED', problems: ['REFUND_FAILED'],
+  detail: 'Refund failed (1 permanent failure(s) so far): provider error. Combined order of 2 restaurants (Kitchen 1, Kitchen 2): this one payment covers all of them.',
+  since: '2026-10-07T04:01:00.000Z', hint: 'Fix the cause, then retry.', groupId: GROUP_ID,
+  order: rawGroupOrder(0, { status: 'CANCELLED', refundStatus: 'FAILED', refundError: 'provider error', cancelledBy: 'ADMIN', cancelledAt: '2026-10-07T04:00:00.000Z' }),
+  ...over,
+});

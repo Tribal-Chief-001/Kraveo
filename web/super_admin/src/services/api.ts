@@ -21,6 +21,8 @@ import {
   normalizeVendor,
 } from '../types';
 import { normalizeAttention } from '../lib/orderProblems';
+import { CancelOutcome, parseCancelOutcome } from '../lib/orderGroups';
+import { GroupView, parseGroupView } from '../lib/groupView';
 import {
   CatalogDish, CatalogPage, PendingCounts, PricePreview, RecalcResult, SettingSaveResult, SettingView, VendorCommission, VendorCommissionResult,
   parseDishList, parseDishResponse, parsePendingCounts, parsePreview, parseRecalc, parseSettingSave, parseSettingView, parseVendorCommission,
@@ -302,12 +304,28 @@ export const apiService = {
   },
 
   // ── Order-flow admin actions (Docs/16_order_flow_contract.md 2.5) ──
-  /** Cancels any non-terminal order; the server refunds it when it was paid. */
+  /** Cancels any non-terminal order; the server refunds it when it was paid. For a combined order this cancels the WHOLE group. */
   async cancelOrder(orderId: string, reason: string): Promise<Order | null> {
-    return orderOrNull(await request<any>(`/api/admin/orders/${encodeURIComponent(orderId)}/cancel`, {
+    return (await apiService.cancelOrderWithResult(orderId, reason)).order;
+  },
+
+  /**
+   * Same call, but also keeps what the server says about a combined order (Docs/22 10.5):
+   * `{ message, groupId, cancelledOrders, data }` (`cancelledOrders: 0` when it was already cancelled; single orders have neither field).
+   */
+  async cancelOrderWithResult(orderId: string, reason: string): Promise<{ order: Order | null; outcome: CancelOutcome }> {
+    const body = await requestFull<any>(`/api/admin/orders/${encodeURIComponent(orderId)}/cancel`, {
       method: 'POST',
       body: JSON.stringify({ reason }),
-    }));
+    });
+    return { order: orderOrNull(body?.data ?? body), outcome: parseCancelOutcome(body) };
+  },
+
+  /** One combined order with its totals and all its orders (admin may read any group; 404 for an unknown id). */
+  async fetchOrderGroup(groupId: string, signal?: AbortSignal): Promise<GroupView> {
+    const view = parseGroupView(await requestFull<any>(`/api/order-groups/${encodeURIComponent(groupId)}`, { signal }));
+    if (!view) throw unexpected('combined order');
+    return view;
   },
 
   /** Asks the server to try a FAILED refund again right now (409 NO_FAILED_REFUND if there is none). */

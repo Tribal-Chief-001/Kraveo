@@ -10,6 +10,9 @@ import { PIPELINE_ORDER, STATUS_META, inr, statusMeta, timeAgo } from '../lib/to
 import { AnimatedNumber } from './ui/AnimatedNumber';
 import { PaymentPill, OtpLockedPill } from './ui/OrderBadges';
 import { ReassignHandler, RiderAssignSelect, shortId } from './OrderControls';
+import { GroupBadge } from './ui/GroupBadge';
+import { preferRiderOrder, riderOrderLabel } from '../lib/orders';
+import { groupSearchTerms } from '../lib/orderGroups';
 import { Avatar } from './ui/Avatar';
 import { EmptyState } from './ui/EmptyState';
 import { KpiTile } from './ui/KpiTile';
@@ -73,7 +76,7 @@ const RunnerRow = React.memo(function RunnerRow({ id, name, state, subtitle, onF
 const orderMatches = (order: Order, query: string): boolean => {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  return [order.id, order.vendorName, order.customerName, order.dropoffHostel, order.driverName]
+  return [order.id, order.vendorName, order.customerName, order.dropoffHostel, order.driverName, ...groupSearchTerms(order.group)]
     .some((value) => Boolean(value) && String(value).toLowerCase().includes(q));
 };
 
@@ -97,7 +100,11 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
 
   const activeByDriver = useMemo(() => {
     const map = new Map<string, Order>();
-    activeOrders.forEach((order) => { if (order.driverId) map.set(order.driverId, order); });
+    activeOrders.forEach((order) => {
+      if (!order.driverId) return;
+      const current = map.get(order.driverId);
+      if (!current || preferRiderOrder(order, current)) map.set(order.driverId, order);
+    });
     return map;
   }, [activeOrders]);
 
@@ -134,7 +141,7 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
       lng: driver.lng,
       state: riderStates.get(driver.id) ?? 'stale',
       lastUpdated: driver.lastUpdated,
-      orderLabel: order ? `${shortId(order.id)} to ${order.dropoffHostel}` : null,
+      orderLabel: order ? riderOrderLabel(order) : null,
     };
   }), [plottable, activeByDriver, riderStates]);
 
@@ -197,6 +204,7 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
                       <span className="text-[11px] text-kraveo-ink3">{timeAgo(order.createdAt, now)}</span>
                     </div>
                     <p className="mt-1.5 truncate text-sm font-bold text-kraveo-ink">{order.vendorName}</p>
+                    {order.group && <div className="mt-1"><GroupBadge group={order.group} /></div>}
                     {(order.paymentStatus !== 'PAID' || order.otpLocked) && <div className="mt-1 flex flex-wrap gap-1"><PaymentPill status={order.paymentStatus} /><OtpLockedPill order={order} /></div>}
                     <div className="mt-1 flex items-center justify-between gap-2 text-xs text-kraveo-ink2">
                       <span className="flex min-w-0 items-center gap-1"><MapPin className="h-3 w-3 shrink-0 text-kraveo-ink3" aria-hidden="true" /><span className="truncate">{order.dropoffHostel}</span></span>
@@ -292,7 +300,7 @@ export const LiveCommandCenter: React.FC<LiveCommandCenterProps> = ({ drivers, o
                   id={driver.id}
                   name={driver.name}
                   state={riderStates.get(driver.id) ?? 'stale'}
-                  subtitle={order ? `${shortId(order.id)} · ${order.dropoffHostel}` : `Updated ${timeAgo(driver.lastUpdated, now)}`}
+                  subtitle={order ? (order.group ? `Combined order (${order.group.size}) · ${order.dropoffHostel}` : `${shortId(order.id)} · ${order.dropoffHostel}`) : `Updated ${timeAgo(driver.lastUpdated, now)}`}
                   onFocus={focusRider}
                 />
               );

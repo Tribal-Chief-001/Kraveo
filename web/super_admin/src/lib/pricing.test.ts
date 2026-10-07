@@ -68,7 +68,7 @@ describe('helpers', () => {
 });
 
 const form = (over: Partial<FeesForm> = {}): FeesForm => ({
-  baseFee: '25', lines: [], extraRestaurantFee: '15', freeFeeAbove: '0', smallOrderBelow: '0', smallOrderFee: '0', gstOnFeesPercent: '18', gstOnFoodPercent: '5', ...over,
+  baseFee: '25', lines: [], extraRestaurantFee: '15', freeFeeAbove: '0', smallOrderBelow: '0', smallOrderFee: '0', gstOnFeesPercent: '18', gstOnFoodPercent: '5', maxRestaurantsPerOrder: '3', ...over,
 });
 
 describe('validateFees', () => {

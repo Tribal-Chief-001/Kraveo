@@ -2,6 +2,7 @@ import React, { useId, useState } from 'react';
 import { ArrowRight, Loader2 } from 'lucide-react';
 import { DriverPartner, Order, OrderStatus } from '../types';
 import { ORDER_STATUS_LABEL } from '../lib/tokens';
+import { reassignWholeGroupText } from '../lib/orderGroups';
 import { assignableRiders, nextStep, orderCode, reassignBlockedReason, riderForOrder } from '../lib/orders';
 
 /** '#' + last 6 of the id, uppercased (same code the apps show). */
@@ -73,7 +74,9 @@ const UNASSIGN = '__unassign__';
 export const RiderAssignSelect: React.FC<{ order: Order; riders: DriverPartner[]; onReassign: ReassignHandler; className?: string; id?: string }> = ({ order, riders, onReassign, className = '', id }) => {
   const [busy, setBusy] = useState(false);
   const hintId = useId();
+  const groupId = useId();
   const blocked = reassignBlockedReason(order);
+  const describedBy = [blocked ? hintId : '', order.group ? groupId : ''].filter(Boolean).join(' ') || undefined;
   const options = assignableRiders(riders);
   const current = riderForOrder(riders, order);
   const change = async (value: string) => {
@@ -86,7 +89,7 @@ export const RiderAssignSelect: React.FC<{ order: Order; riders: DriverPartner[]
       <select
         id={id}
         aria-label={`${order.driverId ? 'Change' : 'Assign'} rider for order ${shortId(order.id)}`}
-        aria-describedby={blocked ? hintId : undefined}
+        aria-describedby={describedBy}
         value=""
         disabled={Boolean(blocked) || busy}
         aria-busy={busy}
@@ -108,6 +111,7 @@ export const RiderAssignSelect: React.FC<{ order: Order; riders: DriverPartner[]
         {order.driverId && <option value={UNASSIGN}>Unassign rider</option>}
       </select>
       {blocked && <p id={hintId} className="text-[11px] font-semibold text-kraveo-ink3">{blocked}</p>}
+      {order.group && <p id={groupId} className="text-[11px] text-kraveo-ink3">{reassignWholeGroupText(order.group)}</p>}
     </div>
   );
 };

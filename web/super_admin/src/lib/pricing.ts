@@ -10,6 +10,11 @@ export const MAX_DISH_PRICE = 10_000;
 export const MAX_FLAT_COMMISSION = 5_000;
 export const MAX_FEE = 500;
 export const MAX_THRESHOLD = 10_000;
+/** Docs/22: the flat fee each extra restaurant adds (server LIMITS.maxExtraRestaurantFee) and the allowed restaurants per order (1 = off). */
+export const MAX_EXTRA_RESTAURANT_FEE = 200;
+export const MIN_RESTAURANTS_PER_ORDER = 1;
+export const MAX_RESTAURANTS_PER_ORDER = 5;
+export const DEFAULT_RESTAURANTS_PER_ORDER = 3;
 
 export const ROUNDING_STEPS = [0, 1, 2, 5, 10] as const;
 export type RoundingStep = (typeof ROUNDING_STEPS)[number];
@@ -91,6 +96,8 @@ export interface FeesSettings {
   smallOrderFee: number;
   gstOnFeesPercent: number;
   gstOnFoodPercent: number;
+  /** Docs/22: most restaurants in one order, 1..5 (1 = multi-restaurant orders are off). */
+  maxRestaurantsPerOrder: number;
 }
 
 /** What the fees form holds while the admin types: everything is text, lines carry a local row id. */
@@ -104,6 +111,8 @@ export interface FeesForm {
   smallOrderFee: string;
   gstOnFeesPercent: string;
   gstOnFoodPercent: string;
+  /** Whole number text, "1".."5". */
+  maxRestaurantsPerOrder: string;
 }
 
 export type FeesErrors = Partial<Record<keyof Omit<FeesForm, 'lines'> | 'lines', string>> & { lineErrors?: Record<number, { label?: string; amount?: string }> };
@@ -120,6 +129,16 @@ const lineKey = (label: string, preferred: string | undefined, taken: Set<string
   return key;
 };
 
+/** The server takes a whole number from 1 to 5 (backend services/pricing.ts validateFees); 3.5, "abc", 0 and 6 are refused. */
+export const parseRestaurantsPerOrder = (text: string): ParsedNumber => {
+  const clean = text.trim();
+  const range = `a whole number from ${MIN_RESTAURANTS_PER_ORDER} to ${MAX_RESTAURANTS_PER_ORDER} (1 turns multi-restaurant orders off)`;
+  if (!/^\d{1,3}$/.test(clean)) return { ok: false, message: `The most restaurants per order must be ${range}.` };
+  const value = Number(clean);
+  if (value < MIN_RESTAURANTS_PER_ORDER || value > MAX_RESTAURANTS_PER_ORDER) return { ok: false, message: `The most restaurants per order must be ${range}.` };
+  return { ok: true, value };
+};
+
 export interface ValidatedFees { ok: boolean; errors: FeesErrors; value?: FeesSettings; lineTotal: number }
 
 /** Validates the fees form; `value` is set only when every field is fine and the named lines add up to the all-in fee. */
@@ -131,7 +150,9 @@ export const validateFees = (form: FeesForm): ValidatedFees => {
     return parsed.value;
   };
   const baseFee = num('baseFee', 'the all-in fee', MAX_FEE);
-  const extraRestaurantFee = num('extraRestaurantFee', 'the extra-restaurant fee', MAX_FEE);
+  const extraRestaurantFee = num('extraRestaurantFee', 'the extra-restaurant fee', MAX_EXTRA_RESTAURANT_FEE);
+  const maxRestaurants = parseRestaurantsPerOrder(String(form.maxRestaurantsPerOrder));
+  if (!maxRestaurants.ok) errors.maxRestaurantsPerOrder = maxRestaurants.message;
   const freeFeeAbove = num('freeFeeAbove', 'the free-delivery amount (0 = off)', MAX_THRESHOLD);
   const smallOrderBelow = num('smallOrderBelow', 'the small-order limit (0 = off)', MAX_THRESHOLD);
   const smallOrderFee = num('smallOrderFee', 'the small-order fee', MAX_FEE);
@@ -168,6 +189,7 @@ export const validateFees = (form: FeesForm): ValidatedFees => {
       baseFee: baseFee as number, lines, extraRestaurantFee: extraRestaurantFee as number, freeFeeAbove: freeFeeAbove as number,
       smallOrderBelow: smallOrderBelow as number, smallOrderFee: smallOrderFee as number,
       gstOnFeesPercent: gstOnFeesPercent as number, gstOnFoodPercent: gstOnFoodPercent as number,
+      maxRestaurantsPerOrder: (maxRestaurants as { ok: true; value: number }).value,
     },
   };
 };

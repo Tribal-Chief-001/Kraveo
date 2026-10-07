@@ -1,4 +1,5 @@
 import { readPin } from './lib/vendorLocation';
+import { OrderGroupInfo, parseGroupInfo } from './lib/orderGroups';
 
 export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'drivers' | 'customers' | 'analytics' | 'catalog' | 'finance' | 'settings';
 
@@ -96,6 +97,13 @@ export interface Order {
   razorpayOrderId?: string | null;
   razorpayPaymentId?: string | null;
   razorpayRefundId?: string | null;
+  /**
+   * Docs/22: set only when this order is one restaurant's part of a combined (multi-restaurant) order. Absent = a normal single order.
+   * `index`/`size` say which part of how many; `stops` lists every restaurant of the group with its own status.
+   */
+  group?: OrderGroupInfo;
+  /** Admin OrderView top-level copy of the group id. */
+  groupId?: string;
 }
 
 export interface Vendor {
@@ -330,6 +338,13 @@ export const normalizeOrderPartial = (input: any): Partial<Order> & { id: string
   if (has(raw, 'acceptBy')) put('acceptBy', isoOrNull(raw.acceptBy));
   if (has(raw, 'isReviewed')) put('isReviewed', raw.isReviewed === true);
 
+  // Docs/22 order group. A missing key leaves what we know alone; an explicit null clears it; unusable input (e.g. a restaurant-shaped
+  // { size, allAccepted }) is ignored.
+  const group = parseGroupInfo(raw.group);
+  if (group) put('group', group);
+  else if (has(raw, 'group') && raw.group === null) put('group', undefined);
+  if (str(raw.groupId) || group) put('groupId', str(raw.groupId) ?? group?.id);
+
   // Payment ids: admin OrderView only (`payments[]`). The headline ids come from the captured/refunded payment.
   if (Array.isArray(raw.payments)) {
     const payments: PaymentRecord[] = raw.payments.map(normalizePayment);
@@ -376,6 +391,8 @@ export interface AttentionEntry {
   problems: AttentionProblem[];
   /** The server's advice for this entry (null for the dashboard's own fallback list). */
   hint?: string | null;
+  /** Docs/22: the combined order this entry's order belongs to (row-level `groupId` or the order's own group). */
+  groupId?: string | null;
 }
 
 export const normalizeVendor = (raw: any): Vendor => ({

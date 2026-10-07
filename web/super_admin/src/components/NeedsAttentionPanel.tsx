@@ -12,6 +12,8 @@ import { PaymentPill, TonePill } from './ui/OrderBadges';
 import { useConfirm } from './ui/ConfirmDialog';
 import { shortId } from './OrderControls';
 import type { DrawerMode } from './OrderDrawer';
+import { GroupBadge } from './ui/GroupBadge';
+import { GROUP_MONEY_PROBLEMS, groupMoneyNote, groupRestaurantNames, groupSearchTerms } from '../lib/orderGroups';
 
 interface Props {
   entries: AttentionEntry[];
@@ -35,7 +37,7 @@ interface Props {
 const matches = (entry: AttentionEntry, q: string): boolean => {
   if (!q) return true;
   const o = entry.order;
-  return [entry.orderId, o?.vendorName, o?.customerName, o?.dropoffHostel, o?.driverName, ...entry.problems.map((p) => problemMeta(p.code).label)]
+  return [entry.orderId, o?.vendorName, o?.customerName, o?.dropoffHostel, o?.driverName, ...groupSearchTerms(o?.group), ...entry.problems.map((p) => problemMeta(p.code).label)]
     .some((v) => Boolean(v) && String(v).toLowerCase().includes(q));
 };
 
@@ -60,7 +62,7 @@ const ActionButton: React.FC<{ meta: ProblemMeta; entry: AttentionEntry; busy: b
       );
     case 'cancel':
       if (o && !canCancel(o)) return null;
-      return <button type="button" className="k-btn-danger !min-h-[38px] text-xs" onClick={() => onOpen(id, 'cancel', o)}><Ban className="h-4 w-4" aria-hidden="true" />Cancel order</button>;
+      return <button type="button" className="k-btn-danger !min-h-[38px] text-xs" onClick={() => onOpen(id, 'cancel', o)}><Ban className="h-4 w-4" aria-hidden="true" />{o?.group ? 'Cancel whole combined order' : 'Cancel order'}</button>;
     case 'assign':
       return <button type="button" className="k-btn-primary !min-h-[38px] text-xs" onClick={() => onOpen(id, 'view', o)}><UserCheck className="h-4 w-4" aria-hidden="true" />Assign rider</button>;
     case 'call-rider':
@@ -178,6 +180,14 @@ export const NeedsAttentionPanel: React.FC<Props> = ({ entries, serverAvailable,
                 </div>
                 {o && <div className="flex shrink-0 flex-col items-end gap-1.5"><StatusPill status={o.status} compact /><PaymentPill status={o.paymentStatus} /></div>}
               </div>
+
+              {o?.group && (
+                <div className="mt-3 rounded-k-md border border-kraveo-status-atGate/30 bg-kraveo-status-atGate/10 px-3 py-2.5 text-xs" data-testid="attention-group">
+                  <GroupBadge group={o.group} />
+                  {o.group.stops.length > 0 && <p className="mt-1.5 text-kraveo-ink [overflow-wrap:anywhere]"><span className="text-kraveo-ink3">Restaurants:</span> {groupRestaurantNames(o.group).join(', ')}</p>}
+                  {metas.some(({ meta }) => GROUP_MONEY_PROBLEMS.has(meta.code)) && <p className="mt-1 font-semibold text-kraveo-ink">{groupMoneyNote(o.group)}</p>}
+                </div>
+              )}
 
               <ul className="mt-3 space-y-2.5">
                 {metas.map(({ p, meta }) => (

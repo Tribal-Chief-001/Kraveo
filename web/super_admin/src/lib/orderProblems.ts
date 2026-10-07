@@ -123,11 +123,12 @@ export const normalizeAttention = (body: any): AttentionEntry[] => {
     .map((e, index) => {
       const order: Order | null = e.order && typeof e.order === 'object' && s(e.order.id) ? normalizeOrder(e.order) : null;
       const primary = s(e.problem) ?? 'UNKNOWN';
+      const groupId = s(e.groupId) ?? order?.group?.id ?? order?.groupId ?? null;
       const codes: string[] = [primary, ...(Array.isArray(e.problems) ? e.problems.filter((c: unknown) => s(c) !== null) : [])];
       const problems: AttentionProblem[] = [...new Set(codes.map(canonicalCode))].map((code) => (
         code === canonicalCode(primary) ? { code, detail: s(e.detail), since: s(e.since) } : { code }
       ));
-      return { key: order?.id ?? `row-${index}`, orderId: order?.id ?? null, order, problems, hint: s(e.hint) };
+      return { key: order?.id ?? `row-${index}`, orderId: order?.id ?? null, order, problems, hint: s(e.hint), ...(groupId ? { groupId } : {}) };
     });
 };
 

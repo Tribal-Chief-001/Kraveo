@@ -135,6 +135,27 @@ export const nextStep = (order: Order, otp = ''): NextStep | null => {
   return { status, blockedReason };
 };
 
+const RIDER_PROGRESS: Record<string, number> = { ACCEPTED: 1, PREPARING: 2, READY_FOR_PICKUP: 3, PICKED_UP: 4, ARRIVED_AT_GATE: 5 };
+
+/**
+ * One rider can hold several orders: the parts of a combined order (Docs/22) or, if the server allows it, separate orders.
+ * When a rider has two parts of the SAME combined order, the map and the runner list show one entry: the most advanced part
+ * (the rider is already delivering once any part is picked up), the primary part on a tie. Otherwise the later order wins, as before.
+ */
+export const preferRiderOrder = (candidate: Order, current: Order): boolean => {
+  const sameGroup = Boolean(candidate.group && current.group && candidate.group.id === current.group.id);
+  if (!sameGroup) return true;
+  const a = RIDER_PROGRESS[candidate.status] ?? 0;
+  const b = RIDER_PROGRESS[current.status] ?? 0;
+  if (a !== b) return a > b;
+  return Boolean(candidate.group!.primary) && !current.group!.primary;
+};
+
+/** "#ABC123 to BH2", or "Combined order (3 restaurants) to BH2" for a part of a combined order. */
+export const riderOrderLabel = (order: Order): string => (order.group
+  ? `Combined order (${order.group.size} restaurants) to ${order.dropoffHostel}`
+  : `${orderCode(order.id)} to ${order.dropoffHostel}`);
+
 export const canCancel = (order: Order): boolean => !isTerminal(order.status);
 /** Order display code used everywhere (same as the apps): '#' + last 6 characters of the id, uppercased. */
 export const orderCode = (id: string): string => `#${id.slice(-6).toUpperCase()}`;
@@ -183,6 +204,10 @@ export const refundInfo = (order: Order): { label: string; tone: Tone; detail?: 
   if (r === 'FAILED') return { label: 'Refund failed', tone: 'danger', detail: order.refundError ?? 'The payment provider refused the refund. The server retries every minute (up to 10 times).' };
   if (r === 'PENDING') return { label: 'Refund in progress', tone: 'warning' };
   if (r === 'DONE' || order.paymentStatus === 'REFUNDED') return { label: 'Refunded', tone: 'info' };
+  // Docs/22: one payment, one refund, and both live on the PRIMARY order. A cancelled sibling still reads PAID until the primary's refund completes: not a problem.
+  if (order.status === 'CANCELLED' && order.paymentStatus === 'PAID' && order.group && !order.group.primary) {
+    return { label: 'Refund is on the combined order', tone: 'info', detail: 'A combined order has one payment and one refund. They are recorded on its first order, not on this one.' };
+  }
   if (order.status === 'CANCELLED' && order.paymentStatus === 'PAID') return { label: 'Paid, no refund recorded', tone: 'warning', detail: 'This cancelled order still shows as paid. Check the payment in Razorpay.' };
   return null;
 };
