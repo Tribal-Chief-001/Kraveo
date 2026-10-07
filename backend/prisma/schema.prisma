@@ -78,6 +78,7 @@ model User {
   updatedAt    DateTime @updatedAt
 
   ordersPlaced    Order[]        @relation("CustomerOrders")
+  groupsPlaced    OrderGroup[]   @relation("CustomerGroups")
   ordersDriven    Order[]        @relation("DriverOrders")
   driverProfile   DriverPartner?
   vendorsOwned    Vendor[]
@@ -218,15 +219,23 @@ model Order {
   // one settlement (set by a conditional update); deleting a settlement row frees its orders (ON DELETE SET NULL).
   settlementId     String?
 
+  // Docs/22 multi-restaurant orders: every child of an OrderGroup is an ordinary order. groupIndex 0 = the PRIMARY child: it carries the
+  // one Payment (amount = the group total), the base fee and the coupon code. groupId is immutable once set; groups are never deleted.
+  groupId          String?
+  groupIndex       Int?
+
   customer User          @relation("CustomerOrders", fields: [customerId], references: [id])
   vendor   Vendor        @relation(fields: [vendorId], references: [id])
   driver   User?         @relation("DriverOrders", fields: [driverId], references: [id])
   settlement Settlement? @relation(fields: [settlementId], references: [id], onDelete: SetNull)
+  group    OrderGroup?   @relation(fields: [groupId], references: [id], onDelete: Restrict)
   items    OrderItem[]
   payments Payment[]
   review   ReviewRecord?
 
   @@unique([customerId, clientRequestId])
+  @@unique([groupId, groupIndex])
+  @@index([groupId])
   @@index([customerId, createdAt])
   @@index([customerId, couponCode])
   @@index([vendorId, status])
@@ -237,6 +246,31 @@ model Order {
   @@index([refundStatus])
   @@index([settlementId])
   @@index([status, deliveredAt])
+}
+
+/// Docs/22: one checkout, one payment, one rider, one gate handover for several restaurants. The children (Order rows) are normal orders.
+model OrderGroup {
+  id              String   @id @default(uuid())
+  customerId      String
+  // The app's checkout id (unique per customer); the children use the derived ids `g:<clientRequestId>:<index>`.
+  clientRequestId String
+  dropoffHostel   String
+  dropoffNotes    String?
+  couponCode      String?
+  discount        Float    @default(0)
+  // Food (customer prices), all fees, and what the customer pays (= subtotal + feeTotal - discount = the sum of the children's totalAmount).
+  subtotal        Float
+  feeTotal        Float
+  totalAmount     Float
+  restaurantCount Int
+  feeBreakdown    Json?
+  createdAt       DateTime @default(now())
+
+  customer User    @relation("CustomerGroups", fields: [customerId], references: [id])
+  orders   Order[]
+
+  @@unique([customerId, clientRequestId])
+  @@index([customerId, createdAt])
 }
 
 model OrderItem {

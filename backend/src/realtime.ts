@@ -110,6 +110,9 @@ export const attachRealtime = (io: SocketIOServer) => {
         autoRooms.push(...owned.map((v) => `vendor_${v.id}`));
       }
       socket.data.autoRooms = autoRooms;
+      // Docs/22: a rider app that understands combined orders says so (`auth: { token, groups: 1 }`); only those sockets are offered a combined order.
+      const g = socket.handshake.auth?.groups ?? socket.handshake.query?.groups;
+      socket.data.groups = g === 1 || g === true || g === '1' || g === 'true';
       return next();
     } catch {
       return next(new Error('Invalid or expired authentication token.'));
@@ -208,6 +211,9 @@ export const publishOrderChange = async (order: OrderWithRelations, opts: { wasP
       if (opts.newOrderAlert && (u.role === 'ADMIN' || (u.role === 'VENDOR' && s.rooms.has(vendorRoom)))) s.emit('new_order_alert', view);
     }
 
+    // Docs/22: a combined order is ONE pool entry (its primary child, see isPoolEligible) and only riders that sent `groups: 1`
+    // are told about it: an old rider app would show it as a single restaurant and claim all of it blindly.
+    const isGroup = !!order.groupId;
     const nowEligible = isPoolEligible(order);
     if (nowEligible) {
       const riders = await io.in('drivers').fetchSockets();
@@ -219,11 +225,17 @@ export const publishOrderChange = async (order: OrderWithRelations, opts: { wasP
       for (const s of riders) {
         const u = s.data.user as SocketUser | undefined;
         if (!u || !eligible.has(u.id)) continue;
+        if (isGroup && !s.data.groups) continue;
+        if (isGroup && opts.wasPoolEligible) continue; // Docs/22: a combined order is offered ONCE, when it becomes claimable
         const view = orderView(order, u.role, u.id);
         if (view) s.emit('order_available', view);
       }
     } else if (opts.wasPoolEligible) {
-      io.to('drivers').emit('order_unavailable', { id: order.id });
+      if (isGroup) {
+        for (const s of await io.in('drivers').fetchSockets()) if (s.data.groups) s.emit('order_unavailable', { id: order.id });
+      } else {
+        io.to('drivers').emit('order_unavailable', { id: order.id });
+      }
     }
   } catch (err) {
     console.error('publishOrderChange failed:', errSummary(err));

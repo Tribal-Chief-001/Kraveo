@@ -13,6 +13,8 @@ import { fromPaise, hasAtMostTwoDecimals } from './pricing';
  * Definitions (all on the Asia/Kolkata calendar):
  *  - REVENUE ORDERS: status DELIVERED and paymentStatus PAID, dated by `deliveredAt`. Cancelled orders never count as revenue.
  *  - REFUNDS: orders with paymentStatus REFUNDED, dated by `cancelledAt` (else `deliveredAt`, else `updatedAt`); counted only as refunds.
+ *    Docs/22: a combined order is ONE payment and ONE refund (count = distinct groups); its amount is the sum of the children's totals = the group total.
+ *    Rider deliveries are counted per delivery (one per combined order); everything else is per restaurant order.
  *  - foodGross = sum of Order.subtotal (customer food), vendorAmount = sum of vendorSubtotal, commission = sum of commissionTotal,
  *    feesCollected = deliveryFee + taxAndPackaging (the all-in fee; old orders keep their separate tax column), discounts = coupons
  *    (paid by Kraveo), platformRevenue = commission + feesCollected - discounts.
@@ -51,7 +53,7 @@ export const financeSummary = async (r: IstRange) => {
       FROM "Order" o LEFT JOIN "Settlement" st ON st."id" = o."settlementId"
       WHERE ${revenueWhere(r)}`,
     prisma.$queryRaw<{ count: number; amountP: number }[]>`
-      SELECT COUNT(*)::int AS "count", COALESCE(SUM(${p('o."totalAmount"')}), 0)::float8 AS "amountP" FROM "Order" o WHERE ${refundWhere(r)}`,
+      SELECT COUNT(DISTINCT COALESCE(o."groupId", o."id"))::int AS "count", COALESCE(SUM(${p('o."totalAmount"')}), 0)::float8 AS "amountP" FROM "Order" o WHERE ${refundWhere(r)}`,
   ]);
   const m = rows[0];
   return {
@@ -113,7 +115,7 @@ export const financeByDay = async (r: IstRange) => {
       SELECT to_char(o."deliveredAt" + ${IST_SHIFT}, 'YYYY-MM-DD') AS "day", ${MONEY_SQL}
       FROM "Order" o WHERE ${revenueWhere(r)} GROUP BY 1 ORDER BY 1`,
     prisma.$queryRaw<{ day: string; count: number; amountP: number }[]>`
-      SELECT to_char(COALESCE(o."cancelledAt", o."deliveredAt", o."updatedAt") + ${IST_SHIFT}, 'YYYY-MM-DD') AS "day", COUNT(*)::int AS "count",
+      SELECT to_char(COALESCE(o."cancelledAt", o."deliveredAt", o."updatedAt") + ${IST_SHIFT}, 'YYYY-MM-DD') AS "day", COUNT(DISTINCT COALESCE(o."groupId", o."id"))::int AS "count",
         COALESCE(SUM(${p('o."totalAmount"')}), 0)::float8 AS "amountP"
       FROM "Order" o WHERE ${refundWhere(r)} GROUP BY 1`,
   ]);
@@ -131,7 +133,7 @@ export const financeByDay = async (r: IstRange) => {
 
 export const financeRiders = async (r: IstRange, limit: number) => {
   const totals = await prisma.$queryRaw<{ driverId: string; deliveries: number }[]>`
-    SELECT o."driverId", COUNT(*)::int AS "deliveries" FROM "Order" o
+    SELECT o."driverId", COUNT(DISTINCT COALESCE(o."groupId", o."id"))::int AS "deliveries" FROM "Order" o
     WHERE ${revenueWhere(r)} AND o."driverId" IS NOT NULL GROUP BY o."driverId" ORDER BY "deliveries" DESC, o."driverId" ASC LIMIT ${limit}`;
   const ledger = await prisma.riderPayout.groupBy({
     by: ['driverUserId'],
@@ -145,7 +147,7 @@ export const financeRiders = async (r: IstRange, limit: number) => {
     totals.length === 0
       ? []
       : prisma.$queryRaw<{ driverId: string; day: string; deliveries: number }[]>`
-          SELECT o."driverId", to_char(o."deliveredAt" + ${IST_SHIFT}, 'YYYY-MM-DD') AS "day", COUNT(*)::int AS "deliveries" FROM "Order" o
+          SELECT o."driverId", to_char(o."deliveredAt" + ${IST_SHIFT}, 'YYYY-MM-DD') AS "day", COUNT(DISTINCT COALESCE(o."groupId", o."id"))::int AS "deliveries" FROM "Order" o
           WHERE ${revenueWhere(r)} AND o."driverId" = ANY(${totals.map((t) => t.driverId)}) GROUP BY 1, 2 ORDER BY 2, 1 LIMIT 20000`,
     prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, driverProfile: { select: { runnerCode: true } } } }),
   ]);

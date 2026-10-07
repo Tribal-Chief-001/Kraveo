@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import { OrderItem } from '../types';
 import { getSettings } from '../services/settings';
-import { computeFees, FeeBreakdown } from '../services/pricing';
+import { computeFees, FeeBreakdown, splitGroupMoney } from '../services/pricing';
 
 /** What the restaurant earns and Kraveo keeps for one line, copied from the dish at order time (Docs/21 section 2). */
 export type PricedItem = OrderItem & { vendorUnitPrice: number; commissionUnit: number };
@@ -72,35 +72,24 @@ export const couponEligibilityProblem = async (tx: Prisma.TransactionClient, cus
 export const MAX_ITEM_QUANTITY = 20;
 export const MAX_CART_LINES = 30;
 
-// Recalculates total price on server side to prevent client pricing tampering
-export const validateAndCalculateOrder = async (
-  vendorId: string, 
-  items: { itemId: string; quantity: number }[],
-  couponCode?: string
-): Promise<OrderValidationResult> => {
-  const settings = await getSettings();
-  const invalid = {
-    calculatedSubtotal: 0,
-    calculatedDeliveryFee: settings.fees.baseFee,
-    calculatedTaxAndPackaging: 0,
-    calculatedVendorSubtotal: 0,
-    calculatedCommissionTotal: 0,
-    feeBreakdown: null,
-    calculatedDiscount: 0,
-    calculatedTotalAmount: settings.fees.baseFee,
-  };
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** One restaurant's cart, validated against the database: what the customer pays for the food and what the restaurant earns. */
+export type VendorCartResult =
+  | { ok: true; verifiedItems: PricedItem[]; subtotal: number; vendorSubtotal: number; commissionTotal: number }
+  | { ok: false; errorMessage: string };
+
+/**
+ * Item validation and price snapshot of ONE restaurant's cart (shared by single orders and by every restaurant of a group).
+ * Only dishes a customer may see count: approved and not deleted. A pending, rejected or deleted dish answers exactly like a dish
+ * that does not exist (no hint that it is there).
+ */
+export const priceVendorCart = async (vendorId: string, items: { itemId: string; quantity: number }[]): Promise<VendorCartResult> => {
   if (!items || !Array.isArray(items) || items.length === 0 || items.length > MAX_CART_LINES) {
-    return {
-      isValid: false,
-      errorMessage: 'Cart items must be a non-empty array.',
-      verifiedItems: [],
-      ...invalid,
-    };
+    return { ok: false, errorMessage: 'Cart items must be a non-empty array.' };
   }
 
   const itemIds = items.map((i) => (i && typeof i === 'object' && typeof i.itemId === 'string' ? i.itemId : '')).filter(Boolean);
-  // Only dishes a customer may see: approved and not deleted. A pending, rejected or deleted dish answers exactly like a dish that
-  // does not exist (no hint that it is there).
   const dbMenuItems = await prisma.menuItem.findMany({
     where: { id: { in: itemIds }, vendorId, approvalStatus: 'APPROVED', deletedAt: null }
   });
@@ -113,32 +102,17 @@ export const validateAndCalculateOrder = async (
 
   for (const rawItem of items) {
     if (!rawItem || typeof rawItem !== 'object' || !Number.isInteger(rawItem.quantity) || rawItem.quantity <= 0 || rawItem.quantity > MAX_ITEM_QUANTITY) {
-      return {
-        isValid: false,
-        errorMessage: `Invalid quantity '${rawItem?.quantity}' for item ${rawItem?.itemId}.`,
-        verifiedItems: [],
-        ...invalid,
-      };
+      return { ok: false, errorMessage: `Invalid quantity '${rawItem?.quantity}' for item ${rawItem?.itemId}.` };
     }
 
     const menuItem = menuItemMap.get(rawItem.itemId);
 
     if (!menuItem) {
-      return {
-        isValid: false,
-        errorMessage: `Item '${rawItem.itemId}' is not available at this dhaba.`,
-        verifiedItems: [],
-        ...invalid,
-      };
+      return { ok: false, errorMessage: `Item '${rawItem.itemId}' is not available at this dhaba.` };
     }
 
     if (!menuItem.isAvailable) {
-      return {
-        isValid: false,
-        errorMessage: `Item '${menuItem.name}' is currently SOLD OUT.`,
-        verifiedItems: [],
-        ...invalid,
-      };
+      return { ok: false, errorMessage: `Item '${menuItem.name}' is currently SOLD OUT.` };
     }
 
     const itemTotal = menuItem.price * rawItem.quantity;
@@ -158,29 +132,50 @@ export const validateAndCalculateOrder = async (
 
   // Rupee amounts with paise precision, so total = subtotal + fee - discount exactly in paise.
   // The subtotal is rounded BEFORE any threshold is compared (0.7 x 14 + 8.2 x 11 is 99.99999999999999 in floats, i.e. Rs 100.00).
-  const round2 = (n: number) => Math.round(n * 100) / 100;
   subtotal = round2(subtotal);
   vendorSubtotal = round2(vendorSubtotal);
-  const commissionTotal = round2(subtotal - vendorSubtotal);
+  return { ok: true, verifiedItems, subtotal, vendorSubtotal, commissionTotal: round2(subtotal - vendorSubtotal) };
+};
+
+/** The coupon rule for a food subtotal (the combined subtotal for a group): the discount, or a message when the code gives nothing. */
+export const applyCouponRule = (couponCode: unknown, subtotal: number): { discount: number; appliedCoupon: string | null; couponProblem?: string } => {
+  const code = normaliseCoupon(couponCode);
+  if (!code) return { discount: 0, appliedCoupon: null };
+  const rule = COUPONS[code];
+  if (!rule) return { discount: 0, appliedCoupon: null, couponProblem: `The coupon ${code.slice(0, 30)} is not valid.` };
+  if (subtotal < rule.minSubtotal) return { discount: 0, appliedCoupon: null, couponProblem: `${code} needs an order of at least ₹${rule.minSubtotal}.` };
+  return { discount: round2(rule.discount(subtotal)), appliedCoupon: code };
+};
+
+// Recalculates total price on server side to prevent client pricing tampering
+export const validateAndCalculateOrder = async (
+  vendorId: string, 
+  items: { itemId: string; quantity: number }[],
+  couponCode?: string
+): Promise<OrderValidationResult> => {
+  const settings = await getSettings();
+  const invalid = {
+    calculatedSubtotal: 0,
+    calculatedDeliveryFee: settings.fees.baseFee,
+    calculatedTaxAndPackaging: 0,
+    calculatedVendorSubtotal: 0,
+    calculatedCommissionTotal: 0,
+    feeBreakdown: null,
+    calculatedDiscount: 0,
+    calculatedTotalAmount: settings.fees.baseFee,
+  };
+  const cart = await priceVendorCart(vendorId, items);
+  if (!cart.ok) {
+    return { isValid: false, errorMessage: cart.errorMessage, verifiedItems: [], ...invalid };
+  }
+  const { verifiedItems, subtotal, vendorSubtotal, commissionTotal } = cart;
 
   // The one all-in fee from the admin settings. Thresholds look at the food subtotal BEFORE the coupon (the platform bears coupons).
   const fee = computeFees(settings.fees, subtotal);
   const deliveryFee = fee.total;
   const taxAndPackaging = 0;
 
-  let discount = 0;
-  let appliedCoupon: string | null = null;
-  let couponProblem: string | undefined;
-  const code = normaliseCoupon(couponCode);
-  if (code) {
-    const rule = COUPONS[code];
-    if (!rule) couponProblem = `The coupon ${code.slice(0, 30)} is not valid.`;
-    else if (subtotal < rule.minSubtotal) couponProblem = `${code} needs an order of at least ₹${rule.minSubtotal}.`;
-    else {
-      discount = round2(rule.discount(subtotal));
-      appliedCoupon = code;
-    }
-  }
+  const { discount, appliedCoupon, couponProblem } = applyCouponRule(couponCode, subtotal);
 
   const totalAmount = round2(Math.max(0, subtotal + deliveryFee + taxAndPackaging - discount));
 
@@ -195,6 +190,89 @@ export const validateAndCalculateOrder = async (
     feeBreakdown: fee.breakdown,
     calculatedDiscount: discount,
     calculatedTotalAmount: totalAmount,
+    appliedCoupon,
+    ...(couponProblem ? { couponProblem } : {}),
+  };
+};
+
+// ----------------------------------------------------------------------------
+// Docs/22: the price of a multi-restaurant order
+// ----------------------------------------------------------------------------
+export type GroupRestaurantInput = { vendorId: string; items: { itemId: string; quantity: number }[] };
+
+export interface GroupChildPricing {
+  vendorId: string;
+  verifiedItems: PricedItem[];
+  subtotal: number;
+  vendorSubtotal: number;
+  commissionTotal: number;
+  /** Child 0: base fee part, every other child: the extra-restaurant fee. */
+  deliveryFee: number;
+  discount: number;
+  totalAmount: number;
+  feeBreakdown: FeeBreakdown;
+}
+
+export interface GroupValidationResult {
+  isValid: boolean;
+  errorMessage?: string;
+  /** The restaurant whose cart is invalid (for the message). */
+  errorVendorId?: string;
+  children: GroupChildPricing[];
+  subtotal: number;
+  feeTotal: number;
+  discount: number;
+  totalAmount: number;
+  /** The fee of the whole group (computeFees on the COMBINED subtotal). */
+  feeBreakdown: FeeBreakdown | null;
+  appliedCoupon: string | null;
+  couponProblem?: string;
+}
+
+/**
+ * Prices 2..N restaurants as ONE checkout: every restaurant's cart is validated like a single order, the fee (free-fee and small-order
+ * rules included) and the coupon (minimum, VITFIRST) look at the COMBINED food subtotal, and the money is split over the children
+ * in paise so that the children add up to the group total exactly (services/pricing.ts splitGroupMoney).
+ * The caller has already checked the number of restaurants and that they are distinct.
+ */
+export const validateAndCalculateGroup = async (restaurants: GroupRestaurantInput[], couponCode?: string): Promise<GroupValidationResult> => {
+  const settings = await getSettings();
+  const empty: GroupValidationResult = { isValid: false, children: [], subtotal: 0, feeTotal: 0, discount: 0, totalAmount: 0, feeBreakdown: null, appliedCoupon: null };
+  const carts: Extract<VendorCartResult, { ok: true }>[] = [];
+  for (const r of restaurants) {
+    const cart = await priceVendorCart(r.vendorId, r.items);
+    if (!cart.ok) return { ...empty, errorMessage: cart.errorMessage, errorVendorId: r.vendorId };
+    carts.push(cart);
+  }
+  const combined = round2(carts.reduce((sum, c) => sum + c.subtotal, 0));
+  const { discount, appliedCoupon, couponProblem } = applyCouponRule(couponCode, combined);
+  const money = splitGroupMoney(settings.fees, carts.map((c) => c.subtotal), discount);
+  const children = carts.map((c, i): GroupChildPricing => {
+    const m = money.children[i];
+    const extra = i > 0;
+    return {
+      vendorId: restaurants[i].vendorId,
+      verifiedItems: c.verifiedItems,
+      subtotal: c.subtotal,
+      vendorSubtotal: c.vendorSubtotal,
+      commissionTotal: c.commissionTotal,
+      deliveryFee: m.fee,
+      discount: m.discount,
+      totalAmount: m.total,
+      // Records only: child 0 = the base-fee part (free-fee / small-order rules applied to the combined subtotal), the others = the flat extra fee.
+      feeBreakdown: extra
+        ? { version: 1, total: m.fee, baseFee: 0, baseWaived: false, smallOrderFee: 0, restaurants: 1, extraRestaurantFee: m.fee, extraRestaurants: 1, lines: [] }
+        : { ...money.breakdown, total: m.fee, restaurants: 1, extraRestaurantFee: 0, extraRestaurants: 0 },
+    };
+  });
+  return {
+    isValid: true,
+    children,
+    subtotal: money.subtotal,
+    feeTotal: money.feeTotal,
+    discount: money.discount,
+    totalAmount: money.total,
+    feeBreakdown: money.breakdown,
     appliedCoupon,
     ...(couponProblem ? { couponProblem } : {}),
   };

@@ -238,13 +238,39 @@ export const sweepMissedPushes = async (now: Date = new Date()): Promise<number>
     }
   }
   // 2) NEW_DELIVERY: food waiting for a rider (ready, unclaimed, last 30 min): riders who are idle now and never heard about it are told.
+  // Docs/22: a child of a combined order is never announced on its own (groupId null here); the group is announced once, below.
   const waiting = await prisma.order.findMany({
-    where: { status: 'READY_FOR_PICKUP', driverId: null, paymentStatus: 'PAID', updatedAt: { gte: new Date(now.getTime() - 30 * 60_000) } },
+    where: { status: 'READY_FOR_PICKUP', driverId: null, paymentStatus: 'PAID', groupId: null, updatedAt: { gte: new Date(now.getTime() - 30 * 60_000) } },
     select: { id: true },
     orderBy: { updatedAt: 'asc' },
     take: 10,
   });
   for (const o of waiting) {
+    looked += 1;
+    await notifyOrderEvent(o.id, 'NEW_DELIVERY');
+  }
+  // 2b) The same for combined orders: claimable as a whole (every child paid, cooking or ready, nobody assigned) with food ready somewhere.
+  // The push is addressed to the primary child, so one PushLog key per rider covers the whole group.
+  const waitingGroups = await prisma.order.findMany({
+    where: {
+      groupIndex: 0,
+      paymentStatus: 'PAID',
+      driverId: null,
+      status: { in: ['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP'] },
+      group: {
+        is: {
+          orders: {
+            none: { OR: [{ paymentStatus: { not: 'PAID' } }, { driverId: { not: null } }, { status: { notIn: ['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP'] } }] },
+            some: { status: 'READY_FOR_PICKUP', updatedAt: { gte: new Date(now.getTime() - 30 * 60_000) } },
+          },
+        },
+      },
+    },
+    select: { id: true },
+    orderBy: { updatedAt: 'asc' },
+    take: 10,
+  });
+  for (const o of waitingGroups) {
     looked += 1;
     await notifyOrderEvent(o.id, 'NEW_DELIVERY');
   }

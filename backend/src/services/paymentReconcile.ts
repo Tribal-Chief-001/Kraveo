@@ -6,7 +6,7 @@ import {
   getPaymentProvider, withProviderTimeout, toProviderError, PaymentProvider, ProviderPayment,
 } from './paymentService';
 import { markOrderPaid, loadOrder, PaidOutcome } from './orderFlow';
-import { OrderWithRelations } from './orderView';
+import { OrderWithRelations, PAYABLE_SELECT, payableAmount } from './orderView';
 import { writeAudit } from './audit';
 import { Breaker, runPool } from './providerPool';
 
@@ -66,12 +66,12 @@ export type VerifyOutcome = PaidOutcome | 'PENDING_CONFIRMATION';
  */
 export const confirmAndMarkPaid = async (input: { razorpayOrderId: string; razorpayPaymentId: string }): Promise<{ outcome: VerifyOutcome; order: OrderWithRelations | null }> => {
   const { razorpayOrderId, razorpayPaymentId } = input;
-  const row = await prisma.payment.findUnique({ where: { razorpayOrderId }, include: { order: { select: { totalAmount: true } } } });
+  const row = await prisma.payment.findUnique({ where: { razorpayOrderId }, include: { order: { select: PAYABLE_SELECT } } });
   // Unknown payment, or the same already-confirmed payment arriving again (retry of a lost response): nothing left to ask Razorpay.
   if (!row || ((row.status === 'PAID' || row.status === 'REFUNDED') && row.razorpayPaymentId === razorpayPaymentId)) {
     return markOrderPaid({ razorpayOrderId, razorpayPaymentId, source: 'VERIFY' });
   }
-  const expectedPaise = Math.round(row.order.totalAmount * 100);
+  const expectedPaise = Math.round(payableAmount(row.order) * 100); // the group total for the primary child of a combined order
   let fetched: ProviderPayment;
   try {
     fetched = await withProviderTimeout(need(getPaymentProvider(), 'fetchPayment')(razorpayPaymentId, { razorpayOrderId, amountPaise: expectedPaise }));
@@ -115,7 +115,7 @@ export const reconcilePendingPayments = async (now: Date, breaker: Breaker): Pro
       createdAt: { lt: new Date(now.getTime() - RECONCILE_MIN_AGE_MS), gt: new Date(now.getTime() - RECONCILE_MAX_AGE_MS) },
       order: { paymentStatus: { in: ['PENDING', 'FAILED'] } },
     },
-    select: { id: true, razorpayOrderId: true, orderId: true, order: { select: { totalAmount: true } } },
+    select: { id: true, razorpayOrderId: true, orderId: true, order: { select: PAYABLE_SELECT } },
     orderBy: { createdAt: 'desc' },
     take: 500,
   });
@@ -133,7 +133,7 @@ export const reconcilePendingPayments = async (now: Date, breaker: Breaker): Pro
     }
     const found = items.find((i) => i.status === 'captured') ?? items.find((i) => i.status === 'authorized');
     if (!found) return;
-    const expectedPaise = Math.round(row.order.totalAmount * 100);
+    const expectedPaise = Math.round(payableAmount(row.order) * 100);
     const check = await confirmPayment(found, { razorpayOrderId: row.razorpayOrderId, expectedPaise });
     if (check.kind === 'UNAVAILABLE') return { transient: check.transient };
     if (check.kind !== 'CAPTURED') return;

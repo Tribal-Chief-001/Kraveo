@@ -8,11 +8,13 @@ import {
   RIDER_PICKUP_ALERT_MIN, REFUND_PENDING_ALERT_MIN,
 } from '../config/orderFlow';
 import { normalizeDropPoint } from '../config/campus';
-import { orderView, ORDER_VIEW_INCLUDE, OrderWithRelations } from '../services/orderView';
+import { orderView, ORDER_VIEW_INCLUDE, OrderWithRelations, payableAmount } from '../services/orderView';
 import {
   OrderFlowError, placeOrder, cancelOrder, advanceStatus, claimOrder, releaseOrder, reassignOrder, verifyGateOtp, resetOtpLock,
   markOrderPaid, markPaymentFailed, createPaymentForOrder, loadOrder,
 } from '../services/orderFlow';
+import { quoteOrder, placeGroup, groupView, loadGroupBundle, MAX_GROUP_RESTAURANTS_HARD, GroupBundle } from '../services/orderGroups';
+import { GroupRestaurantInput } from '../utils/validation';
 import { executeRefund, applyRefundEvent } from '../services/refundService';
 import { confirmAndMarkPaid, findOrphanPayments } from '../services/paymentReconcile';
 import { ORPHAN_MAX_RANGE_MS, ORPHAN_MAX_ROWS } from '../config/orderFlow';
@@ -97,6 +99,125 @@ orderRouter.post('/orders', requireAuth, requireRole('STUDENT'), async (req: Aut
 });
 
 // ----------------------------------------------------------------------------
+// Docs/22: quote and multi-restaurant orders
+// ----------------------------------------------------------------------------
+/** `restaurants: [{ vendorId, items:[{itemId,quantity}] }]` -> typed list, or the 400 text. Prices are never read from the client. */
+const parseRestaurants = (raw: unknown): { ok: true; restaurants: GroupRestaurantInput[] } | { ok: false; message: string; field: string; code?: string } => {
+  if (!Array.isArray(raw) || raw.length === 0) return { ok: false, message: 'restaurants must be a non-empty array.', field: 'restaurants' };
+  if (raw.length > MAX_GROUP_RESTAURANTS_HARD) return { ok: false, message: 'Too many restaurants in one order.', field: 'restaurants', code: 'TOO_MANY_RESTAURANTS' };
+  const restaurants: GroupRestaurantInput[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const r = raw[i];
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return { ok: false, message: `restaurants[${i}] must be an object.`, field: 'restaurants' };
+    if (typeof r.vendorId !== 'string' || !ID_RE.test(r.vendorId)) return { ok: false, message: `restaurants[${i}].vendorId is required.`, field: 'restaurants' };
+    if (!Array.isArray(r.items) || r.items.length === 0) return { ok: false, message: `restaurants[${i}].items must be a non-empty array.`, field: 'items' };
+    restaurants.push({ vendorId: r.vendorId, items: r.items });
+  }
+  return { ok: true, restaurants };
+};
+
+const parseCoupon = (raw: unknown): { ok: true; couponCode: string | undefined } | { ok: false } =>
+  raw !== undefined && raw !== null && (typeof raw !== 'string' || raw.length > 30) ? { ok: false } : { ok: true, couponCode: (raw as string | null | undefined) ?? undefined };
+
+// Prices a cart without writing anything: the same code that places the order, so what is quoted is what is charged.
+orderRouter.post('/orders/quote', requireAuth, requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {};
+    const parsed = parseRestaurants(b.restaurants);
+    if (!parsed.ok) return bad(res, parsed.message, parsed.field, parsed.code);
+    const coupon = parseCoupon(b.couponCode);
+    if (!coupon.ok) return bad(res, 'Invalid coupon code.', 'couponCode');
+    const data = await quoteOrder(req.user!.id, { restaurants: parsed.restaurants, couponCode: coupon.couponCode });
+    return res.json({ success: true, data });
+  } catch (err) {
+    return fail(res, err, 'quote order');
+  }
+});
+
+orderRouter.post('/order-groups', requireAuth, requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {};
+    const parsed = parseRestaurants(b.restaurants);
+    if (!parsed.ok) return bad(res, parsed.message, parsed.field, parsed.code);
+
+    let dropoffHostel = typeof b.dropoffHostel === 'string' ? b.dropoffHostel.trim() : '';
+    if (!dropoffHostel && b.dropoffHostel === undefined) {
+      const me = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { hostelBlock: true } });
+      dropoffHostel = me?.hostelBlock ?? '';
+    }
+    const canonicalDropoff = normalizeDropPoint(dropoffHostel);
+    if (!canonicalDropoff) return bad(res, 'Choose one of the campus drop points.', 'dropoffHostel');
+
+    const dropoffNotes = optionalReason(b.dropoffNotes, 300);
+    if (dropoffNotes === false) return bad(res, 'Delivery notes can be at most 300 characters.', 'dropoffNotes');
+    const coupon = parseCoupon(b.couponCode);
+    if (!coupon.ok) return bad(res, 'Invalid coupon code.', 'couponCode');
+    // Required for a combined order (the group is stored under it and the children derive their own ids from it).
+    if (typeof b.clientRequestId !== 'string' || !CLIENT_REQUEST_ID_RE.test(b.clientRequestId)) return bad(res, 'clientRequestId must be 8-64 letters, digits, - or _ (use a UUID).', 'clientRequestId');
+
+    const placed = await placeGroup(req.user!.id, {
+      restaurants: parsed.restaurants,
+      dropoffHostel: canonicalDropoff,
+      dropoffNotes,
+      couponCode: coupon.couponCode,
+      clientRequestId: b.clientRequestId,
+    });
+    return res.status(placed.replay ? 200 : 201).json({
+      success: true,
+      message: placed.replay ? 'This order was already placed.' : 'Order placed. Complete the payment to send it to the restaurants.',
+      idempotentReplay: placed.replay,
+      data: groupView(placed, req.user!.role, req.user!.id),
+    });
+  } catch (err) {
+    return fail(res, err, 'create order group');
+  }
+});
+
+/** The owner (STUDENT) and the admin may read a group; everyone else (restaurants, riders) and a missing group get the same 404. */
+const canSeeGroup = (req: AuthenticatedRequest, b: GroupBundle) => req.user!.role === 'ADMIN' || (req.user!.role === 'STUDENT' && b.group.customerId === req.user!.id);
+
+orderRouter.get('/order-groups', requireAuth, requireRole('STUDENT'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const scope = req.query.scope;
+    if (scope !== undefined && scope !== 'active' && scope !== 'history') return bad(res, "scope must be 'active' or 'history'.", 'scope');
+    const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : undefined;
+    if (cursor && !ID_RE.test(cursor)) return bad(res, 'Invalid cursor.', 'cursor');
+    const requested = Number.parseInt(String(req.query.limit ?? ''), 10);
+    const limit = Math.min(Number.isFinite(requested) && requested > 0 ? requested : 20, 50);
+    const recent = new Date(Date.now() - RECENTLY_FINISHED_MIN * 60_000);
+    const where: Prisma.OrderGroupWhereInput = { customerId: req.user!.id };
+    if (scope === 'active') {
+      where.orders = { some: { OR: [{ status: { notIn: ['DELIVERED', 'CANCELLED'] } }, { status: 'DELIVERED', deliveredAt: { gte: recent } }, { status: 'CANCELLED', cancelledAt: { gte: recent } }] } };
+    } else if (scope === 'history') {
+      where.orders = { every: { status: { in: ['DELIVERED', 'CANCELLED'] } } };
+    }
+    const page = await prisma.orderGroup.findMany({
+      where,
+      include: { orders: { include: ORDER_VIEW_INCLUDE, orderBy: { groupIndex: 'asc' } } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    const hasMore = page.length > limit;
+    const rows = hasMore ? page.slice(0, limit) : page;
+    const data = rows.map((g) => { const { orders, ...group } = g; return groupView({ group, orders }, req.user!.role, req.user!.id); });
+    return res.json({ success: true, count: data.length, nextCursor: hasMore ? rows[rows.length - 1].id : null, data });
+  } catch (err) {
+    return fail(res, err, 'list order groups');
+  }
+});
+
+orderRouter.get('/order-groups/:id', requireAuth, validId, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const bundle = await loadGroupBundle(req.params.id);
+    if (!bundle || !canSeeGroup(req, bundle)) return res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Order not found' });
+    return res.json({ success: true, data: groupView(bundle, req.user!.role, req.user!.id) });
+  } catch (err) {
+    return fail(res, err, 'get order group');
+  }
+});
+
+// ----------------------------------------------------------------------------
 // Lists and detail (all roles)
 // ----------------------------------------------------------------------------
 const vendorVisibleWhere: Prisma.OrderWhereInput = { OR: [{ paidAt: { not: null } }, { paymentStatus: 'PAID', status: { not: 'CANCELLED' } }] };
@@ -160,8 +281,17 @@ orderRouter.get('/orders/available', requireAuth, requireRole('DRIVER'), require
   try {
     const rider = await prisma.driverPartner.findUnique({ where: { userId: req.user!.id }, select: { dutyStatus: true, approvalStatus: true } });
     if (!rider || rider.approvalStatus !== 'APPROVED' || rider.dutyStatus === 'OFFLINE') return res.json({ success: true, count: 0, data: [] });
+    // Docs/22: combined orders are only offered to riders whose app asks for them (?groups=1): an old rider app would show a combined
+    // order as one restaurant. A group is ONE entry (its primary child) and only when EVERY child is claimable (isPoolEligible re-checks).
+    const wantsGroups = req.query.groups === '1' || req.query.groups === 'true';
+    const POOL = ['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP'] as const;
     const orders = await prisma.order.findMany({
-      where: { paymentStatus: 'PAID', driverId: null, status: { in: ['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP'] } },
+      where: {
+        paymentStatus: 'PAID', driverId: null, status: { in: [...POOL] },
+        OR: wantsGroups
+          ? [{ groupId: null }, { groupIndex: 0, group: { is: { orders: { none: { OR: [{ paymentStatus: { not: 'PAID' } }, { driverId: { not: null } }, { status: { notIn: [...POOL] } }] } } } } }]
+          : [{ groupId: null }],
+      },
       include: ORDER_VIEW_INCLUDE,
       // Enum order is ACCEPTED < PREPARING < READY_FOR_PICKUP, so desc puts ready food first.
       orderBy: [{ status: 'desc' }, { updatedAt: 'desc' }],
@@ -324,7 +454,9 @@ orderRouter.post('/admin/orders/:id/cancel', requireAuth, requireRole('ADMIN'), 
     const reason = requiredReason(req.body?.reason);
     if (!reason) return bad(res, 'A reason (3-200 characters) is required; the customer sees it.', 'reason');
     const r = await cancelOrder(req.params.id, actorOf(req), 'ADMIN', reason);
-    return res.json({ success: true, message: r!.idempotent ? 'This order was already cancelled.' : 'Order cancelled.', data: viewFor(req, r!.order) });
+    // Docs/22: cancelling any order of a combined order cancels all of it; say how many orders went.
+    const grouped = r!.order.groupId ? { groupId: r!.order.groupId, cancelledOrders: r!.cancelledOrders } : {};
+    return res.json({ success: true, message: r!.idempotent ? 'This order was already cancelled.' : grouped.groupId ? `Combined order cancelled (${r!.cancelledOrders} orders).` : 'Order cancelled.', ...grouped, data: viewFor(req, r!.order) });
   } catch (err) {
     return fail(res, err, 'admin cancel');
   }
@@ -459,27 +591,32 @@ orderRouter.get('/admin/orders/needs-attention', requireAuth, requireRole('ADMIN
       const add = (p: Problem, detail: string, since: Date | null | undefined) => { if (!found.has(p)) found.set(p, { detail, since: iso(since) }); };
       const t = (d: Date | null | undefined) => (d ? d.getTime() : 0);
       const isOpen = o.status !== 'DELIVERED' && o.status !== 'CANCELLED';
+      // Docs/22: the money of a combined order lives on its PRIMARY child (the payment, the refund). Its siblings carry no refund status of their own,
+      // so the money problems are reported once, through the primary, with the restaurants named. The same goes for the problems of the rider and the
+      // gate code, which are shared by every child (one rider, one OTP); per-restaurant problems (not accepted, no rider yet) stay per child.
+      const isSibling = !!o.groupId && o.groupIndex !== 0;
+      const groupNote = o.group && o.groupIndex === 0 ? ` Combined order of ${o.group.orders.length} restaurants (${o.group.orders.map((s) => s.vendor.name).join(', ')}): this one payment covers all of them.` : '';
       for (const p of o.payments) {
         if (p.capturedAmountPaise === null || (p.status !== 'PENDING' && p.status !== 'FAILED')) continue;
-        const expected = Math.round(o.totalAmount * 100);
-        if (p.capturedAmountPaise !== expected) add('PAYMENT_MISMATCH', `Captured ${rupees(p.capturedAmountPaise)} (payment ${p.razorpayPaymentId ?? '?'}) but the order total is ${rupees(expected)}.`, p.createdAt);
-        else add('DUPLICATE_PAYMENT', `Extra payment ${p.razorpayPaymentId ?? '?'} of ${rupees(p.capturedAmountPaise)} on an order that was already paid.`, p.createdAt);
+        const expected = Math.round(payableAmount(o) * 100); // the group total for the primary child of a combined order
+        if (p.capturedAmountPaise !== expected) add('PAYMENT_MISMATCH', `Captured ${rupees(p.capturedAmountPaise)} (payment ${p.razorpayPaymentId ?? '?'}) but the order total is ${rupees(expected)}.${groupNote}`, p.createdAt);
+        else add('DUPLICATE_PAYMENT', `Extra payment ${p.razorpayPaymentId ?? '?'} of ${rupees(p.capturedAmountPaise)} on an order that was already paid.${groupNote}`, p.createdAt);
       }
       if (o.refundStatus === 'FAILED') {
         const waiting = o.refundLeaseUntil && o.refundLeaseUntil.getTime() > now ? ` Next automatic try ${iso(o.refundLeaseUntil)}.` : o.refundAttempts >= MAX_REFUND_ATTEMPTS ? ' Automatic retries stopped.' : '';
-        add('REFUND_FAILED', `Refund failed (${o.refundAttempts} permanent failure(s) so far): ${o.refundError ?? 'unknown error'}.${waiting}`, o.updatedAt);
+        add('REFUND_FAILED', `Refund failed (${o.refundAttempts} permanent failure(s) so far): ${o.refundError ?? 'unknown error'}.${waiting}${groupNote}`, o.updatedAt);
       }
-      if (o.status === 'CANCELLED' && o.paymentStatus === 'PAID' && (!o.paidAt || !o.refundStatus)) {
+      if (!isSibling && o.status === 'CANCELLED' && o.paymentStatus === 'PAID' && (!o.paidAt || !o.refundStatus)) {
         add('PAID_AFTER_CANCEL', o.refundStatus ? 'Payment captured after the order was cancelled; refund in progress.' : 'Cancelled while paid and never refunded (order from before automatic refunds). Refund it in Razorpay.', o.cancelledAt ?? o.updatedAt);
       }
       if (o.refundStatus === 'PENDING' && t(o.updatedAt) < ago(REFUND_PENDING_ALERT_MIN).getTime()) add('REFUND_PENDING', 'Refund started but not finished.', o.updatedAt);
-      if (o.otpLocked && o.status === 'ARRIVED_AT_GATE') add('OTP_LOCKED', `${o.otpAttempts} wrong gate codes.`, o.updatedAt);
+      if (!isSibling && o.otpLocked && o.status === 'ARRIVED_AT_GATE') add('OTP_LOCKED', `${o.otpAttempts} wrong gate codes.`, o.updatedAt);
       if (o.status === 'PLACED' && o.paymentStatus === 'PAID' && (!o.paidAt || t(o.paidAt) < acceptLate.getTime())) {
         add('STUCK_UNACCEPTED', o.paidAt ? `Paid at ${iso(o.paidAt)}, not accepted by the restaurant.` : 'Paid (before payment times were recorded) and never accepted.', o.paidAt ?? o.createdAt);
       }
-      if (isOpen && o.driverId && riders.get(o.driverId) && riders.get(o.driverId) !== 'APPROVED') add('RIDER_NOT_APPROVED', `Assigned rider ${o.driver?.name ?? o.driverId} is ${riders.get(o.driverId)}.`, o.updatedAt);
+      if (!isSibling && isOpen && o.driverId && riders.get(o.driverId) && riders.get(o.driverId) !== 'APPROVED') add('RIDER_NOT_APPROVED', `Assigned rider ${o.driver?.name ?? o.driverId} is ${riders.get(o.driverId)}.`, o.updatedAt);
       if (isOpen && o.vendor.approvalStatus !== 'APPROVED') add('VENDOR_NOT_APPROVED', `Restaurant ${o.vendor.name} is ${o.vendor.approvalStatus}.`, o.updatedAt);
-      if ((o.status === 'PICKED_UP' || o.status === 'ARRIVED_AT_GATE') && t(o.pickedUpAt ?? o.updatedAt) < ago(DELIVERY_STUCK_ALERT_MIN).getTime()) add('DELIVERY_OVERDUE', `Picked up more than ${DELIVERY_STUCK_ALERT_MIN} minutes ago.`, o.pickedUpAt ?? o.updatedAt);
+      if (!isSibling && (o.status === 'PICKED_UP' || o.status === 'ARRIVED_AT_GATE') && t(o.pickedUpAt ?? o.updatedAt) < ago(DELIVERY_STUCK_ALERT_MIN).getTime()) add('DELIVERY_OVERDUE', `Picked up more than ${DELIVERY_STUCK_ALERT_MIN} minutes ago.`, o.pickedUpAt ?? o.updatedAt);
       if (o.status === 'READY_FOR_PICKUP' && o.paymentStatus === 'PAID') {
         if (o.driverId && t(o.updatedAt) < ago(RIDER_PICKUP_ALERT_MIN).getTime()) add('RIDER_NOT_PICKED_UP', `Ready, rider ${o.driver?.name ?? o.driverId} has not picked it up.`, o.updatedAt);
         if (!o.driverId && t(o.updatedAt) < ago(READY_NO_RIDER_ALERT_MIN).getTime()) add('NO_RIDER', 'Ready and no rider has taken it.', o.updatedAt);
@@ -489,7 +626,7 @@ orderRouter.get('/admin/orders/needs-attention', requireAuth, requireRole('ADMIN
 
       const problems = PROBLEM_ORDER.filter((p) => found.has(p));
       const top = problems[0];
-      return top ? { problem: top, problems, detail: found.get(top)!.detail, since: found.get(top)!.since, hint: PROBLEM_HINTS[top], order: viewFor(req, o) } : null;
+      return top ? { problem: top, problems, detail: found.get(top)!.detail, since: found.get(top)!.since, hint: PROBLEM_HINTS[top], ...(o.groupId ? { groupId: o.groupId } : {}), order: viewFor(req, o) } : null;
     }).filter((row): row is NonNullable<typeof row> => row !== null);
 
     return res.json({ success: true, count: data.length, maxRefundAttempts: MAX_REFUND_ATTEMPTS, data });

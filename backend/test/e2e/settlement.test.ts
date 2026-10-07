@@ -869,7 +869,7 @@ describe('Settlements (phase 2)', () => {
       // every earlier migration is untouched by this change (new folder only)
       const dirs = fs.readdirSync(path.join(__dirname, '../../prisma/migrations')).filter((d) => !d.endsWith('.toml'));
       expect(dirs).toContain('20261010_settlements_payouts');
-      expect(dirs.sort().at(-1)).toBe('20261010_settlements_payouts');
+      expect(dirs.sort().at(-1)).toBe('20261011_order_groups'); // Docs/22 added the next (additive) migration after this one
     });
   });
 

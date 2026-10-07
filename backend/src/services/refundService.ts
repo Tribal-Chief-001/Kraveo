@@ -5,6 +5,7 @@ import { ORDER_VIEW_INCLUDE } from './orderView';
 import { publishOrderChange } from '../realtime';
 import { writeAudit } from './audit';
 import { queuePush } from './push/pushService';
+import { lockGroupRows } from './groupLock';
 
 /**
  * Full refund of the captured payment of a cancelled order (contract 1.3).
@@ -74,19 +75,34 @@ const recordFailure = async (orderId: string, message: string, opts: { transient
   }
 };
 
+/**
+ * Books a completed refund. Docs/22: the refund of a combined order is the primary child's (one payment, one refund); in the SAME
+ * transaction every sibling becomes REFUNDED too (locks: group, then the children in id order, like every group transaction), and the
+ * customer is told once (the push is addressed to the primary).
+ */
 export const recordSuccess = async (orderId: string, paymentRowId: string, refundId: string, amountPaise: number) => {
   const done = await prisma.$transaction(async (tx) => {
+    const own = await tx.order.findUnique({ where: { id: orderId }, select: { groupId: true } });
+    const groupId = own?.groupId ?? null;
+    if (groupId) await lockGroupRows(tx, groupId);
     const res = await tx.order.updateMany({
       where: { id: orderId, refundStatus: { in: CLAIMABLE } },
       data: { paymentStatus: 'REFUNDED', refundStatus: 'DONE', refundError: null, refundLeaseUntil: null },
     });
-    if (res.count === 0) return false;
+    if (res.count === 0) return null;
     await tx.payment.update({ where: { id: paymentRowId }, data: { status: 'REFUNDED', razorpayRefundId: refundId, refundedAt: new Date() } });
-    return true;
+    let siblingIds: string[] = [];
+    if (groupId) {
+      const siblings = await tx.order.findMany({ where: { groupId, id: { not: orderId }, paymentStatus: 'PAID' }, select: { id: true } });
+      siblingIds = siblings.map((x) => x.id);
+      if (siblingIds.length > 0) await tx.order.updateMany({ where: { id: { in: siblingIds } }, data: { paymentStatus: 'REFUNDED' } });
+    }
+    return { siblingIds };
   });
   if (done) {
-    await writeAudit('REFUND_DONE', 'ORDER', orderId, `Refunded ₹${(amountPaise / 100).toFixed(2)} (refund ${refundId}).`);
+    await writeAudit('REFUND_DONE', 'ORDER', orderId, `Refunded ₹${(amountPaise / 100).toFixed(2)} (refund ${refundId}).${done.siblingIds.length ? ` Combined order: ${done.siblingIds.length + 1} orders refunded with this one payment.` : ''}`);
     await publish(orderId);
+    for (const id of done.siblingIds) await publish(id);
     queuePush(orderId, 'REFUND_PROCESSED'); // after the commit; idempotent per order, never throws
   }
 };
@@ -276,18 +292,27 @@ export const applyRefundEvent = async (
   }
   if (isOriginal) {
     const flipped = await prisma.$transaction(async (tx) => {
+      if (order.groupId) await lockGroupRows(tx, order.groupId); // Docs/22: group, then children, like every group transaction
       const res = await tx.order.updateMany({
         // PENDING = refund asked, DONE = we booked it as done but the money bounced.
         where: { id: order.id, refundStatus: { in: ['PENDING', 'DONE'] } },
         data: { refundStatus: 'FAILED', refundError: message.slice(0, 300), refundLeaseUntil: null, refundAttempts: MAX_REFUND_ATTEMPTS, paymentStatus: 'PAID' },
       });
-      if (res.count === 0) return false;
+      if (res.count === 0) return null;
       await tx.payment.updateMany({ where: { id: payment.id, status: 'REFUNDED', ...(e.refundId ? { razorpayRefundId: e.refundId } : {}) }, data: { status: 'PAID', razorpayRefundId: null, refundedAt: null } });
-      return true;
+      // The siblings of a combined order were booked REFUNDED with the primary: the money bounced for all of them.
+      let siblingIds: string[] = [];
+      if (order.groupId) {
+        const siblings = await tx.order.findMany({ where: { groupId: order.groupId, id: { not: order.id }, paymentStatus: 'REFUNDED' }, select: { id: true } });
+        siblingIds = siblings.map((x) => x.id);
+        if (siblingIds.length > 0) await tx.order.updateMany({ where: { id: { in: siblingIds } }, data: { paymentStatus: 'PAID' } });
+      }
+      return { siblingIds };
     });
     if (!flipped) return 'IGNORED';
     await writeAudit('REFUND_PROVIDER_FAILED', 'ORDER', order.id, `${event}: ${message}`);
     await publish(order.id);
+    for (const id of flipped.siblingIds) await publish(id);
     return 'FAILED_RECORDED';
   }
   // An extra payment whose refund bounced: it needs a refund again (the retry loop picks it up after an hour).

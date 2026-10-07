@@ -120,7 +120,7 @@ describe('Pricing and catalog (phase 1)', () => {
       expect(all.body.data.map((g: any) => g.group)).toEqual(['fees', 'commission', 'rounding', 'settlement']);
       expect(all.body.data.every((g: any) => g.isDefault === true)).toBe(true);
       const fees = (await adminGet('/api/admin/settings/fees')).body.data;
-      expect(fees.value).toEqual({ baseFee: 25, lines: [], extraRestaurantFee: 15, freeFeeAbove: 0, smallOrderBelow: 0, smallOrderFee: 0, gstOnFeesPercent: 18, gstOnFoodPercent: 5 });
+      expect(fees.value).toEqual({ baseFee: 25, lines: [], extraRestaurantFee: 15, freeFeeAbove: 0, smallOrderBelow: 0, smallOrderFee: 0, gstOnFeesPercent: 18, gstOnFoodPercent: 5, maxRestaurantsPerOrder: 3 }); // Docs/22 added maxRestaurantsPerOrder (default 3)
       expect((await adminGet('/api/admin/settings/commission')).body.data.value).toEqual({ type: 'PERCENT', value: 0 });
       expect((await adminGet('/api/admin/settings/rounding')).body.data.value).toEqual({ step: 1 });
       expect((await adminGet('/api/admin/settings/settlement')).body.data.value).toEqual({ time: '22:00', mode: 'MANUAL_PAYOUT', autoCreate: true, holdDays: 0 });

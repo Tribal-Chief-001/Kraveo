@@ -16,6 +16,9 @@ Contract: `Docs/16_order_flow_contract.md`. Sample payloads: `Docs/fixtures/orde
 | Razorpay seam (`setPaymentProvider`, simulator in tests) | `src/services/paymentService.ts` |
 | Socket.io (auth, rooms, per-viewer events) | `src/realtime.ts` |
 | HTTP endpoints | `src/routes/orders.ts` |
+| Multi-restaurant orders (Docs/22): quote, place a group, GroupView | `src/services/orderGroups.ts` (the group state changes live in `orderFlow.ts`) |
+| Group locking rule (rider -> OrderGroup row -> children by ascending id) | `src/services/groupLock.ts`, `lockOrderInTx` / `withOrderLock` in `orderFlow.ts` |
+| Group money split (largest remainder, paise exact) | `splitGroupMoney` in `src/services/pricing.ts`, `validateAndCalculateGroup` in `src/utils/validation.ts` |
 
 ## Constants and env vars
 | Name | Default | Meaning |

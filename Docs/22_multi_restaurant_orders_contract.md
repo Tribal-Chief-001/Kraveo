@@ -106,3 +106,95 @@ Orders: "Group of N" badge, sibling list with statuses and links, group total, c
 - Money in paise integers, the sum of child parts equals the group total exactly (property test with random carts, discounts, 2..5 restaurants).
 - Tests with real Postgres for: placing (validation, idempotency, mismatch, limits, abandoned replace, coupon rules), quote == charge, payment (paid cascade, mismatch, duplicate, late payment after cancel, webhook + verify race, reconcile), refund (once, retry after provider failure, siblings marked), every cancel path + cascade + races (reject vs customer cancel vs expiry vs payment arrival at the same time), vendor GROUP_WAITING, pool visibility (old vs new riders), atomic claim race between two riders, release, per-stop pickup, arrive-needs-all-picked, OTP wrong/lock/retry/reset, admin reassign/cancel, push dedupe, finance/settlement per child with a group fixture, rider delivery counts, vendor visibility (no other restaurant data, no customer price), deadlock test (parallel mixed operations on one group never hang).
 - Deploy order: backend (migration additive) first; old apps keep working (they never create groups; old riders never see groups; old customer apps may display children as separate orders, which is acceptable); then dashboard; then the new APKs.
+
+## 10. Implementation notes (backend, built 7 Oct 2026)
+
+Exact shapes copied from the real responses of the backend tests (`backend/test/e2e/order_groups_*.test.ts`). The app agents rely on this section; where it differs from sections 1-9 this section is the truth.
+
+### 10.1 Errors (all `{ success:false, code, message, field? }`)
+
+| Where | HTTP | `code` | When |
+|---|---|---|---|
+| quote, place | 400 | `USE_SINGLE_ORDER` | placing a group with one restaurant (a quote with one restaurant is fine) |
+| quote, place | 400 | `MULTI_DISABLED` | 2+ restaurants while `fees.maxRestaurantsPerOrder` = 1 |
+| quote, place | 400 | `TOO_MANY_RESTAURANTS` | more than `maxRestaurantsPerOrder` (also `maxRestaurants` in the body), or more than 10 entries |
+| quote, place | 400 | `DUPLICATE_RESTAURANT` | the same `vendorId` twice |
+| quote, place | 400 | `VENDOR_UNAVAILABLE` / `VENDOR_CLOSED` / `INVALID_ITEMS` / `COUPON_NOT_APPLICABLE` / `BAD_REQUEST` | same meaning as `POST /orders` (`vendorId` is added to the body for the first two and for `INVALID_ITEMS`) |
+| place | 409 | `CLIENT_REQUEST_MISMATCH` | same `clientRequestId`, different content |
+| place | 429 | `TOO_MANY_UNPAID_ORDERS` | 3 open unpaid checkouts (a group counts once) |
+| `POST /payments/create-order` | 409 | `PAY_VIA_GROUP` | a sibling id was used; body has `payOrderId` (the primary) |
+| `PATCH /orders/:id/status` (restaurant or admin, `PREPARING`) | 409 | `GROUP_WAITING` | a sibling has not accepted yet. Message: `Waiting for the other restaurant(s) in this combined order to accept.` The rule applies to the admin too (the admin accepts for the restaurant first, or cancels) |
+| `PATCH /orders/:id/status` (rider, `ARRIVED_AT_GATE`) | 409 | `GROUP_NOT_PICKED_UP` | not every child is `PICKED_UP` |
+| claim | 409 | `ORDER_NOT_AVAILABLE` | a child is not claimable (not paid / not accepted / cancelled), `ALREADY_TAKEN`, `RIDER_BUSY`, `RIDER_OFFLINE` as for single orders |
+| release | 409 | `CANNOT_RELEASE` | any child already `PICKED_UP` |
+| reassign | 409 | `CANNOT_UNASSIGN`, `RIDER_BUSY`, `RIDER_OFFLINE`, `PAYMENT_NOT_CONFIRMED`, `ORDER_CLOSED` | as for single orders, judged for the whole group |
+| customer cancel | 409 | `CANNOT_CANCEL` | any child is no longer `PLACED` (text unchanged) |
+
+All other error codes of Docs/16 keep their meaning. `423 OTP_LOCKED`, `400 OTP_INVALID` (`attemptsLeft` counts the group), `409 NOT_AT_GATE`, `409 ALREADY_DELIVERED` are the single-order answers applied to the group.
+
+### 10.2 `POST /api/orders/quote` (STUDENT)
+
+Request `{ restaurants:[{ vendorId, items:[{itemId, quantity}] }], couponCode? }` (1..max restaurants). Response (real values: 2 restaurants, coupon KRAVEO50):
+
+```json
+{ "success": true, "data": {
+  "restaurantCount": 2, "subtotal": 270,
+  "fees": { "total": 40, "base": 25, "baseWaived": false, "extraRestaurants": 1, "extraRestaurantFee": 15, "extraTotal": 15 },
+  "discount": 50, "couponCode": "KRAVEO50", "total": 260,
+  "perRestaurant": [ { "vendorId": "gx-ven-1", "vendorName": "Kitchen 1", "subtotal": 180, "fee": 25 },
+                     { "vendorId": "gx-ven-2", "vendorName": "Kitchen 2", "subtotal": 90, "fee": 15 } ],
+  "maxRestaurants": 3 } }
+```
+
+`fees.base` = the "Delivery & service fee" line (base fee, 0 when waived by the free-fee rule on the COMBINED subtotal, plus the small-order fee when it applies); `extraRestaurants` = restaurants - 1; `extraRestaurantFee` = the amount EACH extra restaurant adds (the setting, also for one restaurant, so the app can say "add another restaurant for Rs 15"); `extraTotal` = their product; `fees.total` = `base` + `extraTotal`. `total` = `subtotal` + `fees.total` - `discount`. `perRestaurant[i].fee` is the fee that lands on that child (child 0 = `base`, the others = `extraRestaurantFee`). With one restaurant the numbers are exactly those of `POST /orders`. Errors as in 10.1; a coupon that gives nothing for this cart or this customer is `400 COUPON_NOT_APPLICABLE` with the reason. Rate limit `ORDER_QUOTE`: 60 per 10 minutes per user.
+
+### 10.3 `POST /api/order-groups` (STUDENT) and `GET /api/order-groups/:id`
+
+Request `{ restaurants:[{vendorId, items}], dropoffHostel, dropoffNotes?, couponCode?, clientRequestId }`. `clientRequestId` is REQUIRED (8-64 letters, digits, `-`, `_`). The first restaurant in the list is child 0 (the primary, carries the base fee, the coupon code and the payment). 201 (200 with `idempotentReplay: true` on a replay):
+
+```json
+{ "success": true, "message": "Order placed. Complete the payment to send it to the restaurants.", "idempotentReplay": false,
+  "data": { "id": "<groupId>", "status": "AWAITING_RESTAURANTS", "paymentStatus": "PENDING", "total": 260, "subtotal": 270, "feeTotal": 40,
+            "discount": 50, "couponCode": "KRAVEO50", "restaurantCount": 2, "dropoffHostel": "BH2", "dropoffNotes": "Room 214",
+            "createdAt": "2026-10-07T03:43:08.677Z", "payOrderId": "<primary order id>", "orders": [ OrderView, OrderView ] } }
+```
+
+`orders` are viewer-specific `OrderView`s ordered by `groupIndex` (money per child: `totalAmount` = the child's share, `deliveryFee` = 25 for child 0 and 15 for the others, `discount` = the child's share of the coupon; they add up to `total` to the paisa). `status` is derived: `CANCELLED` / `DELIVERED` when every child is, else `AWAITING_RESTAURANTS` while any child is `PLACED` (an UNPAID group is also `AWAITING_RESTAURANTS`: read `paymentStatus`), else the status of the least advanced child that is not cancelled. `paymentStatus` = the primary's (`REFUNDED` when the refund went through). `GET /api/order-groups/:id`: owner or admin, everyone else (and unknown ids) 404, malformed id 400. `GET /api/order-groups?scope=active|history&limit&cursor` (STUDENT only): `{ success, count, nextCursor, data: GroupView[] }`, same `active` / `history` meaning as `GET /orders`, newest first.
+
+Payment: `POST /payments/create-order { orderId: payOrderId }` charges the GROUP total (`amountInPaise` = `total` x 100). The Razorpay order and the `Payment` row belong to the primary child. verify-signature / webhook / reconcile are unchanged and flip the primary and every sibling to `PAID` together. Cancelling (customer, `POST /orders/:id/cancel` on ANY child id) or expiry applies to the whole group.
+
+### 10.4 `OrderView.group` (REST and sockets) per role
+
+A single-restaurant order has NO `group` key at all (not `null`). A child of a group has it:
+
+* Customer (owner), assigned rider, rider pool entry, admin: `{ "id": "<groupId>", "index": 1, "size": 2, "primary": false, "stops": [ { "orderId": "...", "index": 0, "status": "ARRIVED_AT_GATE", "vendor": { "name": "Kitchen 1", "address": "Gate 1", "lat": 23.0768, "lng": 76.8524 }, "itemCount": 1 }, { ...index 1... } ] }` (`itemCount` = total quantity; `stops` ordered by `index`; `status` is that child's status).
+* Restaurant: `{ "size": 2, "allAccepted": false }` and NOTHING else (no other restaurant, no id, no money). `allAccepted` = every child is at least `ACCEPTED` and none is cancelled. When the last restaurant accepts, EVERY restaurant of the group gets an `order_updated` (socket) so the "Start cooking" button can switch on; polling shows it too. A restaurant's own money stays "You earn": `totalAmount` = `subtotal` = its vendorSubtotal, no `deliveryFee`/`discount`/coupon fields.
+* Admin additionally gets `groupId` (top level) on the order. `GET /admin/orders/needs-attention` rows of a group child carry `groupId`; money problems (payment mismatch, duplicate payment, refund failed/pending, paid after cancel) are reported ONCE through the primary child and the text names the group and its restaurants; gate-code, rider and overdue problems are reported once through the primary; "no rider" / "not accepted" stay per child.
+* The customer view of a SIBLING shows the primary's `refundStatus` (the group's refund), so every part of a cancelled paid order reads `DONE` / `PENDING` / `FAILED` consistently. In the database only the primary carries it.
+* `otpCode`: the same code on every child, only to the owner, only while `ARRIVED_AT_GATE` (unchanged rule).
+
+### 10.5 Rider pool, claim, release, arrival, delivery
+
+* `GET /api/orders/available?groups=1` (also `groups=true`): the pool plus combined orders. Without the parameter combined orders never appear (old rider apps). A combined order is ONE entry: the primary child's pool `OrderView` (with `group` as above, `customer: null`, `dropoffNotes: null`, `status` = the primary child's own status). It is listed only when EVERY child is paid, `ACCEPTED`/`PREPARING`/`READY_FOR_PICKUP` and unassigned. A pool rider can open that primary with `GET /orders/:id` (like any pool order); the other children and `GET /order-groups/:id` answer 404.
+* Sockets: a rider app that understands combined orders connects with `auth: { token, groups: 1 }` (query `groups=1` also works). Only such sockets get `order_available` (once, when the group becomes claimable or is released back; payload = the primary's pool view with `group`) and `order_unavailable { id: <primary id> }` (claimed, cancelled). Other riders' sockets never hear about groups.
+* `POST /orders/:id/accept-driver` with ANY child id claims every child (all or nothing); the response is the `OrderView` of the id you named. `RIDER_BUSY` counts a group as one delivery.
+* `PATCH /orders/:id/status`: `PICKED_UP` per child (only that child's `READY_FOR_PICKUP`); `ARRIVED_AT_GATE` through any child moves all children (`GROUP_NOT_PICKED_UP` unless every child is picked up) and writes one code; repeating it through another child answers `Order is already ARRIVED_AT_GATE.` and keeps the code. `POST /orders/:id/verify-gate-otp` through any child delivers all children at once (same `deliveredAt`); retrying the same code on any child afterwards is `200 Order is already DELIVERED.`. `POST /admin/orders/:id/reset-otp-lock` through any child resets the group (new code, same on all).
+* `POST /orders/:id/release` through any child releases the whole group (200 `{ id, status }` of the id you named); `PATCH /orders/:id/reassign` moves the whole group.
+* `POST /admin/orders/:id/cancel` on any child cancels the whole group: `{ success, message: "Combined order cancelled (2 orders).", groupId, cancelledOrders: 2, data: OrderView }` (`cancelledOrders: 0` when it was already cancelled; single orders have neither field).
+
+### 10.6 Push (Docs/18) for a combined order
+
+Restaurants: `NEW_ORDER` and `ORDER_CANCELLED_VENDOR` for their own child (a restaurant whose part was cancelled only because ANOTHER restaurant could not take it reads "Order #XXXXXX was cancelled: another restaurant could not take this combined order."; the restaurant that rejected is not told about its own rejection). Customer: `ORDER_ACCEPTED` per restaurant (names it), then ONE push per group for `ORDER_PICKED_UP` (when the LAST child is picked up), `RIDER_AT_GATE`, `ORDER_DELIVERED`, `ORDER_CANCELLED` (not for a cancel the customer made) and `REFUND_PROCESSED`; they carry the PRIMARY child's order id in `data.orderId`. `ORDER_READY` is not sent for a child of a group. Riders: one `NEW_DELIVERY` per idle rider per group ("2 restaurants to BH2. Tap to accept.", primary id), one `DELIVERY_CANCELLED` / `DELIVERY_ASSIGNED` per group (primary id). No push carries the OTP.
+
+### 10.7 Settings and operations
+
+`fees.maxRestaurantsPerOrder` integer 1..5, default 3 (missing in a stored row = 3; 1 = off); `fees.extraRestaurantFee` 0..200. `GET /admin/settings/fees` returns the new key. Rate limits (env `RL_<NAME>_MAX` / `_WINDOW_MS`): `ORDER_GROUP_CREATE` 8 per 10 min per user, `ORDER_QUOTE` 60 per 10 min per user. Audit rows: `ORDER_GROUP_CANCELLED` (target = the group id) plus one `ORDER_CANCELLED` per cancelled child for non-customer cancels; `ORDER_RELEASED` and `ORDER_REASSIGNED` name the primary / the id used. Finance: `GET /admin/finance/riders` counts one delivery per group; refund counts in `summary` and `by-day` count one per group (the amount is the sum of the children = the group payment); everything else is per child.
+
+### 10.8 Decisions where sections 1-9 were open (backend)
+
+1. `GROUP_WAITING` also binds the admin (stricter = safer: nobody cooks while another restaurant may still reject).
+2. A new checkout (single order or group) at a restaurant replaces the customer's abandoned unpaid group that contains it, as a whole (the replaced siblings read `Another restaurant in your order could not take it: Replaced by a newer order`). A group with a payment in flight (Razorpay order younger than 2 minutes) is not abandoned.
+3. The cascade reason text is applied to siblings for EVERY trigger (customer, admin, expiry), exactly as written in 4.4.
+4. `markPaymentFailed` (webhook `payment.failed`) only marks the primary `FAILED`; siblings stay `PENDING` until the payment succeeds.
+5. A child's `ORDER_READY` customer push is dropped (the customer hears "picked up" for the group); a rider hears about a group when it is claimable AND some kitchen has the food ready (same trigger as a single order).
+6. The group pool entry is the primary child's view: its `totalAmount`/`discount` are the primary's own share, not the group total (riders are not paid from it; apps should show stops, not money).

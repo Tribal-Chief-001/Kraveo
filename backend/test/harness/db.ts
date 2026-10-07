@@ -142,6 +142,7 @@ export const cleanTestOrders = async () => {
   await prisma.payment.deleteMany({});
   await prisma.orderItem.deleteMany({});
   await prisma.order.deleteMany({});
+  await prisma.orderGroup.deleteMany({}); // Docs/22: children first (Order.groupId is RESTRICT), then the groups
 };
 
 export const cleanTestUsers = async () => {

@@ -1,6 +1,7 @@
 import { prisma } from '../db';
 import { paymentWindowMin, vendorAcceptWindowMin, MAX_REFUND_ATTEMPTS, REFUND_LEASE_MS, MAINTENANCE_INTERVAL_MS } from '../config/orderFlow';
 import { cancelOrder } from './orderFlow';
+import { PAYABLE_SELECT, payableAmount } from './orderView';
 import { runRefund, refundExtraPayment } from './refundService';
 import { createBreaker, runPool } from './providerPool';
 import { reconcilePendingPayments } from './paymentReconcile';
@@ -30,7 +31,7 @@ export const runOrderMaintenance = async (now: Date = new Date()) => {
   const acceptCutoff = new Date(now.getTime() - vendorAcceptWindowMin() * 60_000);
   const summary = {
     expired: [] as string[], autoCancelled: [] as string[], refundsRetried: [] as string[], refundsDone: [] as string[],
-    extraRefundsDone: [] as string[], reconciledPaid: [] as string[], reconciledLateRefund: [] as string[], reconcileFlagged: [] as string[],
+    extraRefundsDone: [] as string[], autoRefunds: [] as string[], reconciledPaid: [] as string[], reconciledLateRefund: [] as string[], reconcileFlagged: [] as string[],
     providerPhaseStopped: false,
   };
 
@@ -64,7 +65,11 @@ export const runOrderMaintenance = async (now: Date = new Date()) => {
         guard: (o) => o.status === 'PLACED' && o.paymentStatus === 'PAID' && !!o.paidAt && o.paidAt < acceptCutoff,
         deferRefund: true, // the refund is run below, inside the bounded provider phase
       });
-      if (r && !r.idempotent) summary.autoCancelled.push(id);
+      if (r && !r.idempotent) {
+        summary.autoCancelled.push(id);
+        // Docs/22: the refund of a combined order is carried by its primary child, whichever child timed out.
+        if (r.refundOrderId) summary.autoRefunds.push(r.refundOrderId);
+      }
     } catch (err) {
       console.error(`maintenance: auto-cancelling ${id} failed:`, (err as Error).message);
     }
@@ -86,7 +91,7 @@ export const runOrderMaintenance = async (now: Date = new Date()) => {
     orderBy: { updatedAt: 'asc' },
     take: BATCH,
   });
-  const refundIds = [...new Set([...summary.autoCancelled, ...due.map((o) => o.id)])];
+  const refundIds = [...new Set([...summary.autoRefunds, ...due.map((o) => o.id)])];
   await runPool(refundIds, breaker, async (id) => {
     const r = await runRefund(id, now);
     if (r.outcome !== 'SKIPPED') summary.refundsRetried.push(id);
@@ -104,12 +109,12 @@ export const runOrderMaintenance = async (now: Date = new Date()) => {
         OR: [{ refundedAt: null }, { refundedAt: { lt: now } }],
         order: { paymentStatus: { in: ['PAID', 'REFUNDED'] } },
       },
-      select: { id: true, orderId: true, razorpayPaymentId: true, capturedAmountPaise: true, order: { select: { totalAmount: true } } },
+      select: { id: true, orderId: true, razorpayPaymentId: true, capturedAmountPaise: true, order: { select: PAYABLE_SELECT } },
       orderBy: { createdAt: 'asc' },
       take: BATCH,
     });
     // Only true duplicates (the right amount, refunded in full); a wrong amount stays flagged for the admin.
-    const duplicates = extras.filter((x) => x.capturedAmountPaise === Math.round(x.order.totalAmount * 100));
+    const duplicates = extras.filter((x) => x.capturedAmountPaise === Math.round(payableAmount(x.order) * 100));
     await runPool(duplicates, breaker, async (x) => {
       const r = await refundExtraPayment({ orderId: x.orderId, providerPaymentId: x.razorpayPaymentId!, amountPaise: x.capturedAmountPaise!, paymentRowId: x.id }, now);
       if (r.outcome === 'DONE') summary.extraRefundsDone.push(x.id);

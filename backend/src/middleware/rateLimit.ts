@@ -95,6 +95,9 @@ export const normalizedPath = (rawPath: string): string => (rawPath || '/').toLo
 const MIN = 60_000;
 const RULES: Rule[] = [
   { name: 'ORDER_CREATE', scope: 'user', max: 8, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/orders', message: 'You are placing orders too fast. Please wait a few minutes.' },
+  // Docs/22: a combined order is placed (and priced) through its own endpoints; same budget as a single order, and a quote is a read-only price check.
+  { name: 'ORDER_GROUP_CREATE', scope: 'user', max: 8, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/order-groups', message: 'You are placing orders too fast. Please wait a few minutes.' },
+  { name: 'ORDER_QUOTE', scope: 'user', max: 60, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/orders/quote', message: 'Too many price checks. Please wait a minute.' },
   {
     name: 'ORDER_CANCEL', scope: 'user', max: 5, windowMs: 10 * MIN,
     applies: (r, p) => (r.method === 'POST' && /^\/orders\/[^/]+\/cancel$/.test(p)) || (r.method === 'PATCH' && /^\/orders\/[^/]+\/status$/.test(p) && r.body?.status === 'CANCELLED'),

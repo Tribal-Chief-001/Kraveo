@@ -38,6 +38,7 @@ export const purgeWorld = async (prefix: string) => {
   const p = `${prefix}-`;
   await prisma.payment.deleteMany({ where: { order: { OR: [{ customerId: { startsWith: p } }, { vendorId: { startsWith: p } }] } } });
   await prisma.order.deleteMany({ where: { OR: [{ customerId: { startsWith: p } }, { vendorId: { startsWith: p } }, { driverId: { startsWith: p } }] } });
+  await prisma.orderGroup.deleteMany({ where: { customerId: { startsWith: p } } });
   await prisma.driverLocation.deleteMany({ where: { driverId: { startsWith: p } } });
   await prisma.menuItem.deleteMany({ where: { vendorId: { startsWith: p } } });
   await prisma.vendor.deleteMany({ where: { id: { startsWith: p } } });
@@ -93,6 +94,7 @@ export const resetWorldState = async (w: World) => {
   const p = `${w.prefix}-`;
   await prisma.payment.deleteMany({ where: { order: { OR: [{ customerId: { startsWith: p } }, { vendorId: { startsWith: p } }] } } });
   await prisma.order.deleteMany({ where: { OR: [{ customerId: { startsWith: p } }, { vendorId: { startsWith: p } }, { driverId: { startsWith: p } }] } });
+  await prisma.orderGroup.deleteMany({ where: { customerId: { startsWith: p } } });
   await prisma.vendor.updateMany({ where: { id: { startsWith: p } }, data: { approvalStatus: 'APPROVED', isAcceptingOrders: true } });
   await prisma.driverPartner.updateMany({ where: { id: { startsWith: p } }, data: { approvalStatus: 'APPROVED', dutyStatus: 'ONLINE' } });
   await prisma.menuItem.updateMany({ where: { vendorId: { startsWith: p } }, data: { isAvailable: true } });
@@ -210,12 +212,22 @@ export const createApi = (baseUrl: string, calls: CallLog[] = []) => {
     resetOtp: (admin: Person, id: string) => send(W(admin), 'post', `/api/admin/orders/${id}/reset-otp-lock`, admin.token, {}),
     retryRefund: (admin: Person, id: string) => send(W(admin), 'post', `/api/admin/orders/${id}/retry-refund`, admin.token, {}),
     needsAttention: (admin: Person) => send(W(admin), 'get', '/api/admin/orders/needs-attention', admin.token),
+    // Docs/22 multi-restaurant orders
+    quote: (c: Person, restaurants: unknown, couponCode?: string) => send(W(c), 'post', '/api/orders/quote', c.token, couponCode === undefined ? { restaurants } : { restaurants, couponCode }),
+    placeGroup: (c: Person, restaurants: unknown, extra: Record<string, unknown> = {}) =>
+      send(W(c), 'post', '/api/order-groups', c.token, { restaurants, dropoffHostel: 'BH2', dropoffNotes: 'Room 214', clientRequestId: randomUUID(), ...extra }),
+    getGroup: (p: Person | string, id: string) => send(W(p), 'get', `/api/order-groups/${id}`, T(p)),
+    listGroups: (p: Person | string, query = '') => send(W(p), 'get', `/api/order-groups${query}`, T(p)),
+    availableGroups: (p: Person) => send(W(p), 'get', '/api/orders/available?groups=1', p.token),
     partnerStatus: (admin: Person, kind: 'vendor' | 'driver', id: string, status: string, reason = 'Testing suspension') =>
       send(W(admin), 'post', `/api/admin/partners/${kind}/${id}/status`, admin.token, { status, reason }),
   };
   return api;
 };
 export type Api = ReturnType<typeof createApi>;
+
+/** One restaurant's part of a combined order request: `lines` = [item index, quantity] pairs of that restaurant's two seeded dishes (180 and 90). */
+export const cartOf = (v: Vendor, lines: [number, number][] = [[0, 1]]) => ({ vendorId: v.vendorId, items: lines.map(([i, q]) => ({ itemId: v.items[i].id, quantity: q })) });
 
 // ---------------------------------------------------------------------------------------------
 // Sockets
@@ -228,11 +240,12 @@ export class Watcher {
   events: Ev[] = [];
   rooms = new Set<string>();
   socket: Socket | null = null;
-  constructor(public baseUrl: string, public who: Person) {}
+  /** `authExtra`: more handshake auth fields, e.g. `{ groups: 1 }` for a rider app that understands combined orders (Docs/22). */
+  constructor(public baseUrl: string, public who: Person, public authExtra: Record<string, unknown> = {}) {}
 
   async connect(): Promise<this> {
     await new Promise<void>((resolve, reject) => {
-      const s = io(this.baseUrl, { transports: ['websocket'], forceNew: true, reconnection: false, auth: { token: this.who.token } });
+      const s = io(this.baseUrl, { transports: ['websocket'], forceNew: true, reconnection: false, auth: { token: this.who.token, ...this.authExtra } });
       const timer = setTimeout(() => { s.disconnect(); reject(new Error(`socket connect timeout for ${this.who.id}`)); }, 5000);
       s.on('connect', () => { clearTimeout(timer); resolve(); });
       s.on('connect_error', (e) => { clearTimeout(timer); reject(e); });

@@ -53,6 +53,8 @@ export type FeesSettings = {
   smallOrderFee: number;
   gstOnFeesPercent: number;
   gstOnFoodPercent: number;
+  /** Docs/22: most restaurants in one checkout, 1..5 (1 switches multi-restaurant orders off). Missing in a stored row = 3. */
+  maxRestaurantsPerOrder: number;
 };
 export type CommissionSettings = CommissionRule;
 export type RoundingSettings = { step: number };
@@ -70,7 +72,7 @@ export const isSettingGroup = (g: unknown): g is SettingGroup => typeof g === 's
 
 /** A fresh database behaves like today minus the old separate Rs 15: one all-in fee of Rs 25, no commission, whole-rupee prices. */
 export const DEFAULT_SETTINGS: SettingsMap = {
-  fees: { baseFee: 25, lines: [], extraRestaurantFee: 15, freeFeeAbove: 0, smallOrderBelow: 0, smallOrderFee: 0, gstOnFeesPercent: 18, gstOnFoodPercent: 5 },
+  fees: { baseFee: 25, lines: [], extraRestaurantFee: 15, freeFeeAbove: 0, smallOrderBelow: 0, smallOrderFee: 0, gstOnFeesPercent: 18, gstOnFoodPercent: 5, maxRestaurantsPerOrder: 3 },
   commission: { type: 'PERCENT', value: 0 },
   rounding: { step: 1 },
   settlement: { time: '22:00', mode: 'MANUAL_PAYOUT', autoCreate: true, holdDays: 0 },
@@ -79,6 +81,11 @@ export const cloneDefaults = <G extends SettingGroup>(group: G): SettingsMap[G] 
 
 export const LIMITS = {
   maxFee: 500,
+  /** Docs/22: the flat fee each EXTRA restaurant adds (0..200). */
+  maxExtraRestaurantFee: 200,
+  /** Docs/22: fees.maxRestaurantsPerOrder range. */
+  minRestaurantsPerOrder: 1,
+  maxRestaurantsPerOrder: 5,
   maxThreshold: 10_000,
   maxPercent: 100,
   maxFlatCommission: 5_000,
@@ -221,6 +228,65 @@ export const computeFees = (fees: FeesSettings, subtotal: number, restaurants = 
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Multi-restaurant orders (Docs/22 section 1): how a group's money is split over its children. Pure, integer paise.
+// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Splits `totalPaise` over `weights` (>= 0, integers) proportionally with the largest-remainder method, so the parts are integers
+ * and add up to `totalPaise` EXACTLY. Ties go to the lowest index. With all weights 0 nothing can be proportional: the first part gets it all.
+ */
+export const largestRemainderSplit = (totalPaise: number, weights: number[]): number[] => {
+  const n = weights.length;
+  if (n === 0) return [];
+  const sum = weights.reduce((a, b) => a + b, 0);
+  if (totalPaise <= 0) return weights.map(() => 0);
+  if (sum <= 0) return weights.map((_, i) => (i === 0 ? totalPaise : 0));
+  const parts = weights.map((w) => Math.floor((totalPaise * w) / sum));
+  const rem = weights.map((w, i) => ({ i, r: (totalPaise * w) % sum }));
+  let left = totalPaise - parts.reduce((a, b) => a + b, 0);
+  rem.sort((a, b) => b.r - a.r || a.i - b.i);
+  for (let k = 0; left > 0 && k < rem.length; k++, left--) parts[rem[k].i] += 1;
+  return parts;
+};
+
+export type GroupChildMoney = {
+  /** Child's own food, customer prices (rupees, 2 decimals). */
+  subtotal: number;
+  /** Child 0: base fee (+ small-order fee) after the free-fee rule on the COMBINED subtotal; every other child: extraRestaurantFee. */
+  fee: number;
+  /** Child's share of the coupon discount (largest remainder, paise exact). */
+  discount: number;
+  /** subtotal + fee - discount. */
+  total: number;
+};
+
+/**
+ * The money of a group: the fee for the COMBINED food subtotal (computeFees knows the extra-restaurant fee), the coupon discount
+ * (already computed on the combined subtotal by the caller), and the per-child parts. Invariant, asserted here: the children's totals
+ * add up to the group total to the paisa.
+ */
+export const splitGroupMoney = (fees: FeesSettings, childSubtotals: number[], discount: number): {
+  subtotal: number; feeTotal: number; discount: number; total: number; breakdown: FeeBreakdown; children: GroupChildMoney[];
+} => {
+  const subtotalsP = childSubtotals.map(toPaise);
+  const combinedP = subtotalsP.reduce((a, b) => a + b, 0);
+  const n = childSubtotals.length;
+  const fee = computeFees(fees, fromPaise(combinedP), n);
+  const feeP = toPaise(fee.total);
+  const extraP = toPaise(fees.extraRestaurantFee);
+  const baseP = feeP - (n - 1) * extraP; // base fee + small-order fee (>= 0 by construction)
+  const discountP = Math.min(toPaise(discount), combinedP);
+  const discParts = largestRemainderSplit(discountP, subtotalsP);
+  const children = subtotalsP.map((s, i): GroupChildMoney => {
+    const f = i === 0 ? baseP : extraP;
+    return { subtotal: fromPaise(s), fee: fromPaise(f), discount: fromPaise(discParts[i]), total: fromPaise(s + f - discParts[i]) };
+  });
+  const totalP = combinedP + feeP - discountP;
+  const sumP = subtotalsP.reduce((a, s, i) => a + s + (i === 0 ? baseP : extraP) - discParts[i], 0);
+  if (baseP < 0 || sumP !== totalP) throw new Error(`group money does not add up (${sumP} != ${totalP})`);
+  return { subtotal: fromPaise(combinedP), feeTotal: fee.total, discount: fromPaise(discountP), total: fromPaise(totalP), breakdown: fee.breakdown, children };
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
 // Validation of the setting groups (strict: unknown keys, wrong types and out-of-range values are all refused)
 // ---------------------------------------------------------------------------------------------------------------------
 const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -239,7 +305,7 @@ const money = (obj: Record<string, unknown>, key: string, max: number, label: st
   return { ok: true, value: v };
 };
 
-const FEE_KEYS = ['baseFee', 'lines', 'extraRestaurantFee', 'freeFeeAbove', 'smallOrderBelow', 'smallOrderFee', 'gstOnFeesPercent', 'gstOnFoodPercent'] as const;
+const FEE_KEYS = ['baseFee', 'lines', 'extraRestaurantFee', 'freeFeeAbove', 'smallOrderBelow', 'smallOrderFee', 'gstOnFeesPercent', 'gstOnFoodPercent', 'maxRestaurantsPerOrder'] as const;
 const LINE_KEY_RE = /^[a-z][a-z0-9_]{0,29}$/;
 
 export const validateFees = (raw: unknown): Checked<FeesSettings> => {
@@ -248,7 +314,7 @@ export const validateFees = (raw: unknown): Checked<FeesSettings> => {
   if (extra) return bad(extra, `Unknown fee setting '${extra.slice(0, 40)}'.`);
   const baseFee = money(raw, 'baseFee', LIMITS.maxFee, 'The fee');
   if (!baseFee.ok) return baseFee;
-  const extraFee = money(raw, 'extraRestaurantFee', LIMITS.maxFee, 'The extra-restaurant fee');
+  const extraFee = money(raw, 'extraRestaurantFee', LIMITS.maxExtraRestaurantFee, 'The extra-restaurant fee');
   if (!extraFee.ok) return extraFee;
   const freeAbove = money(raw, 'freeFeeAbove', LIMITS.maxThreshold, 'The free-fee limit');
   if (!freeAbove.ok) return freeAbove;
@@ -260,6 +326,11 @@ export const validateFees = (raw: unknown): Checked<FeesSettings> => {
   if (!gstFees.ok) return gstFees;
   const gstFood = money(raw, 'gstOnFoodPercent', 100, 'GST on food', '');
   if (!gstFood.ok) return gstFood;
+  // Missing (a row stored before Docs/22) = the default 3, so an old row keeps validating and behaves like the default.
+  const maxRaw = raw.maxRestaurantsPerOrder === undefined ? DEFAULT_SETTINGS.fees.maxRestaurantsPerOrder : raw.maxRestaurantsPerOrder;
+  if (typeof maxRaw !== 'number' || !Number.isInteger(maxRaw) || maxRaw < LIMITS.minRestaurantsPerOrder || maxRaw > LIMITS.maxRestaurantsPerOrder) {
+    return bad('maxRestaurantsPerOrder', `The most restaurants per order must be a whole number from ${LIMITS.minRestaurantsPerOrder} to ${LIMITS.maxRestaurantsPerOrder} (1 turns multi-restaurant orders off).`);
+  }
   if (freeAbove.value > 0 && smallBelow.value > freeAbove.value) {
     return bad('smallOrderBelow', 'The small-order limit cannot be higher than the free-fee limit (an order cannot be both free and small).');
   }
@@ -299,6 +370,7 @@ export const validateFees = (raw: unknown): Checked<FeesSettings> => {
       smallOrderFee: smallFee.value,
       gstOnFeesPercent: gstFees.value,
       gstOnFoodPercent: gstFood.value,
+      maxRestaurantsPerOrder: maxRaw,
     },
   };
 };
