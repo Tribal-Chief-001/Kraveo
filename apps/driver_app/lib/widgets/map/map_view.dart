@@ -2,6 +2,19 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import '../../models/geo.dart';
 
+/// A named pin (one more restaurant of a combined order).
+class MapPin {
+  const MapPin(this.point, this.name);
+  final GeoPoint point;
+  final String name;
+
+  @override
+  bool operator ==(Object other) => other is MapPin && other.point == point && other.name == name;
+
+  @override
+  int get hashCode => Object.hash(point, name);
+}
+
 /// Everything a real map view needs to draw the delivery picture. The delivery screen owns the
 /// state; the view only paints it, so it can be replaced by a fake in tests.
 class MapViewSpec {
@@ -13,11 +26,15 @@ class MapViewSpec {
     this.pickupName = '',
     this.drop,
     this.dropName = '',
+    this.morePickups = const [],
   });
 
   /// The restaurant pin, only when the server says it is a real location.
   final GeoPoint? pickup;
   final String pickupName;
+
+  /// The other restaurants of a combined order (the first one is [pickup]). Empty for a single order.
+  final List<MapPin> morePickups;
 
   /// The drop point pin.
   final GeoPoint? drop;
@@ -34,7 +51,12 @@ class MapViewSpec {
   final void Function(Object error) onError;
 
   /// The points the camera should fit.
-  List<GeoPoint> visiblePoints({GeoPoint? riderPoint}) => [if (pickup != null) pickup!, if (drop != null) drop!, if (riderPoint != null) riderPoint];
+  List<GeoPoint> visiblePoints({GeoPoint? riderPoint}) => [
+        if (pickup != null) pickup!,
+        for (final p in morePickups) p.point,
+        if (drop != null) drop!,
+        if (riderPoint != null) riderPoint,
+      ];
 }
 
 /// Creates the real map. Injectable so tests (and builds without a Maps key) never touch a

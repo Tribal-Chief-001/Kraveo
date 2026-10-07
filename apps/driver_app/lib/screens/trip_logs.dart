@@ -108,7 +108,7 @@ class _TripLogsScreenState extends State<TripLogsScreen> {
                       Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
                         Expanded(
                           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            _RouteLine(icon: LucideIcons.store, color: k.brand, text: trip.restaurantName),
+                            _RouteLine(icon: LucideIcons.store, color: k.brand, text: trip.pickupLabel),
                             Padding(
                               padding: const EdgeInsets.only(left: 9),
                               child: Container(width: 2, height: 12, color: k.line),
@@ -171,14 +171,21 @@ class _TripLogsScreenState extends State<TripLogsScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(children: [
-                Expanded(child: Text('Order ${trip.shortRef}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.headlineSm.copyWith(color: k.ink))),
+                Expanded(child: Text('${trip.isGroup ? 'Combined order' : 'Order'} ${trip.shortRef}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.headlineSm.copyWith(color: k.ink))),
                 Text(delivered ? OfferCard.rupees(trip.deliveryFee) : '–', style: KraveoType.numeric.copyWith(color: k.brand)),
               ]),
               const SizedBox(height: 6),
               KStatusPill(status: delivered ? KStatus.delivered : KStatus.cancelled, compact: true),
               const SizedBox(height: 20),
-              _SheetStop(icon: LucideIcons.store, color: k.brand, label: 'PICKUP', title: trip.restaurantName, note: trip.vendor?.address ?? ''),
-              const SizedBox(height: 14),
+              if (trip.isGroup)
+                for (var i = 0; i < trip.stops.length; i++) ...[
+                  _SheetStop(icon: LucideIcons.store, color: k.brand, label: 'PICKUP ${i + 1}', title: trip.stops[i].name, note: trip.stops[i].address ?? ''),
+                  const SizedBox(height: 14),
+                ]
+              else ...[
+                _SheetStop(icon: LucideIcons.store, color: k.brand, label: 'PICKUP', title: trip.restaurantName, note: trip.vendor?.address ?? ''),
+                const SizedBox(height: 14),
+              ],
               _SheetStop(icon: LucideIcons.mapPin, color: KStatus.atGate.color, label: 'DROP', title: trip.dropLabel, note: trip.dropoffNotes ?? ''),
               const SizedBox(height: 16),
               Divider(color: k.line),

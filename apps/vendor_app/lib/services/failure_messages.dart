@@ -20,6 +20,9 @@ FailureText failureText(ApiFailure failure, {String? serverMessage, String? code
       return const FailureText('Payment is not confirmed. Do not cook this order.', 'पेमेंट पक्का नहीं हुआ, यह ऑर्डर न बनाएं');
     case 'CANNOT_REJECT':
       return const FailureText('An accepted order cannot be declined. Email kraveo.contact@gmail.com to cancel it.', 'स्वीकार किया ऑर्डर मना नहीं हो सकता, kraveo.contact@gmail.com पर ईमेल करें');
+    case 'GROUP_WAITING':
+      // Docs/22 section 10.1: the server's own sentence, shown plainly. The fallback is the same sentence.
+      return FailureText(_serverOr('Waiting for the other restaurant(s) in this combined order to accept.', serverMessage), 'इस कंबाइंड ऑर्डर के दूसरे रेस्टोरेंट के स्वीकार करने का इंतज़ार करें');
     case 'ORDER_CLOSED':
       return const FailureText('This order is already finished or cancelled.', 'यह ऑर्डर पहले ही पूरा या रद्द हो चुका है');
     case 'ROLE_NOT_ALLOWED':
@@ -51,6 +54,11 @@ FailureText failureText(ApiFailure failure, {String? serverMessage, String? code
     case ApiFailure.server:
       return const FailureText('Kraveo had a problem. Try again in a moment.', 'सर्वर में दिक्कत, थोड़ी देर में कोशिश करें');
   }
+}
+
+String _serverOr(String fallback, String? server) {
+  final s = server?.trim() ?? '';
+  return (s.isEmpty || s.length > 200) ? fallback : s;
 }
 
 String _withServer(String base, String? server) {

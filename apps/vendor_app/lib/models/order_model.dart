@@ -164,6 +164,29 @@ class OrderRider {
   }
 }
 
+/// `OrderView.group` for a RESTAURANT (Docs/22 sections 4.5, 10.4): `{ size, allAccepted }` and nothing else. The server never
+/// tells a restaurant who the other restaurants are, what the combined order costs or what the customer pays, and this
+/// class has no place to put such a thing. Absent on a single-restaurant order.
+class OrderGroup {
+  const OrderGroup({required this.size, required this.allAccepted});
+
+  /// How many restaurants are in the combined order (2 or more; the server's number).
+  final int size;
+
+  /// Every restaurant accepted its part and none is cancelled: the kitchens may start cooking.
+  final bool allAccepted;
+
+  /// Defensive: anything that is not a map with a real boolean `allAccepted` is read as "not a combined order", so a
+  /// garbled field can never switch a normal order's "Start cooking" off.
+  static OrderGroup? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final accepted = raw['allAccepted'];
+    if (accepted is! bool) return null;
+    final size = _int(raw['size']);
+    return OrderGroup(size: (size == null || size < 2) ? 2 : size, allAccepted: accepted);
+  }
+}
+
 class OrderModel {
   const OrderModel({
     required this.id,
@@ -192,6 +215,7 @@ class OrderModel {
     this.vendorId,
     this.acceptBy,
     this.refundStatus,
+    this.group,
   });
 
   /// How long the restaurant has to accept a paid order before Kraveo cancels and refunds it
@@ -232,6 +256,15 @@ class OrderModel {
 
   /// `NONE|PENDING|DONE|FAILED` when the server sends it (the vendor view currently does not).
   final String? refundStatus;
+
+  /// Set only on a part of a combined (multi-restaurant) order.
+  final OrderGroup? group;
+
+  /// True for a part of a combined order.
+  bool get isGrouped => group != null;
+
+  /// A combined order whose other restaurants have not all accepted yet: this kitchen must not start cooking.
+  bool get waitingForGroup => group != null && !group!.allAccepted && !status.isTerminal;
 
   /// Short code a cook can read out ("#05EFB9"): '#' + the last 6 characters of the server id, uppercased.
   /// The same rule is used by every Kraveo app and the dashboard, so people can match orders by voice.
@@ -294,12 +327,18 @@ class OrderModel {
         vendorId: vendorId,
         acceptBy: acceptBy,
         refundStatus: refundStatus,
+        group: group,
       );
 
   /// True when [incoming] (from a poll, a socket event or an action response) is at least as new
   /// as this copy. The server's `updatedAt` decides; without it, the lifecycle never moves backwards.
   bool isSupersededBy(OrderModel incoming) {
     if (status.isTerminal && !incoming.status.isTerminal) return false; // a finished order never reopens
+    // Same step, same moment: a poll that started before the live update must not undo "all restaurants accepted".
+    if (incoming.status == status && (group?.allAccepted ?? false) && incoming.group != null && !incoming.group!.allAccepted) {
+      final a = updatedAt, b = incoming.updatedAt;
+      if (a == null || b == null || !b.isAfter(a)) return false;
+    }
     final a = updatedAt;
     final b = incoming.updatedAt;
     if (a != null && b != null) {
@@ -365,6 +404,7 @@ class OrderModel {
       vendorId: (raw['vendorId'] ?? (raw['vendor'] is Map ? (raw['vendor'] as Map)['id'] : null))?.toString(),
       acceptBy: _date(raw['acceptBy']),
       refundStatus: raw['refundStatus']?.toString(),
+      group: OrderGroup.fromJson(raw['group']),
     );
   }
 }

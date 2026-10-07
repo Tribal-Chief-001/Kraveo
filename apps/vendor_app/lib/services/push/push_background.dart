@@ -18,6 +18,8 @@ Future<void> showBackgroundPush(PushMessage message, AlarmNotifications notifica
       await notifications.showNewOrder(orderId, title: message.title, body: message.body);
     case PushEvent.orderCancelledVendor:
       await notifications.showUpdate(orderId, title: message.title ?? 'Order cancelled', body: message.body ?? 'An order was cancelled.');
+    case PushEvent.groupReadyToCook:
+      await notifications.showUpdate(orderId, title: message.title ?? 'Start cooking', body: message.body ?? 'All restaurants accepted - you can start cooking.');
     case PushEvent.unknown:
       break;
   }

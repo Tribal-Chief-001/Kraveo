@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../models/geo.dart';
@@ -39,7 +40,7 @@ class _GoogleDeliveryMapViewState extends State<GoogleDeliveryMapView> {
       old.spec.rider.removeListener(_onRider);
       widget.spec.rider.addListener(_onRider);
     }
-    if (old.spec.pickup != widget.spec.pickup || old.spec.drop != widget.spec.drop) _fit();
+    if (old.spec.pickup != widget.spec.pickup || old.spec.drop != widget.spec.drop || !listEquals(old.spec.morePickups, widget.spec.morePickups)) _fit();
   }
 
   @override
@@ -102,6 +103,13 @@ class _GoogleDeliveryMapViewState extends State<GoogleDeliveryMapView> {
           position: _ll(spec.pickup!),
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
           infoWindow: InfoWindow(title: spec.pickupName),
+        ),
+      for (var i = 0; i < spec.morePickups.length; i++)
+        Marker(
+          markerId: MarkerId('pickup-${i + 1}'),
+          position: _ll(spec.morePickups[i].point),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          infoWindow: InfoWindow(title: spec.morePickups[i].name),
         ),
       if (rider != null)
         Marker(

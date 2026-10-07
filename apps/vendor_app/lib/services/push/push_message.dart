@@ -4,6 +4,10 @@ import 'dart:convert';
 enum PushEvent {
   newOrder('NEW_ORDER'),
   orderCancelledVendor('ORDER_CANCELLED_VENDOR'),
+
+  /// Docs/22 section 10.9: the LAST restaurant of a combined order accepted; every restaurant that accepted earlier may
+  /// now start cooking. Treated like a refresh of the order list.
+  groupReadyToCook('GROUP_READY_TO_COOK'),
   unknown('');
 
   const PushEvent(this.wire);

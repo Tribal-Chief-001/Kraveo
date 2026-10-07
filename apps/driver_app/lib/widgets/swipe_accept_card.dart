@@ -48,9 +48,14 @@ class OfferCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    final ready = order.status == OrderStatus.readyForPickup;
-    final fee = rupees(order.deliveryFee);
-    final items = order.itemCount;
+    final group = order.group;
+    final stops = group?.stops ?? const <GroupStopView>[];
+    final isCombined = group != null;
+    // A combined order is ready only when every kitchen is (the pool entry itself is just the first restaurant's order).
+    final ready = isCombined && stops.isNotEmpty ? stops.every((s) => s.status == OrderStatus.readyForPickup) : order.status == OrderStatus.readyForPickup;
+    // The pool entry of a combined order carries only the first restaurant's share of the money: show stops, not money.
+    final fee = isCombined ? '${group.size} restaurants' : rupees(order.deliveryFee);
+    final items = isCombined && stops.isNotEmpty ? stops.fold<int>(0, (n, s) => n + s.itemCount) : order.itemCount;
     return KCard(
       padding: const EdgeInsets.all(20),
       borderColor: k.brand.withValues(alpha: 0.55),
@@ -64,12 +69,17 @@ class OfferCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('DELIVERY FEE', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.1)),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(fee, style: KraveoType.displayLg.copyWith(fontSize: 56, height: 1.05, color: k.ink)),
-                    ),
+                    if (isCombined) ...[
+                      Text('ONE RIDER · ONE DROP', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.1)),
+                      Text(order.headlineName, key: const ValueKey('combined-title'), maxLines: 3, overflow: TextOverflow.ellipsis, style: KraveoType.headline.copyWith(color: k.ink)),
+                    ] else ...[
+                      Text('DELIVERY FEE', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.brand, letterSpacing: 1.1)),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(fee, style: KraveoType.displayLg.copyWith(fontSize: 56, height: 1.05, color: k.ink)),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -92,17 +102,36 @@ class OfferCard extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            '${items > 0 ? '$items item${items == 1 ? '' : 's'} · ' : ''}Order ${rupees(order.totalAmount)} prepaid · ${ago(order.offeredAt, now)}',
+            isCombined
+                ? '${items > 0 ? '$items item${items == 1 ? '' : 's'} · ' : ''}Prepaid · ${ago(order.offeredAt, now)}'
+                : '${items > 0 ? '$items item${items == 1 ? '' : 's'} · ' : ''}Order ${rupees(order.totalAmount)} prepaid · ${ago(order.offeredAt, now)}',
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: KraveoType.bodySm.copyWith(color: k.inkMuted),
           ),
           const SizedBox(height: 16),
-          _Stop(icon: LucideIcons.store, color: k.brand, title: order.restaurantName, note: order.vendor?.address ?? '', label: 'PICKUP'),
-          Padding(
-            padding: const EdgeInsets.only(left: 19),
-            child: Container(width: 2, height: 16, color: k.line),
-          ),
+          if (isCombined && stops.isNotEmpty)
+            for (var i = 0; i < stops.length; i++) ...[
+              _Stop(
+                key: ValueKey('offer-stop-${stops[i].orderId}'),
+                icon: LucideIcons.store,
+                color: k.brand,
+                title: stops[i].name,
+                note: stops[i].address ?? '',
+                label: 'PICKUP ${i + 1}',
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 19),
+                child: Container(width: 2, height: 16, color: k.line),
+              ),
+            ]
+          else ...[
+            _Stop(icon: LucideIcons.store, color: k.brand, title: order.restaurantName, note: order.vendor?.address ?? '', label: 'PICKUP'),
+            Padding(
+              padding: const EdgeInsets.only(left: 19),
+              child: Container(width: 2, height: 16, color: k.line),
+            ),
+          ],
           _Stop(icon: LucideIcons.mapPin, color: KStatus.atGate.color, title: order.dropLabel, note: order.dropoffNotes ?? '', label: 'DROP'),
           const SizedBox(height: 20),
           if (claiming)
@@ -120,7 +149,7 @@ class OfferCard extends StatelessWidget {
             const KButton(label: 'Accept with one tap', kind: KButtonKind.ghost, icon: LucideIcons.hand, onPressed: null)
           else ...[
             Semantics(
-              label: 'Slide to accept order, delivery fee $fee',
+              label: isCombined ? 'Slide to accept combined order, ${group.size} restaurants' : 'Slide to accept order, delivery fee $fee',
               button: true,
               excludeSemantics: true,
               onTap: onAccepted,
@@ -156,7 +185,7 @@ class _Chip extends StatelessWidget {
 }
 
 class _Stop extends StatelessWidget {
-  const _Stop({required this.icon, required this.color, required this.title, required this.note, required this.label});
+  const _Stop({super.key, required this.icon, required this.color, required this.title, required this.note, required this.label});
   final IconData icon;
   final Color color;
   final String title, note, label;

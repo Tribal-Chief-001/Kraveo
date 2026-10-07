@@ -67,7 +67,8 @@ class OrderPage {
 
 /// Everything the rider app asks of the order API (contract section 2.4). Tests use a fake.
 abstract class RiderOrdersApi {
-  /// `GET /orders/available`: the open pool (pool view: no customer name/phone).
+  /// `GET /orders/available?groups=1`: the open pool (pool view: no customer name/phone). `groups=1` tells Kraveo this
+  /// app understands combined (multi-restaurant) orders (Docs/22): each is ONE entry, carrying `group`.
   Future<ApiResult<List<OrderView>>> fetchAvailable();
 
   /// `GET /orders?scope=active`: this rider's live orders (plus ones finished in the last 10 min).
@@ -195,7 +196,7 @@ class HttpRiderOrdersApi implements RiderOrdersApi {
   }
 
   @override
-  Future<ApiResult<List<OrderView>>> fetchAvailable() async => _list(await _send('GET', _u('/orders/available')));
+  Future<ApiResult<List<OrderView>>> fetchAvailable() async => _list(await _send('GET', _u('/orders/available', {'groups': '1'})));
 
   @override
   Future<ApiResult<List<OrderView>>> fetchActive() async => _list(await _send('GET', _u('/orders', {'scope': 'active', 'limit': '20'})));

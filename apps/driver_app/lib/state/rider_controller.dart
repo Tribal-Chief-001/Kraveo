@@ -256,12 +256,27 @@ class RiderController extends ChangeNotifier {
     if (_onDuty && _active == null) await refreshOffers();
   }
 
+  /// A combined delivery listens to the order room of EVERY stop (each restaurant's order is its own room).
+  static Iterable<String> _roomIds(OrderView o) => o.isGroup ? {o.id, for (final s in o.stops) s.orderId} : [o.id];
+
+  void _watch(OrderView o) {
+    for (final id in _roomIds(o)) {
+      services.socket.watchOrder(id);
+    }
+  }
+
+  void _unwatch(OrderView o) {
+    for (final id in _roomIds(o)) {
+      services.socket.unwatchOrder(id);
+    }
+  }
+
   void _updateConnection() {
     if (_disposed) return;
     final want = _onDuty || _active != null;
     if (want) {
       unawaited(services.socket.connect());
-      if (_active != null) services.socket.watchOrder(_active!.id);
+      if (_active != null) _watch(_active!);
     } else {
       services.socket.disconnect();
     }
@@ -683,12 +698,14 @@ class RiderController extends ChangeNotifier {
       _removeOffer(offer.id);
       final o = r.value;
       if (o != null && o.id == offer.id && !o.status.isTerminal) {
-        _setActive(o);
+        // A combined order: the claim answer is ONE child; the others arrive with the rider's own list right away.
+        _setActive(o.isGroup ? (OrderView.mergeGroup([o]) ?? o) : o);
+        if (o.isGroup) await refreshActive();
       } else {
         await refreshActive();
       }
       if (_active?.id == offer.id) {
-        _say('Order accepted. Go to ${_active!.restaurantName}.');
+        _say(_active!.isGroup ? 'Order accepted. Collect it from ${_active!.stops.length} restaurants.' : 'Order accepted. Go to ${_active!.restaurantName}.');
         return true;
       }
       _say('Accepted, but the order details did not load yet. They will appear in a moment.');
@@ -735,7 +752,7 @@ class RiderController extends ChangeNotifier {
         // The request may have reached Kraveo. Ask before saying anything.
         await refreshActive();
         if (_active?.id == offer.id) {
-          _say('Order accepted. Go to ${_active!.restaurantName}.');
+          _say(_active!.isGroup ? 'Order accepted. Collect it from ${_active!.stops.length} restaurants.' : 'Order accepted. Go to ${_active!.restaurantName}.');
           return true;
         }
         _say('No internet – the order was not accepted. Try again.');
@@ -760,7 +777,7 @@ class RiderController extends ChangeNotifier {
     // with the food already picked up stays: the rider must read what to do with it.
     final n = _notice;
     if (n != null && !(n.kind == NoticeKind.cancelled && n.order.pickedUpAt != null)) _notice = null;
-    services.socket.watchOrder(o.id);
+    _watch(o);
     _updateConnection();
     _resumeSharingForActive();
     _notify();
@@ -781,16 +798,37 @@ class RiderController extends ChangeNotifier {
     _activeChecked = true;
     _lastSync = _now();
     final list = r.value!;
-    final live = list.where((o) => !o.status.isTerminal).toList()
+    // A combined order comes back as one OrderView per restaurant: fold them into ONE delivery (Docs/22).
+    final groups = <String, List<OrderView>>{};
+    for (final o in list) {
+      final g = o.group;
+      if (g != null) (groups[g.id] ??= []).add(o);
+    }
+    final jobs = <OrderView>[
+      for (final o in list)
+        if (o.group == null) o,
+      for (final copies in groups.values)
+        if (OrderView.mergeGroup(copies) case final merged?) merged,
+    ];
+    final live = jobs.where((o) => !o.status.isTerminal).toList()
       ..sort((a, b) => (a.createdAt ?? DateTime(2000)).compareTo(b.createdAt ?? DateTime(2000)));
 
     final current = _active;
     if (current != null) {
-      final same = list.where((o) => o.id == current.id).toList();
-      if (same.isNotEmpty) {
-        _apply(same.first);
+      if (current.isGroup) {
+        final copies = groups[current.group!.id];
+        if (copies != null && copies.isNotEmpty) {
+          _applyGroup(current, copies);
+        } else {
+          await _resolveMissing(current);
+        }
       } else {
-        await _resolveMissing(current);
+        final same = list.where((o) => o.id == current.id).toList();
+        if (same.isNotEmpty) {
+          _apply(same.first);
+        } else {
+          await _resolveMissing(current);
+        }
       }
     }
     if (_active == null && live.isNotEmpty) _setActive(live.first);
@@ -801,7 +839,12 @@ class RiderController extends ChangeNotifier {
   /// Merge a fresh copy of the active order (REST or socket) using `updatedAt`.
   void _apply(OrderView incoming) {
     final cur = _active;
-    if (cur == null || incoming.id != cur.id) return;
+    if (cur == null) return;
+    if (cur.isGroup) {
+      if (incoming.group?.id == cur.group!.id) _applyGroup(cur, [incoming]);
+      return;
+    }
+    if (incoming.id != cur.id) return;
     if (!incoming.isAtLeastAsNewAs(cur)) return;
     _reviewLock(incoming);
     if (incoming.status == OrderStatus.delivered) {
@@ -813,6 +856,25 @@ class RiderController extends ChangeNotifier {
       return;
     }
     _active = incoming;
+    _notify();
+  }
+
+  /// A fresher copy of one or more children of the combined delivery on screen: merge them in (each child by its own
+  /// `updatedAt`), then act on the result exactly like a single order. The server delivers and cancels every child
+  /// at once, so one delivered / cancelled child closes the whole delivery.
+  void _applyGroup(OrderView cur, Iterable<OrderView> copies) {
+    final merged = cur.mergedWith(copies);
+    if (merged == null) return;
+    _reviewLock(merged);
+    if (merged.status == OrderStatus.delivered) {
+      _finish(merged, NoticeKind.delivered);
+      return;
+    }
+    if (merged.status == OrderStatus.cancelled) {
+      _finish(merged, NoticeKind.cancelled);
+      return;
+    }
+    _active = merged;
     _notify();
   }
 
@@ -840,11 +902,11 @@ class RiderController extends ChangeNotifier {
       final o = r.value!;
       if (o.status.isTerminal) {
         _apply(o);
-        if (_active?.id == cur.id) _finish(o, o.status == OrderStatus.delivered ? NoticeKind.delivered : NoticeKind.cancelled);
+        if (_active?.id == cur.id) _finish(cur.isGroup ? (cur.mergedWith([o]) ?? o) : o, o.status == OrderStatus.delivered ? NoticeKind.delivered : NoticeKind.cancelled);
       } else if (_isMine(o)) {
         _apply(o);
       } else {
-        _finish(o, NoticeKind.reassigned);
+        _finish(cur.isGroup ? cur : o, NoticeKind.reassigned);
       }
       return;
     }
@@ -859,9 +921,10 @@ class RiderController extends ChangeNotifier {
   /// Re-reads one order after an action failed in a way that may hide a success.
   Future<void> _refreshOne(String id) async {
     final cur = _active;
-    if (cur == null || cur.id != id) return;
+    if (cur == null || !_roomIds(cur).contains(id)) return;
+    final leadId = cur.id;
     final r = await _api.fetchOrder(id);
-    if (_disposed || _active?.id != id) return;
+    if (_disposed || _active?.id != leadId) return;
     if (r.ok) {
       final o = r.value!;
       if (o.status.isTerminal || _isMine(o)) {
@@ -876,7 +939,7 @@ class RiderController extends ChangeNotifier {
   }
 
   void _finish(OrderView o, NoticeKind kind) {
-    services.socket.unwatchOrder(o.id);
+    _unwatch(_active != null && _active!.id == o.id ? _active! : o);
     final releasedByMe = kind == NoticeKind.reassigned && _releasingId == o.id;
     _active = null;
     _lockedAt.remove(o.id);
@@ -890,7 +953,7 @@ class RiderController extends ChangeNotifier {
       _notice = DeliveryNotice(kind, o);
     }
     if (kind == NoticeKind.delivered) {
-      _history = [o, ..._history.where((h) => h.id != o.id)];
+      _history = [o, ..._history.where((h) => h.id != o.id && (o.group == null || h.group?.id != o.group!.id))];
     }
     _updateConnection();
     _stopSharingIfIdle();
@@ -905,28 +968,58 @@ class RiderController extends ChangeNotifier {
   }
 
   /// "Picked up" (only once the restaurant marked it READY_FOR_PICKUP) and "Arrived at the drop point".
+  /// A combined order is picked up stop by stop ([pickUpStop]); "Arrived" is ONE step for the whole order, allowed only
+  /// once every restaurant handed over its food.
   Future<void> advance(OrderStatus target) async {
     final cur = _active;
     if (cur == null || _actionBusy || _disposed) return;
+    if (cur.isGroup && target == OrderStatus.pickedUp) return; // per stop only: see pickUpStop
     final allowed = (target == OrderStatus.pickedUp && cur.status == OrderStatus.readyForPickup) ||
         (target == OrderStatus.arrivedAtGate && cur.status == OrderStatus.pickedUp);
     if (!allowed) {
-      _actionError = target == OrderStatus.pickedUp ? 'Restaurant is still preparing. Wait until it is marked ready.' : 'Mark the order as picked up first.';
+      _actionError = target == OrderStatus.pickedUp
+          ? 'Restaurant is still preparing. Wait until it is marked ready.'
+          : (cur.isGroup ? 'Pick up the food from every restaurant first.' : 'Mark the order as picked up first.');
       _notify();
       return;
     }
+    await _sendStatus(cur, cur.id, target);
+  }
+
+  /// "Picked up" for ONE restaurant of a combined order. Only that restaurant's own READY_FOR_PICKUP counts.
+  Future<void> pickUpStop(String orderId) async {
+    final cur = _active;
+    if (cur == null || !cur.isGroup || _actionBusy || _disposed) return;
+    final stop = cur.stops.where((s) => s.orderId == orderId).firstOrNull;
+    if (stop == null || stop.pickedUp) return;
+    if (stop.status != OrderStatus.readyForPickup) {
+      _actionError = '${stop.name} is still preparing. Wait until it is marked ready.';
+      _notify();
+      return;
+    }
+    await _sendStatus(cur, orderId, OrderStatus.pickedUp);
+  }
+
+  OrderStatus? _statusNow(OrderStatus target, String id) {
+    final a = _active;
+    if (a == null) return null;
+    if (a.isGroup && target == OrderStatus.pickedUp) return a.stops.where((s) => s.orderId == id).firstOrNull?.status;
+    return a.status;
+  }
+
+  Future<void> _sendStatus(OrderView cur, String id, OrderStatus target) async {
     _actionBusy = true;
     _actionError = null;
     _notify();
-    final r = await _api.updateStatus(cur.id, target);
+    final r = await _api.updateStatus(id, target);
     if (_disposed) return;
     _actionBusy = false;
     if (r.ok) {
       final o = r.value;
-      if (o != null && o.id == cur.id) {
+      if (o != null && o.id == id) {
         _apply(o);
       } else {
-        await _refreshOne(cur.id);
+        await _refreshOne(id);
       }
       _notify();
       return;
@@ -936,8 +1029,8 @@ class RiderController extends ChangeNotifier {
       case ApiFailure.timeout:
         _actionError = 'No internet. This step was not saved – try again.';
         _notify();
-        await _refreshOne(cur.id); // it may have reached Kraveo after all
-        if (_active?.status == target) _actionError = null;
+        await _refreshOne(id); // it may have reached Kraveo after all
+        if (_statusNow(target, id) == target) _actionError = null;
       case ApiFailure.conflict:
       case ApiFailure.badRequest:
         // INVALID_TRANSITION / ORDER_CLOSED / INVALID_STATUS: the server's status differs from ours. Re-read it.
@@ -945,10 +1038,11 @@ class RiderController extends ChangeNotifier {
           'INVALID_TRANSITION' => target == OrderStatus.pickedUp
               ? 'The restaurant has not marked this order ready yet.'
               : 'Kraveo did not accept this step. Showing the latest status.',
+          'GROUP_NOT_PICKED_UP' => 'Pick up the food from every restaurant first.',
           'ORDER_CLOSED' => 'This order is already closed.',
           _ => r.message ?? 'Kraveo did not accept this step.',
         };
-        await _refreshOne(cur.id);
+        await _refreshOne(id);
       case ApiFailure.forbidden when r.code == 'ROLE_NOT_ALLOWED':
         _actionError = r.message ?? 'Kraveo did not allow this step.';
       case ApiFailure.notFound:
@@ -980,7 +1074,7 @@ class RiderController extends ChangeNotifier {
       } else {
         await _refreshOne(cur.id);
         // Kraveo answered 2xx for the code: the delivery is done even if the copy is not.
-        if (_active?.id == cur.id) _finish(o ?? cur, NoticeKind.delivered);
+        if (_active?.id == cur.id) _finish(cur.isGroup ? cur : (o ?? cur), NoticeKind.delivered);
       }
       return const OtpOutcome(OtpOutcomeKind.delivered);
     }
@@ -1039,8 +1133,10 @@ class RiderController extends ChangeNotifier {
   Future<void> release() async {
     final cur = _active;
     if (cur == null || _actionBusy || _disposed) return;
-    if (!cur.status.isBeforePickup) {
-      _actionError = 'You already have the food. Only Kraveo support can move this delivery now.';
+    if (!cur.canRelease) {
+      _actionError = cur.isGroup
+          ? 'You already have food from one of the restaurants. Only Kraveo support can move this delivery now.'
+          : 'You already have the food. Only Kraveo support can move this delivery now.';
       _notify();
       return;
     }
@@ -1052,7 +1148,7 @@ class RiderController extends ChangeNotifier {
     if (_disposed) return;
     _actionBusy = false;
     if (r.ok) {
-      services.socket.unwatchOrder(cur.id);
+      _unwatch(cur);
       _active = null;
       _lockedAt.remove(cur.id);
       _releasingId = null;
@@ -1072,7 +1168,9 @@ class RiderController extends ChangeNotifier {
       case ApiFailure.conflict:
       case ApiFailure.badRequest:
         _actionError = r.code == 'CANNOT_RELEASE'
-            ? 'This job can no longer be released (the food was already picked up). Contact Kraveo support.'
+            ? (cur.isGroup
+                ? 'This combined order can no longer be released (food from one restaurant was already picked up). Contact Kraveo support.'
+                : 'This job can no longer be released (the food was already picked up). Contact Kraveo support.')
             : (r.message ?? 'This job can no longer be released.');
         await _refreshOne(cur.id);
       case ApiFailure.notFound:
@@ -1111,7 +1209,13 @@ class RiderController extends ChangeNotifier {
         _removeOffer(id);
       case OrderUpdated(:final order):
         final cur = _active;
-        if (cur != null && cur.id == order.id) {
+        if (cur != null && cur.isGroup && order.group?.id == cur.group!.id) {
+          if (order.status.isTerminal || _isMine(order)) {
+            _applyGroup(cur, [order]);
+          } else {
+            unawaited(refreshActive()); // confirm with the REST list before removing anything
+          }
+        } else if (cur != null && cur.id == order.id) {
           if (order.status.isTerminal || _isMine(order)) {
             _apply(order);
           } else {
@@ -1193,9 +1297,30 @@ class RiderController extends ChangeNotifier {
     _notify();
   }
 
+  /// One entry per order, and ONE entry per combined order: its children (each its own OrderView in the history list)
+  /// are folded into a single delivery, so a combined order counts as one trip with the sum of its delivery fees.
   static List<OrderView> _dedupe(List<OrderView> list) {
+    final flat = <OrderView>[
+      for (final o in list)
+        if (o.groupParts.isNotEmpty) ...o.groupParts else o,
+    ];
     final seen = <String>{};
-    return [for (final o in list) if (seen.add(o.id)) o];
+    final groups = <String, List<OrderView>>{};
+    for (final o in flat) {
+      final g = o.group;
+      if (g != null) (groups[g.id] ??= []).add(o);
+    }
+    final out = <OrderView>[];
+    final done = <String>{};
+    for (final o in flat) {
+      final g = o.group;
+      if (g == null) {
+        if (seen.add(o.id)) out.add(o);
+      } else if (done.add(g.id)) {
+        out.add(OrderView.mergeGroup(groups[g.id]!) ?? o);
+      }
+    }
+    return out;
   }
 
   /// Orders this rider delivered (the only ones that count for fees).

@@ -53,10 +53,14 @@ class _DeliveryMapCardState extends State<DeliveryMapCard> {
   MapViewSpec? _spec;
   GeoPoint? _specPickup;
   GeoPoint? _specDrop;
+  List<MapPin> _specMore = const [];
 
   MapViewFactory get _factory => widget.factory ?? const GoogleMapViewFactory();
 
-  GeoPoint? get _pickup => widget.order.vendor?.point;
+  /// Every restaurant pin the server vouched for: one for a single order, one per stop for a combined order.
+  List<MapPin> get _pickups => _pinsOf(widget.order);
+
+  GeoPoint? get _pickup => _pickups.firstOrNull?.point;
   GeoPoint? get _drop => widget.order.dropPlace?.point;
   bool get _hasPins => _pickup != null || _drop != null;
 
@@ -115,7 +119,7 @@ class _DeliveryMapCardState extends State<DeliveryMapCard> {
   void didUpdateWidget(covariant DeliveryMapCard old) {
     super.didUpdateWidget(old);
     // The pins appeared after the first build (the order was refreshed): try the map then.
-    if (_mode == _Mode.fallback && _hasPins && old.order.vendor?.point == null && old.order.dropPlace == null) {
+    if (_mode == _Mode.fallback && _hasPins && _pinsOf(old.order).isEmpty && old.order.dropPlace == null) {
       _mode = _Mode.checking;
       unawaited(_probe());
     }
@@ -127,16 +131,26 @@ class _DeliveryMapCardState extends State<DeliveryMapCard> {
     super.dispose();
   }
 
+  static List<MapPin> _pinsOf(OrderView o) {
+    if (o.isGroup) return [for (final s in o.stops) if (s.point != null) MapPin(s.point!, s.name)];
+    final p = o.vendor?.point;
+    return p == null ? const [] : [MapPin(p, o.restaurantName)];
+  }
+
   /// A spec that stays identical while the pins do not change, so the map is not told to refit.
   MapViewSpec _specFor() {
+    final pins = _pickups;
     final pickup = _pickup, drop = _drop;
+    final more = pins.length > 1 ? pins.sublist(1) : const <MapPin>[];
     final cached = _spec;
-    if (cached != null && _specPickup == pickup && _specDrop == drop) return cached;
+    if (cached != null && _specPickup == pickup && _specDrop == drop && listEquals(_specMore, more)) return cached;
     _specPickup = pickup;
     _specDrop = drop;
+    _specMore = more;
     return _spec = MapViewSpec(
       pickup: pickup,
-      pickupName: widget.order.restaurantName,
+      pickupName: pins.isEmpty ? widget.order.restaurantName : pins.first.name,
+      morePickups: more,
       drop: drop,
       dropName: widget.order.dropPlace?.name ?? widget.order.dropLabel,
       rider: widget.rider,
@@ -208,13 +222,25 @@ class _PlainMapCard extends StatelessWidget {
             Expanded(child: Text('On the map', style: KraveoType.titleMd.copyWith(color: k.ink))),
           ]),
           const SizedBox(height: 10),
-          _PlaceRow(
-            icon: LucideIcons.store,
-            role: 'Pickup',
-            name: order.restaurantName,
-            distance: pickup == null ? null : _distance(me, pickup),
-            note: pickup == null ? 'Location not set' : null,
-          ),
+          if (order.isGroup)
+            for (final stop in order.stops) ...[
+              _PlaceRow(
+                icon: LucideIcons.store,
+                role: 'Pickup ${stop.index + 1}',
+                name: stop.name,
+                distance: stop.point == null ? null : _distance(me, stop.point!),
+                note: stop.point == null ? 'Location not set' : null,
+              ),
+              const SizedBox(height: 8),
+            ]
+          else
+            _PlaceRow(
+              icon: LucideIcons.store,
+              role: 'Pickup',
+              name: order.restaurantName,
+              distance: pickup == null ? null : _distance(me, pickup),
+              note: pickup == null ? 'Location not set' : null,
+            ),
           if (drop != null) ...[
             const SizedBox(height: 8),
             _PlaceRow(icon: LucideIcons.mapPin, role: 'Drop', name: drop.name, distance: _distance(me, drop.point)),

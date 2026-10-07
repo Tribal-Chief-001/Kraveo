@@ -66,6 +66,10 @@ abstract class RiderSocket {
   void dispose();
 }
 
+/// The Socket.io handshake `auth`: the saved JWT plus `groups: 1`, which tells Kraveo this app understands combined
+/// (multi-restaurant) orders, so it sends `order_available` / `order_unavailable` for them too (Docs/22 section 10.5).
+Map<String, dynamic> handshakeAuth(String token) => {'token': token.replaceFirst(RegExp(r'^Bearer\s+'), ''), 'groups': 1};
+
 /// Real Socket.io client.
 class IoRiderSocket implements RiderSocket {
   IoRiderSocket({String? url}) : _url = url ?? ApiConfig.socketUrl;
@@ -102,7 +106,7 @@ class IoRiderSocket implements RiderSocket {
         _url,
         io.OptionBuilder()
             .setTransports(['websocket'])
-            .setAuth({'token': token.replaceFirst(RegExp(r'^Bearer\s+'), '')})
+            .setAuth(handshakeAuth(token))
             .disableAutoConnect()
             .enableForceNew()
             .enableReconnection()

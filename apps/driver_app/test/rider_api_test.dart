@@ -47,7 +47,7 @@ void main() {
       return json({'success': true, 'nextCursor': 'c2', 'data': [orderJson(status: 'DELIVERED')]});
     });
     expect(seen.map((r) => '${r.method} ${r.url.path}?${r.url.query}'), [
-      'GET /api/orders/available?',
+      'GET /api/orders/available?groups=1',
       'GET /api/orders?scope=active&limit=20',
       'GET /api/orders?scope=history&limit=30&cursor=c1',
     ]);

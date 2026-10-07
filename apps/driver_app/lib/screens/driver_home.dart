@@ -371,7 +371,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with WidgetsBinding
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Order ${active.shortRef} · ${active.restaurantName}',
+                      Text('Order ${active.shortRef} · ${active.headlineName}',
                           maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.headlineSm.copyWith(color: k.ink)),
                       const SizedBox(height: 16),
                       PipelineStepper(currentStep: PipelineStepper.stepFor(active.status)),

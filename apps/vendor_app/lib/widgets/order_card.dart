@@ -6,6 +6,7 @@ import 'package:kraveo_ui/kraveo_ui.dart';
 import '../models/order_model.dart';
 import '../services/failure_messages.dart';
 import '../services/order_queue_controller.dart';
+import 'group_note.dart';
 import 'ui/ui.dart';
 
 /// One order in the kitchen list or the history. Shows only what the restaurant may see (customer first
@@ -191,6 +192,10 @@ class _OrderCardState extends State<OrderCard> {
 
           const SizedBox(height: 10),
           _MetaLine(order: order),
+          if (order.isGrouped && !status.isTerminal) ...[
+            const SizedBox(height: 10),
+            GroupNote(order: order),
+          ],
           const SizedBox(height: 12),
 
           // Items: big rows, tap to tick off while cooking
@@ -240,7 +245,8 @@ class _OrderCardState extends State<OrderCard> {
               icon: LucideIcons.flame,
               large: true,
               loading: busy,
-              onPressed: busy ? null : () => _run(() => _c.startCooking(order.id), 'Order ${order.shortCode}: preparing  ·  बन रहा है'),
+              // A combined order: nobody starts cooking while another restaurant may still decline (Docs/22 section 4.5).
+              onPressed: (busy || order.waitingForGroup) ? null : () => _run(() => _c.startCooking(order.id), 'Order ${order.shortCode}: preparing  ·  बन रहा है'),
             )
           else if (isPreparing)
             KButton(

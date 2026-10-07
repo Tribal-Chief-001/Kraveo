@@ -144,6 +144,8 @@ class _DeliveryViewState extends State<_DeliveryView> {
   /// when the drop point is not a known campus point: the name stays on screen as text).
   Widget? _navigateButton(BuildContext context) {
     final k = context.k;
+    // A combined order has one Navigate button per restaurant (in the stop list); only the drop point is shared.
+    if (o.isGroup && !o.allStopsPickedUp) return null;
     if (o.status.isBeforePickup) {
       final pin = o.vendor?.point;
       return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -182,8 +184,12 @@ class _DeliveryViewState extends State<_DeliveryView> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Text('Release this job?', textAlign: TextAlign.center, style: KraveoType.headline.copyWith(color: k.ink)),
             const SizedBox(height: 8),
-            Text('Order ${o.shortRef} goes back to other riders. Only do this if you cannot pick it up.',
-                textAlign: TextAlign.center, style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 16)),
+            Text(
+                o.isGroup
+                    ? 'This combined order (${o.stops.map((s) => s.name).join(' + ')}) goes back to other riders. You will not collect from any of the ${o.stops.length} restaurants. Only do this if you cannot pick it up.'
+                    : 'Order ${o.shortRef} goes back to other riders. Only do this if you cannot pick it up.',
+                textAlign: TextAlign.center,
+                style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 16)),
             const SizedBox(height: 24),
             KButton(label: 'Keep the job', large: true, onPressed: () => Navigator.of(ctx).pop(false)),
             const SizedBox(height: 12),
@@ -210,9 +216,11 @@ class _DeliveryViewState extends State<_DeliveryView> {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final phone = o.customer?.phone;
 
+    final pickedCount = o.stops.where((s) => s.pickedUp).length;
     final (String headline, String where, IconData whereIcon) = switch (status) {
       OrderStatus.pickedUp => ('Ride to the drop point', o.dropLabel, LucideIcons.mapPin),
       OrderStatus.arrivedAtGate => ('Hand over the order', o.dropLabel, LucideIcons.mapPin),
+      _ when o.isGroup => ('Collect from ${o.stops.length} restaurants', '$pickedCount of ${o.stops.length} picked up', LucideIcons.store),
       _ => ('Go to the restaurant', o.restaurantName, LucideIcons.store),
     };
 
@@ -222,6 +230,12 @@ class _DeliveryViewState extends State<_DeliveryView> {
           color: KraveoPalette.danger,
           title: RiderController.supportMessage,
           message: 'Too many wrong codes. Do not hand over the food until Kraveo support unlocks it.',
+        ),
+      _ when o.isGroup && status.isBeforePickup => _Banner(
+          icon: LucideIcons.store,
+          color: KStatus.preparing.color,
+          title: 'One rider, ${o.stops.length} restaurants',
+          message: 'Mark each restaurant picked up once its food is ready. You can only ride to the drop point after all of them.',
         ),
       OrderStatus.accepted || OrderStatus.preparing => _Banner(
           icon: LucideIcons.chefHat,
@@ -278,6 +292,13 @@ class _DeliveryViewState extends State<_DeliveryView> {
       ]);
     } else {
       action = switch (status) {
+        _ when o.isGroup && status.isBeforePickup => const KButton(
+            key: ValueKey('group-pickup-pending'),
+            label: 'Pick up every restaurant first',
+            icon: LucideIcons.package,
+            large: true,
+            onPressed: null,
+          ),
         OrderStatus.readyForPickup => Semantics(
             label: 'Slide to confirm picked up',
             button: true,
@@ -305,7 +326,7 @@ class _DeliveryViewState extends State<_DeliveryView> {
     }
 
     final navigateButton = _navigateButton(context);
-    final showMap = o.vendor?.point != null || o.dropPlace != null;
+    final showMap = o.isGroup ? (o.stops.any((s) => s.point != null) || o.dropPlace != null) : (o.vendor?.point != null || o.dropPlace != null);
 
     return RefreshIndicator(
       onRefresh: c.pollNow,
@@ -314,7 +335,7 @@ class _DeliveryViewState extends State<_DeliveryView> {
         children: [
           ScreenHeader(
             title: 'Delivery',
-            subtitle: 'Order ${o.shortRef}',
+            subtitle: o.isGroup ? 'Combined order ${o.shortRef}' : 'Order ${o.shortRef}',
             trailing: Semantics(
               label: 'Delivery fee ${OfferCard.rupees(o.deliveryFee)}',
               excludeSemantics: true,
@@ -345,7 +366,7 @@ class _DeliveryViewState extends State<_DeliveryView> {
                 const SizedBox(width: 8),
                 Expanded(child: Text(where, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.inkMuted))),
               ]),
-              if (status.isBeforePickup && (o.vendor?.address ?? '').isNotEmpty)
+              if (!o.isGroup && status.isBeforePickup && (o.vendor?.address ?? '').isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(left: 26, top: 2),
                   child: Text(o.vendor!.address!, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkFaint)),
@@ -363,6 +384,11 @@ class _DeliveryViewState extends State<_DeliveryView> {
             Padding(
               padding: const EdgeInsets.fromLTRB(KSpace.gutter, 10, KSpace.gutter, 0),
               child: Text(c.actionError!, key: const ValueKey('action-error'), style: KraveoType.titleMd.copyWith(color: KraveoPalette.danger)),
+            ),
+          if (o.isGroup)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0),
+              child: _StopList(order: o, busy: c.actionBusy, onPickUp: c.pickUpStop, onNavigate: _navigate),
             ),
           if (navigateButton != null) Padding(padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0), child: navigateButton),
           if (showMap)
@@ -402,7 +428,7 @@ class _DeliveryViewState extends State<_DeliveryView> {
             padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0),
             child: _OrderDetails(open: _detailsOpen, onToggle: () => setState(() => _detailsOpen = !_detailsOpen), order: o),
           ),
-          if (status.isBeforePickup && !c.actionBusy)
+          if (o.canRelease && !c.actionBusy)
             Padding(
               padding: const EdgeInsets.fromLTRB(KSpace.gutter, 16, KSpace.gutter, 0),
               child: KButton(
@@ -435,12 +461,13 @@ class _NoticeView extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.k;
     final o = notice.order;
+    final what = o.isGroup ? 'Combined order' : 'Order';
     final (IconData icon, Color color, String title, String message, String button) = switch (notice.kind) {
       NoticeKind.delivered => (
           LucideIcons.check,
           k.brand,
           'Delivered',
-          'Order ${o.shortRef} is complete. Delivery fee ${OfferCard.rupees(o.deliveryFee)}.',
+          '$what ${o.shortRef} is complete. Delivery fee ${OfferCard.rupees(o.deliveryFee)}.',
           'Back to home',
         ),
       NoticeKind.cancelled => (
@@ -448,12 +475,12 @@ class _NoticeView extends StatelessWidget {
           KraveoPalette.danger,
           'Stop – this order was cancelled',
           [
-            'Order ${o.shortRef} was cancelled${_by(o.cancelledBy)}.',
+            '$what ${o.shortRef} was cancelled${_by(o.cancelledBy)}.',
             if (o.cancelReason != null) 'Reason: ${o.cancelReason}.',
             if (o.isRefunded) 'The customer has been refunded.',
             o.pickedUpAt != null
                 ? 'Do not hand over the food. Email Kraveo support to ask what to do with it.'
-                : 'Do not go to the restaurant for this order.',
+                : (o.isGroup ? 'Do not go to the restaurants for this order.' : 'Do not go to the restaurant for this order.'),
           ].join(' '),
           'OK, got it',
         ),
@@ -461,7 +488,7 @@ class _NoticeView extends StatelessWidget {
           LucideIcons.arrowLeftRight,
           KStatus.placed.color,
           'This delivery was moved',
-          'Kraveo moved order ${o.shortRef} away from you (another rider or support has it now). You do not need to do anything more for it.',
+          'Kraveo moved ${what.toLowerCase()} ${o.shortRef} away from you (another rider or support has it now). You do not need to do anything more for it.',
           'OK, got it',
         ),
     };
@@ -504,6 +531,119 @@ class _NoticeView extends StatelessWidget {
         'SYSTEM' => ' automatically',
         _ => '',
       };
+}
+
+/// The restaurants of a combined order: name, address, item count, status, and for each one its own Navigate and
+/// "Picked up" (enabled only while THAT restaurant's order is READY_FOR_PICKUP).
+class _StopList extends StatelessWidget {
+  const _StopList({required this.order, required this.busy, required this.onPickUp, required this.onNavigate});
+
+  final OrderView order;
+  final bool busy;
+  final Future<void> Function(String orderId) onPickUp;
+  final Future<void> Function(GeoPoint point, String label) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final stops = order.stops;
+    return KCard(
+      key: const ValueKey('stop-list'),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(LucideIcons.store, size: 20, color: k.inkMuted),
+          const SizedBox(width: 10),
+          Expanded(child: Text('Restaurants (${stops.where((s) => s.pickedUp).length} of ${stops.length} picked up)', style: KraveoType.titleLg.copyWith(color: k.ink))),
+        ]),
+        for (var i = 0; i < stops.length; i++) ...[
+          if (i > 0) Divider(color: k.line, height: 24),
+          if (i == 0) const SizedBox(height: 10),
+          _StopRow(stop: stops[i], number: i + 1, busy: busy, onPickUp: onPickUp, onNavigate: onNavigate),
+        ],
+      ]),
+    );
+  }
+}
+
+class _StopRow extends StatelessWidget {
+  const _StopRow({required this.stop, required this.number, required this.busy, required this.onPickUp, required this.onNavigate});
+
+  final GroupStopView stop;
+  final int number;
+  final bool busy;
+  final Future<void> Function(String orderId) onPickUp;
+  final Future<void> Function(GeoPoint point, String label) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final id = stop.orderId;
+    final pin = stop.point;
+    final items = '${stop.itemCount} item${stop.itemCount == 1 ? '' : 's'}';
+    final done = stop.pickedUp;
+    final Widget action;
+    if (done) {
+      action = Row(key: ValueKey('stop-picked-$id'), children: [
+        Icon(LucideIcons.circleCheck, size: 20, color: k.brand),
+        const SizedBox(width: 8),
+        Expanded(child: Text('Picked up', style: KraveoType.titleMd.copyWith(color: k.brand))),
+      ]);
+    } else if (stop.status == OrderStatus.readyForPickup) {
+      action = busy
+          ? const KButton(key: ValueKey('stop-saving'), label: 'Saving…', loading: true)
+          : Semantics(
+              label: 'Slide to confirm picked up from ${stop.name}',
+              button: true,
+              excludeSemantics: true,
+              onTap: () => onPickUp(id),
+              child: KSlideToConfirm(key: ValueKey('slide-pickup-$id'), label: 'Slide · picked up', icon: LucideIcons.package, onConfirmed: () => onPickUp(id)),
+            );
+    } else {
+      final waiting = stop.status == OrderStatus.placed || stop.status == OrderStatus.unknown ? 'Waiting for restaurant to accept' : 'Waiting for kitchen';
+      action = Row(key: ValueKey('stop-waiting-$id'), children: [
+        Icon(stop.status == OrderStatus.placed ? LucideIcons.clock : LucideIcons.chefHat, size: 20, color: k.inkMuted),
+        const SizedBox(width: 8),
+        Expanded(child: Text(waiting, style: KraveoType.titleMd.copyWith(color: k.inkMuted))),
+      ]);
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 32,
+          height: 32,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(color: k.brandSoft, shape: BoxShape.circle),
+          child: Text('$number', style: KraveoType.label.copyWith(color: k.brand)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(stop.name, key: ValueKey('stop-name-$id'), style: KraveoType.titleLg.copyWith(color: k.ink)),
+            if ((stop.address ?? '').isNotEmpty) Text(stop.address!, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+            Text(items, style: KraveoType.bodySm.copyWith(color: k.inkFaint)),
+          ]),
+        ),
+      ]),
+      const SizedBox(height: 10),
+      action,
+      if (!done) ...[
+        const SizedBox(height: 8),
+        KButton(
+          key: ValueKey('navigate-stop-$id'),
+          label: 'Navigate to ${stop.name}',
+          icon: LucideIcons.navigation,
+          kind: KButtonKind.tonal,
+          onPressed: pin == null ? null : () => onNavigate(pin, stop.name),
+        ),
+        if (pin == null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text('Restaurant location not set - follow the address', key: ValueKey('stop-location-missing-$id'), style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+          ),
+      ],
+    ]);
+  }
 }
 
 class _Banner extends StatelessWidget {
@@ -601,7 +741,10 @@ class _OrderDetails extends StatelessWidget {
                     child: Column(children: [
                       Divider(color: k.line, height: 1),
                       const SizedBox(height: 12),
-                      _Line(icon: LucideIcons.store, label: 'Restaurant', value: o.restaurantName),
+                      if (o.isGroup)
+                        for (final stop in o.stops) _Line(icon: LucideIcons.store, label: 'Restaurant ${stop.index + 1}', value: stop.name)
+                      else
+                        _Line(icon: LucideIcons.store, label: 'Restaurant', value: o.restaurantName),
                       if (o.customer?.name != null) _Line(icon: LucideIcons.user, label: 'Customer', value: o.customer!.name!),
                       _Line(icon: LucideIcons.mapPin, label: 'Drop', value: o.dropLabel),
                       for (final item in o.items) _Line(icon: LucideIcons.package, label: '${item.quantity} ×', value: item.name),

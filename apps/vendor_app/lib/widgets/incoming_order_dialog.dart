@@ -6,6 +6,7 @@ import 'package:kraveo_ui/kraveo_ui.dart';
 import '../models/order_model.dart';
 import '../services/failure_messages.dart';
 import '../services/order_queue_controller.dart';
+import 'group_note.dart';
 import 'ui/ui.dart';
 
 /// Quick reasons for rejecting an order. The English text is what the customer is shown.
@@ -213,6 +214,10 @@ class _IncomingOrderDialogState extends State<IncomingOrderDialog> with SingleTi
     if (_panel == _Panel.reject) return _buildReasons(k);
     return VMaxWidth(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (order.isGrouped) ...[
+          GroupNote(order: order),
+          const SizedBox(height: 10),
+        ],
         if (order.customerNote != null) ...[
           VNoteCallout(note: order.customerNote!, compact: true),
           const SizedBox(height: 10),
