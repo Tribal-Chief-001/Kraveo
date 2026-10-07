@@ -142,7 +142,7 @@ describe('Order groups: push and stress', () => {
       expect(fake.of('ORDER_DELIVERED').map((m) => [m.data.orderId, owner.get(m.token)])).toEqual([[a, c.id]]);
       // the totals of the whole journey
       const byEvent = fake.sent.reduce<Record<string, number>>((acc, m) => ({ ...acc, [m.data.event]: (acc[m.data.event] ?? 0) + 1 }), {});
-      expect(byEvent).toEqual({ NEW_ORDER: 2, ORDER_ACCEPTED: 2, NEW_DELIVERY: 3, ORDER_PICKED_UP: 1, RIDER_AT_GATE: 1, ORDER_DELIVERED: 1 });
+      expect(byEvent).toEqual({ NEW_ORDER: 2, ORDER_ACCEPTED: 2, GROUP_READY_TO_COOK: 1, NEW_DELIVERY: 3, ORDER_PICKED_UP: 1, RIDER_AT_GATE: 1, ORDER_DELIVERED: 1 });
       // no push ever carries the code (title, body or data)
       for (const m of fake.sent) expect(`${m.title} ${m.body} ${m.data.event}`).not.toContain(code);
       expect(await prisma.pushLog.count({ where: { orderId: b, event: { in: ['ORDER_PICKED_UP', 'RIDER_AT_GATE', 'ORDER_DELIVERED'] } } })).toBe(0);

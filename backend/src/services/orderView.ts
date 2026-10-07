@@ -38,6 +38,8 @@ export const ORDER_VIEW_INCLUDE = {
           driverId: true,
           paidAt: true,
           refundStatus: true,
+          cancelReason: true,
+          pickedUpAt: true,
           vendor: { select: { id: true, name: true, address: true, lat: true, lng: true } },
           items: { select: { quantity: true } },
         },

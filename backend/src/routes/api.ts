@@ -20,6 +20,7 @@ import { getSettings } from '../services/settings';
 import { verifyGoogleIdToken, GoogleAuthError } from '../services/googleAuth';
 import { timingSafeEqual } from 'crypto';
 import { orderRouter } from './orders';
+import { lockOrderInTx, OrderFlowError } from '../services/orderFlow';
 import { deviceRouter } from './devices';
 import { disableUserTokens } from '../services/push/deviceTokens';
 import { adminPinData, vendorLocationView, describePin, VENDOR_LOCATION_SELECT } from '../services/vendorLocation';
@@ -906,13 +907,16 @@ apiRouter.post('/reviews', requireAuth, requireRole('STUDENT'), async (req: Auth
   }
 
   try {
+    // Authorisation BEFORE any lock (Docs/22 review #7): somebody else's order is refused on a plain read, it never queues on a group.
+    const preview = await prisma.order.findUnique({ where: { id: orderId }, select: { customerId: true, driverId: true } });
+    if (!preview) return res.status(404).json({ success: false, message: 'Order not found.' });
+    if (preview.customerId !== req.user?.id) return res.status(403).json({ success: false, message: 'Only the student who placed a delivered order can review it.' });
     const result = await prisma.$transaction(async (tx) => {
-      // Row lock: two taps on "Submit" run one after the other, the second sees isReviewed.
-      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId} FOR UPDATE`;
-      const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: { select: { menuItemId: true } } } });
-      if (!order) {
-        throw new Error('ORDER_NOT_FOUND');
-      }
+      // Lock order is rider -> group -> children (Docs/22 section 3): the rider row is taken first because step 5 updates it.
+      if (preview.driverId && typeof driverRating === 'number') await tx.$queryRaw`SELECT "id" FROM "DriverPartner" WHERE "userId" = ${preview.driverId} FOR UPDATE`;
+      // Row lock (the group row and all its children for a combined order): two taps on "Submit" run one after the other, the second sees isReviewed.
+      const locked = await lockOrderInTx(tx, orderId).catch((e) => { throw e instanceof OrderFlowError && e.status === 404 ? new Error('ORDER_NOT_FOUND') : e; });
+      const order = locked.order;
 
       if (order.customerId !== req.user?.id || order.status !== 'DELIVERED') {
         throw new Error('FORBIDDEN');
@@ -929,11 +933,15 @@ apiRouter.post('/reviews', requireAuth, requireRole('STUDENT'), async (req: Auth
 
       const customerId = order.customerId;
 
-      // 1. Update User's Kraveo Coins (+10 per review)
-      const updatedUser = await tx.user.update({
-        where: { id: customerId },
-        data: { kraveoCoins: { increment: 10 } }
-      });
+      // Docs/22: a combined order is ONE delivery. Coins and the rider's rating move once per group (for the first review of any of its
+      // children); the other children can still be reviewed (dishes, notes) but earn nothing more. Safe: the group is locked here.
+      const firstOfDelivery = !order.groupId || (await tx.order.count({ where: { groupId: order.groupId, isReviewed: true } })) === 0;
+      const coins = firstOfDelivery ? 10 : 0;
+
+      // 1. Update User's Kraveo Coins (+10 per review, once per delivery)
+      const updatedUser = coins > 0
+        ? await tx.user.update({ where: { id: customerId }, data: { kraveoCoins: { increment: coins } } })
+        : await tx.user.findUniqueOrThrow({ where: { id: customerId } });
 
       // 2. Mark Order as reviewed
       await tx.order.update({
@@ -964,7 +972,7 @@ apiRouter.post('/reviews', requireAuth, requireRole('STUDENT'), async (req: Auth
       const updatedVendor = await tx.vendor.findUnique({ where: { id: order.vendorId }, select: { rating: true } });
 
       // 5. Update Driver Partner Rating if driver is assigned
-      if (order.driverId && typeof driverRating === 'number') {
+      if (firstOfDelivery && order.driverId && typeof driverRating === 'number') {
         const driver = await tx.driverPartner.findFirst({
           where: { OR: [{ id: order.driverId }, { userId: order.driverId }] }
         });
@@ -989,19 +997,19 @@ apiRouter.post('/reviews', requireAuth, requireRole('STUDENT'), async (req: Auth
           driverNotes: driverNotes || '',
           dishReviews: dishes,
           dhabaNotes: dhabaNotes || '',
-          coinsEarned: 10
+          coinsEarned: coins
         }
       });
 
-      return { updatedUser, updatedVendor, newReview };
+      return { updatedUser, updatedVendor, newReview, coins };
     });
 
-    console.log(`🪙 [Kraveo Coins Loyalty] User (${result.updatedUser.id}) earned +10 Kraveo Coins! Total Balance: ${result.updatedUser.kraveoCoins}`);
+    if (result.coins > 0) console.log(`🪙 [Kraveo Coins Loyalty] User (${result.updatedUser.id}) earned +${result.coins} Kraveo Coins! Total Balance: ${result.updatedUser.kraveoCoins}`);
 
     return res.json({
       success: true,
-      message: '🎉 Review submitted successfully! You earned +10 Kraveo Coins!',
-      coinsEarned: 10,
+      message: result.coins > 0 ? '🎉 Review submitted successfully! You earned +10 Kraveo Coins!' : 'Review submitted successfully! The coins for this combined order were already given for the first review.',
+      coinsEarned: result.coins,
       totalCoins: result.updatedUser.kraveoCoins,
       newVendorRating: result.updatedVendor?.rating,
       review: { id: result.newReview.id, orderId, driverRating: result.newReview.driverRating, driverTags: result.newReview.driverTags, driverNotes: result.newReview.driverNotes, dishReviews: result.newReview.dishReviews, dhabaNotes: result.newReview.dhabaNotes, coinsEarned: result.newReview.coinsEarned, createdAt: result.newReview.createdAt }

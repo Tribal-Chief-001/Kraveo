@@ -1,5 +1,5 @@
 import { prisma } from '../../db';
-import { ACTIVE_RIDER_STATUSES, OrderWithRelations, isPoolEligible, isVendorVisible, vendorEarnTotal, payableAmount } from '../orderView';
+import { ACTIVE_RIDER_STATUSES, OrderWithRelations, isPoolEligible, isVendorVisible, vendorEarnTotal, payableAmount, groupAllAccepted } from '../orderView';
 import { PushApp, PushEvent, PushOptions } from './types';
 
 /**
@@ -17,6 +17,8 @@ const DEFS: Record<PushEvent, Def> = {
   // Sent by the sweep once a minute while a paid order is still unanswered (the phone alarm only rings for a moment per push).
   NEW_ORDER_REMINDER: { app: 'VENDOR', channelId: 'new_orders', priority: 'high', ...URGENT },
   ORDER_CANCELLED_VENDOR: { app: 'VENDOR', channelId: 'order_updates', priority: 'high', ...STATUS },
+  // Docs/22: the last restaurant of a combined order accepted; the ones that accepted earlier may start cooking now.
+  GROUP_READY_TO_COOK: { app: 'VENDOR', channelId: 'order_updates', priority: 'high', ttlSeconds: 600, usefulMinutes: 10 },
   NEW_DELIVERY: { app: 'DRIVER', channelId: 'new_deliveries', priority: 'high', ...URGENT },
   DELIVERY_ASSIGNED: { app: 'DRIVER', channelId: 'new_deliveries', priority: 'high', ...STATUS },
   DELIVERY_CANCELLED: { app: 'DRIVER', channelId: 'order_updates', priority: 'high', ...STATUS },
@@ -44,7 +46,13 @@ const rupees = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 export const orderRef = (id: string) => `#${id.slice(-6).toUpperCase()}`;
 const firstName = (name: string | null | undefined) => safeText((name ?? '').trim().split(/\s+/)[0], 24);
 /** The text a cascaded sibling of a cancelled group carries (orderFlow.ts groupSiblingReason). */
-export const GROUP_CANCEL_PREFIX = 'Another restaurant in your order could not take it: ';
+export const GROUP_CANCEL_PREFIX = 'Another restaurant in your order could not take it';
+/** The real reason of a cancelled combined order: a cascaded sibling carries only the fixed text, the triggering child (or the group) the real one. */
+const realCancelReason = (o: OrderWithRelations): string => {
+  const own = o.cancelReason ?? '';
+  if (!o.group || !own.startsWith(GROUP_CANCEL_PREFIX)) return own;
+  return o.group.orders.find((s) => s.cancelReason && !s.cancelReason.startsWith(GROUP_CANCEL_PREFIX))?.cancelReason ?? own;
+};
 /** Riders: "Kitchen A" for a single order, "2 restaurants" for a combined one. */
 const placeLabel = (o: OrderWithRelations, vendor: string) => (o.group && o.group.orders.length > 1 ? `${o.group.orders.length} restaurants` : vendor);
 
@@ -68,6 +76,8 @@ export const buildCopy = (event: PushEvent, o: OrderWithRelations): { title: str
       const n = o.items.reduce((sum, i) => sum + i.quantity, 0);
       return { title: 'Order waiting - accept it now', body: `${n} item${n === 1 ? '' : 's'} - You earn Rs ${rupees(vendorEarnTotal(o))}. The customer is waiting.` };
     }
+    case 'GROUP_READY_TO_COOK':
+      return { title: 'Start cooking', body: 'All restaurants accepted - you can start cooking.' };
     case 'ORDER_CANCELLED_VENDOR':
       // Docs/22: a restaurant whose part of a combined order was cancelled because ANOTHER restaurant could not take its part.
       if (o.groupId && o.cancelledBy === 'SYSTEM' && (o.cancelReason ?? '').startsWith(GROUP_CANCEL_PREFIX)) {
@@ -91,7 +101,7 @@ export const buildCopy = (event: PushEvent, o: OrderWithRelations): { title: str
     case 'ORDER_DELIVERED':
       return { title: 'Delivered', body: 'Enjoy your meal! Rate your order.' };
     case 'ORDER_CANCELLED': {
-      const reason = safeText(o.cancelReason, 80).replace(/[.\s]+$/, '') || 'Your order was cancelled';
+      const reason = safeText(realCancelReason(o), 80).replace(/[.\s]+$/, '') || 'Your order was cancelled';
       const paid = o.paymentStatus === 'PAID' || o.paymentStatus === 'REFUNDED';
       return { title: 'Order cancelled', body: `${reason}.${paid ? ' Your refund is on its way.' : ''}` };
     }
@@ -126,6 +136,7 @@ export const resolveRecipients = async (event: PushEvent, o: OrderWithRelations,
     case 'NEW_ORDER':
     case 'NEW_ORDER_REMINDER':
     case 'ORDER_CANCELLED_VENDOR':
+    case 'GROUP_READY_TO_COOK':
       return o.vendor.userId && o.vendor.approvalStatus === 'APPROVED' ? [o.vendor.userId] : [];
     case 'NEW_DELIVERY':
       return idleRiders();
@@ -141,6 +152,7 @@ export const resolveRecipients = async (event: PushEvent, o: OrderWithRelations,
 export const stillUseful = (event: PushEvent, o: OrderWithRelations): boolean => {
   if (event === 'NEW_ORDER' || event === 'NEW_ORDER_REMINDER') return o.status === 'PLACED' && o.paymentStatus === 'PAID';
   if (event === 'NEW_DELIVERY') return isPoolEligible(o);
+  if (event === 'GROUP_READY_TO_COOK') return o.status === 'ACCEPTED';
   // A late retry must not announce a step the order has already moved past ("accepted" after "delivered").
   switch (event) {
     case 'ORDER_ACCEPTED': return o.status === 'ACCEPTED' || o.status === 'PREPARING';
@@ -218,6 +230,10 @@ export const pushEventsForGroupChange = (
     for (const spec of pushEventsForChange(b, a, { newOrderAlert: flags.newOrderAlert })) {
       if (PER_CHILD.has(spec.event)) out.push({ orderId: a.id, event: spec.event, opts: spec.opts });
     }
+  }
+  // 1b. The last restaurant accepted: the ones that accepted earlier (not moved by this change) may start cooking. One push per child (idempotent per order + event).
+  if (!groupAllAccepted(before) && groupAllAccepted(after)) {
+    for (const a of after) if (!touched.has(a.id) && a.status === 'ACCEPTED') out.push({ orderId: a.id, event: 'GROUP_READY_TO_COOK' });
   }
   // 2. The group as a whole, once, from the primary.
   const became = (status: string) => allAre(after, status) && !allAre(before, status);

@@ -431,7 +431,7 @@ describe('Order groups: settings, quote, place, pay, refund', () => {
       const fresh = await placeG(c, [cartOf(v2), cartOf(v3)]); // overlaps at v2 only
       const oldRows = await children(old.id);
       expect(oldRows.map((o) => [o.status, o.cancelledBy])).toEqual([['CANCELLED', 'SYSTEM'], ['CANCELLED', 'SYSTEM']]); // v1's part went with it
-      expect(oldRows.map((o) => o.cancelReason)).toEqual(expect.arrayContaining(['Replaced by a newer order', expect.stringContaining('Another restaurant in your order could not take it: Replaced by a newer order')]));
+      expect(oldRows.map((o) => o.cancelReason)).toEqual(expect.arrayContaining(['Replaced by a newer order', 'Another restaurant in your order could not take it']));
       expect(oldRows.every((o) => o.paymentStatus === 'PENDING' && o.refundStatus === null)).toBe(true);
       expect((await rowOf(bystander.body.data.id)).status).toBe('PLACED');
       expect((await children(fresh.id)).every((o) => o.status === 'PLACED')).toBe(true);
@@ -679,7 +679,7 @@ describe('Order groups: settings, quote, place, pay, refund', () => {
       const kids = await children(g.id);
       expect(kids.map((o) => o.status)).toEqual(['CANCELLED', 'CANCELLED', 'CANCELLED']);
       expect(kids[0]).toMatchObject({ paymentStatus: 'REFUNDED', refundStatus: 'DONE', cancelledBy: 'SYSTEM' });
-      expect(kids[0].cancelReason).toBe('Another restaurant in your order could not take it: Out of paneer');
+      expect(kids[0].cancelReason).toBe('Another restaurant in your order could not take it');
       expect(kids[1]).toMatchObject({ cancelledBy: 'VENDOR', cancelReason: 'Out of paneer', paymentStatus: 'REFUNDED', refundStatus: null });
       expect(kids[2]).toMatchObject({ cancelledBy: 'SYSTEM', paymentStatus: 'REFUNDED', refundStatus: null });
       expect(kids.slice(1).every((o) => o.refundStatus === null && o.payments.length === 0)).toBe(true);

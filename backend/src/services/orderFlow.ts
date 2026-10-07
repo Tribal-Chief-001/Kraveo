@@ -51,6 +51,16 @@ const RIDER_TARGETS = new Set(['PICKED_UP', 'ARRIVED_AT_GATE']);
 const ADMIN_TARGETS = new Set(['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'ARRIVED_AT_GATE']);
 
 export const notFound = () => new OrderFlowError(404, 'NOT_FOUND', 'Order not found.');
+
+/**
+ * Docs/22 review #7: authorisation BEFORE any lock. A user-facing change first does a plain unlocked read and refuses a caller who is not
+ * the customer / restaurant owner / assigned rider of the order (the same 404 the locked code answers), so someone who merely guesses an
+ * order id can never make a transaction queue on (or hold) the group and its children. The authoritative check is repeated under the lock.
+ */
+export const preAuthorize = async (orderId: string, allowed: (o: { customerId: string; driverId: string | null; vendorUserId: string | null }) => boolean): Promise<void> => {
+  const o = await prisma.order.findUnique({ where: { id: orderId }, select: { customerId: true, driverId: true, vendor: { select: { userId: true } } } });
+  if (!o || !allowed({ customerId: o.customerId, driverId: o.driverId, vendorUserId: o.vendor.userId })) throw notFound();
+};
 const isTerminal = (status: string) => status === 'DELIVERED' || status === 'CANCELLED';
 export const secureOtp = () => randomInt(0, 10_000).toString().padStart(4, '0'); // CSPRNG, 0000-9999
 
@@ -386,6 +396,7 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
 
 /** Razorpay checkout params for the owner's unpaid order. One Razorpay order per Kraveo order (reused on retry). */
 export const createPaymentForOrder = async (orderId: string, actor: Actor) => {
+  await preAuthorize(orderId, (o) => actor.role === 'STUDENT' && o.customerId === actor.id);
   return withOrderLock(orderId, async (tx, order, group) => {
     if (actor.role !== 'STUDENT' || order.customerId !== actor.id) throw notFound();
     // Docs/22: ONE payment per combined order, held by the primary child. A sibling can never be paid on its own.
@@ -545,6 +556,9 @@ export const markPaymentFailed = async (razorpayOrderId: string) => {
 export const GROUP_WAITING_MESSAGE = 'Waiting for the other restaurant(s) in this combined order to accept.';
 
 export const advanceStatus = async (orderId: string, actor: Actor, target: string): Promise<{ order: OrderWithRelations; idempotent: boolean }> => {
+  // Nothing below needs a lock to be refused: ownership first (404), then the role / target rules (403 / 400).
+  if (actor.role === 'VENDOR') await preAuthorize(orderId, (o) => o.vendorUserId === actor.id);
+  else if (actor.role === 'DRIVER') await preAuthorize(orderId, (o) => o.driverId === actor.id);
   const result = await withOrderLock(orderId, async (tx, order, group): Promise<ChangeResult> => {
     if (actor.role === 'VENDOR') {
       if (order.vendor.userId !== actor.id || !isVendorVisible(order)) throw notFound();
@@ -602,9 +616,13 @@ export const advanceStatus = async (orderId: string, actor: Actor, target: strin
 // ----------------------------------------------------------------------------
 // Cancellation (customer, restaurant reject, admin, system job)
 // ----------------------------------------------------------------------------
-/** What a sibling of a cancelled combined order says as its cancel reason (<= 200 characters). */
-export const GROUP_CANCEL_REASON_PREFIX = 'Another restaurant in your order could not take it: ';
-export const groupSiblingReason = (reason: string) => `${GROUP_CANCEL_REASON_PREFIX}${reason}`.slice(0, 200);
+/**
+ * What a cascaded sibling of a cancelled combined order says as its cancel reason. FIXED text: the reason typed by the rejecting
+ * restaurant or the admin stays on the triggering child only (other restaurants and their staff must not read it); the customer reads
+ * the real reason on the triggering child, in the group view (`cancelReason`) and in the cancel push.
+ */
+export const GROUP_CANCEL_REASON_PREFIX = 'Another restaurant in your order could not take it';
+export const groupSiblingReason = (_reason?: string) => GROUP_CANCEL_REASON_PREFIX;
 
 type CancelGuard = (o: OrderWithRelations, group: OrderWithRelations[] | null) => boolean;
 
@@ -627,20 +645,26 @@ export const cancelInTx = async (
   opts: { guard?: CancelGuard },
   group: OrderWithRelations[] | null = null,
 ): Promise<ChangeResult & { skipped?: boolean }> => {
+  // A group is only "already cancelled" when EVERY child is terminal. If the named child is cancelled but others are still active (a partial
+  // group, e.g. after a manual database edit), the cancel finishes the job: it cancels the rest and starts the refund if one is missing.
+  const alreadyCancelled = order.status === 'CANCELLED' && (!group || group.every((c) => isTerminal(c.status)));
+  const repair = order.status === 'CANCELLED' && !alreadyCancelled;
   if (by === 'CUSTOMER') {
     if (actor.role !== 'STUDENT' || order.customerId !== actor.id) throw notFound();
-    if (order.status === 'CANCELLED') return { order, before: order, changed: false };
-    if (order.status !== 'PLACED' || (group && group.some((c) => c.status !== 'PLACED'))) {
+    if (alreadyCancelled) return { order, before: order, changed: false };
+    if (!repair && (order.status !== 'PLACED' || (group && group.some((c) => c.status !== 'PLACED' && c.status !== 'CANCELLED')))) {
       throw new OrderFlowError(409, 'CANNOT_CANCEL', 'The restaurant has already accepted this order, so it can no longer be cancelled in the app. Please contact Kraveo support.');
     }
   } else if (by === 'VENDOR') {
     if (order.vendor.userId !== actor.id || !isVendorVisible(order)) throw notFound();
-    if (order.status === 'CANCELLED') return { order, before: order, changed: false };
-    if (order.status !== 'PLACED') throw new OrderFlowError(409, 'CANNOT_REJECT', 'An accepted order cannot be rejected. Ask Kraveo support to cancel it.');
-    if (order.paymentStatus !== 'PAID') throw new OrderFlowError(409, 'PAYMENT_NOT_CONFIRMED', 'This order is not paid yet.');
+    if (alreadyCancelled) return { order, before: order, changed: false };
+    if (!repair) {
+      if (order.status !== 'PLACED') throw new OrderFlowError(409, 'CANNOT_REJECT', 'An accepted order cannot be rejected. Ask Kraveo support to cancel it.');
+      if (order.paymentStatus !== 'PAID') throw new OrderFlowError(409, 'PAYMENT_NOT_CONFIRMED', 'This order is not paid yet.');
+    }
   } else if (by === 'ADMIN') {
-    if (order.status === 'CANCELLED') return { order, before: order, changed: false };
-    if (order.status === 'DELIVERED' || (group && group.some((c) => c.status === 'DELIVERED'))) throw new OrderFlowError(409, 'ORDER_CLOSED', 'A delivered order cannot be cancelled.');
+    if (alreadyCancelled) return { order, before: order, changed: false };
+    if (!repair && (order.status === 'DELIVERED' || (group && group.some((c) => c.status === 'DELIVERED')))) throw new OrderFlowError(409, 'ORDER_CLOSED', 'A delivered order cannot be cancelled.');
   } else {
     // SYSTEM (maintenance job, checkout replacing an abandoned order): re-check the condition under the lock; anything else changed it first.
     if (isTerminal(order.status) || (opts.guard && !opts.guard(order, group))) {
@@ -668,6 +692,11 @@ export const cancelInTx = async (
         },
       });
       touched.push(c.id);
+    }
+    // A partial group whose primary was cancelled earlier without a refund (paid, nothing booked): start the refund now, once.
+    if (paid && primary.status === 'CANCELLED' && !primary.refundStatus) {
+      await tx.order.update({ where: { id: primary.id }, data: { refundStatus: 'PENDING', refundError: null } });
+      touched.push(primary.id);
     }
     return groupResult(tx, order, group, touched, { refundNeeded: paid && touched.includes(primary.id), refundOrderId: primary.id });
   }
@@ -712,6 +741,8 @@ export const cancelOrder = async (
   reason: string,
   opts: { guard?: CancelGuard; awaitRefund?: boolean; deferRefund?: boolean } = {},
 ): Promise<{ order: OrderWithRelations; idempotent: boolean; /** Orders cancelled by this call (1 for a single order, the whole group for a combined one). */ cancelledOrders: number; /** Set when a refund is needed: the order that carries it (the primary child of a group). */ refundOrderId: string | null } | null> => {
+  if (by === 'CUSTOMER') await preAuthorize(orderId, (o) => actor.role === 'STUDENT' && o.customerId === actor.id);
+  else if (by === 'VENDOR') await preAuthorize(orderId, (o) => o.vendorUserId === actor.id);
   const result = await withOrderLock(orderId, (tx, order, group) => cancelInTx(tx, order, actor, by, reason, opts, group));
   if (result.skipped) return null;
 
@@ -812,6 +843,7 @@ export const claimOrder = async (orderId: string, riderUserId: string): Promise<
 };
 
 export const releaseOrder = async (orderId: string, riderUserId: string) => {
+  await preAuthorize(orderId, (o) => o.driverId === riderUserId);
   const result = await withOrderLock(orderId, async (tx, order, group): Promise<ChangeResult> => {
     if (order.driverId !== riderUserId) throw notFound();
     // Docs/22: a combined order is released as a whole, and only while NO child has been picked up.
@@ -870,7 +902,7 @@ export const reassignOrder = async (orderId: string, driverIdOrProfileId: string
     return { order: await reload(tx, order.id), before: order, changed: true };
   }, resolved ? { riderUserIdFirst: resolved } : {});
   if (result.changed) {
-    await writeAudit('ORDER_REASSIGNED', 'ORDER', orderId, `Rider changed from ${result.before.driver?.name ?? 'none'} to ${result.order.driver?.name ?? 'none'} (${result.order.status}).${opts.force && result.order.driverId ? ' Forced by admin.' : ''}${result.group ? ` Whole combined order (${result.group.after.length} restaurants) moved.` : ''}`);
+    await writeAudit('ORDER_REASSIGNED', 'ORDER', orderId, `Rider changed from ${result.before.driver?.name ?? 'none'} to ${result.order.driver?.name ?? 'none'} (${result.order.status}).${opts.force && result.order.driverId ? ' Forced by admin.' : ''}${result.group ? ` Whole combined order (${result.group.after.length} restaurants) moved.${result.order.driverId ? ' Warning: the rider needs the latest app.' : ''}` : ''}`);
   }
   return finishChange(result, { awaitRefund: true, assignedByAdmin: true });
 };
@@ -909,6 +941,8 @@ const proofMatches = (orderId: string, otp: string, stored: string | null) => {
  */
 export const verifyGateOtp = async (orderId: string, actor: Actor, rawOtp: unknown): Promise<{ order: OrderWithRelations; alreadyDelivered: boolean }> => {
   type Outcome = ChangeResult & { kind: 'DELIVERED' | 'ALREADY' | 'WRONG'; attempts?: number; locked?: boolean };
+  if (actor.role === 'DRIVER') await preAuthorize(orderId, (o) => o.driverId === actor.id);
+  else if (actor.role !== 'ADMIN') throw notFound();
   const result = await withOrderLock(orderId, async (tx, order, group): Promise<Outcome> => {
     if (actor.role === 'DRIVER' && order.driverId !== actor.id) throw notFound();
     if (actor.role !== 'DRIVER' && actor.role !== 'ADMIN') throw notFound();

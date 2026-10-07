@@ -30,6 +30,7 @@ import { fail } from '../utils/http';
 export const orderRouter = Router();
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+export const COMBINED_ORDER_RIDER_WARNING = 'Combined order: the rider needs the latest app.';
 const CLIENT_REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const STATUSES = new Set(['PLACED', 'ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'ARRIVED_AT_GATE', 'DELIVERED', 'CANCELLED']);
 
@@ -443,7 +444,9 @@ orderRouter.patch('/orders/:id/reassign', requireAuth, requireRole('ADMIN'), val
     const force = req.body?.force;
     if (force !== undefined && typeof force !== 'boolean') return bad(res, 'force must be true or false.', 'force');
     const order = await reassignOrder(req.params.id, driverId || null, { force: force === true });
-    return res.json({ success: true, data: viewFor(req, order) });
+    // Docs/22: the admin may hand a combined order to any approved rider, but an old rider app cannot show its other stops.
+    const warning = order.groupId && order.driverId ? COMBINED_ORDER_RIDER_WARNING : undefined;
+    return res.json({ success: true, ...(warning ? { warning } : {}), data: viewFor(req, order) });
   } catch (err) {
     return fail(res, err, 'reassign order');
   }
@@ -616,7 +619,13 @@ orderRouter.get('/admin/orders/needs-attention', requireAuth, requireRole('ADMIN
       }
       if (!isSibling && isOpen && o.driverId && riders.get(o.driverId) && riders.get(o.driverId) !== 'APPROVED') add('RIDER_NOT_APPROVED', `Assigned rider ${o.driver?.name ?? o.driverId} is ${riders.get(o.driverId)}.`, o.updatedAt);
       if (isOpen && o.vendor.approvalStatus !== 'APPROVED') add('VENDOR_NOT_APPROVED', `Restaurant ${o.vendor.name} is ${o.vendor.approvalStatus}.`, o.updatedAt);
-      if (!isSibling && (o.status === 'PICKED_UP' || o.status === 'ARRIVED_AT_GATE') && t(o.pickedUpAt ?? o.updatedAt) < ago(DELIVERY_STUCK_ALERT_MIN).getTime()) add('DELIVERY_OVERDUE', `Picked up more than ${DELIVERY_STUCK_ALERT_MIN} minutes ago.`, o.pickedUpAt ?? o.updatedAt);
+      // A combined order is overdue from the LAST pickup (a rider waiting at the second kitchen is not late), and only once every stop is picked up.
+      const pickedSince = o.group
+        ? o.group.orders.every((s) => s.status === 'PICKED_UP' || s.status === 'ARRIVED_AT_GATE')
+          ? new Date(Math.max(...o.group.orders.map((s) => t(s.pickedUpAt ?? o.updatedAt))))
+          : null
+        : (o.pickedUpAt ?? o.updatedAt);
+      if (!isSibling && pickedSince && (o.status === 'PICKED_UP' || o.status === 'ARRIVED_AT_GATE') && t(pickedSince) < ago(DELIVERY_STUCK_ALERT_MIN).getTime()) add('DELIVERY_OVERDUE', `Picked up more than ${DELIVERY_STUCK_ALERT_MIN} minutes ago.`, pickedSince);
       if (o.status === 'READY_FOR_PICKUP' && o.paymentStatus === 'PAID') {
         if (o.driverId && t(o.updatedAt) < ago(RIDER_PICKUP_ALERT_MIN).getTime()) add('RIDER_NOT_PICKED_UP', `Ready, rider ${o.driver?.name ?? o.driverId} has not picked it up.`, o.updatedAt);
         if (!o.driverId && t(o.updatedAt) < ago(READY_NO_RIDER_ALERT_MIN).getTime()) add('NO_RIDER', 'Ready and no rider has taken it.', o.updatedAt);

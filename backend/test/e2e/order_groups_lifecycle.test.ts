@@ -127,7 +127,7 @@ describe('Order groups: lifecycle', () => {
       let k = await kids(pg.g.id);
       expect(k.map((o) => o.status)).toEqual(['CANCELLED', 'CANCELLED']);
       expect(k.map((o) => o.cancelledBy)).toEqual(['SYSTEM', 'CUSTOMER']);
-      expect(k[0].cancelReason).toBe('Another restaurant in your order could not take it: Changed my mind');
+      expect(k[0].cancelReason).toBe('Another restaurant in your order could not take it');
       expect(k.every((o) => o.cancelledAt !== null && o.otpCode === null)).toBe(true);
       expect(k.map((o) => o.refundStatus)).toEqual(['DONE', null]);
       expect(ledger.refundsOf(pg.payId)).toEqual([expect.objectContaining({ amountPaise: paise(pg.g.total) })]);
@@ -167,7 +167,7 @@ describe('Order groups: lifecycle', () => {
       const k = await kids(pg.g.id);
       expect(k.map((o) => [o.status, o.cancelledBy])).toEqual([['CANCELLED', 'SYSTEM'], ['CANCELLED', 'SYSTEM'], ['CANCELLED', 'VENDOR']]);
       expect(k[2].cancelReason).toBe('Out of paneer');
-      expect(k[0].cancelReason).toBe('Another restaurant in your order could not take it: Out of paneer');
+      expect(k[0].cancelReason).toBe('Another restaurant in your order could not take it');
       // the accepted restaurant and the waiting one both hear (their own child only), the admin hears about all three
       expect(w1.last('order_updated', pg.g.orders[0].id)).toMatchObject({ status: 'CANCELLED', cancelledBy: 'SYSTEM' });
       expect(w2.last('order_updated', pg.g.orders[1].id)).toMatchObject({ status: 'CANCELLED' });
@@ -224,7 +224,7 @@ describe('Order groups: lifecycle', () => {
       expect(t1.expired.some((id) => unpaid.orders.some((o) => o.id === id))).toBe(true);
       let k = await kids(unpaid.id);
       expect(k.map((o) => [o.status, o.cancelledBy, o.paymentStatus, o.refundStatus])).toEqual([['CANCELLED', 'SYSTEM', 'PENDING', null], ['CANCELLED', 'SYSTEM', 'PENDING', null]]);
-      expect(k.map((o) => o.cancelReason).sort()).toEqual(['Another restaurant in your order could not take it: Payment not completed', 'Payment not completed']);
+      expect(k.map((o) => o.cancelReason).sort()).toEqual(['Another restaurant in your order could not take it', 'Payment not completed']);
       expect(ledger.calls.refundPayment).toBe(0);
       expect((await runOrderMaintenance(minutesFromNow(17))).expired).toEqual([]);
       // paid, restaurant 1 accepted, restaurant 2 (a SIBLING, not the primary) never answers
@@ -240,7 +240,7 @@ describe('Order groups: lifecycle', () => {
       k = await kids(pg.g.id);
       expect(k.map((o) => o.status)).toEqual(['CANCELLED', 'CANCELLED', 'CANCELLED']);
       expect(k[1]).toMatchObject({ cancelledBy: 'SYSTEM', cancelReason: 'Restaurant did not respond' });
-      expect(k[0].cancelReason).toBe('Another restaurant in your order could not take it: Restaurant did not respond');
+      expect(k[0].cancelReason).toBe('Another restaurant in your order could not take it');
       expect(k.map((o) => o.refundStatus)).toEqual(['DONE', null, null]);
       expect(k.map((o) => o.paymentStatus)).toEqual(['REFUNDED', 'REFUNDED', 'REFUNDED']);
       expect(ledger.refundsOf(pg.payId)).toHaveLength(1);

@@ -7,7 +7,7 @@ import { getSettings } from './settings';
 import { ORDER_VIEW_INCLUDE, OrderWithRelations, orderView } from './orderView';
 import { publishOrderChange } from '../realtime';
 import {
-  ChangeResult, OrderFlowError, REPLACED_REASON, auditCancel, cancelInTx, countUnpaidOpen, finishChange, isAbandonedOrder, loadGroupChildren,
+  ChangeResult, GROUP_CANCEL_REASON_PREFIX, OrderFlowError, REPLACED_REASON, auditCancel, cancelInTx, countUnpaidOpen, finishChange, isAbandonedOrder, loadGroupChildren,
   lockOrderInTx, mismatch, sameItems,
 } from './orderFlow';
 
@@ -327,6 +327,8 @@ export const groupView = (bundle: GroupBundle, viewerRole: string, viewerId: str
     dropoffNotes: group.dropoffNotes ?? null,
     createdAt: group.createdAt.toISOString(),
     payOrderId: primary.id,
+    // The real reason of a cancelled group (the triggering child's); cascaded siblings carry only a fixed text. null when not cancelled.
+    cancelReason: orders.every((o) => o.status === 'CANCELLED') ? (orders.find((o) => o.cancelReason && !o.cancelReason.startsWith(GROUP_CANCEL_REASON_PREFIX))?.cancelReason ?? orders.find((o) => o.cancelReason)?.cancelReason ?? null) : null,
     orders: orders.map((o) => orderView(o, viewerRole, viewerId)).filter((v): v is Record<string, unknown> => v !== null),
   };
 };

@@ -30,10 +30,11 @@ type SocketUser = { id: string; role: string };
  * join on their next poll/sync (every ~15 s). A customer or rider has a handful of active orders, so
  * 30 joins per minute is several times what a legitimate client emits, while a flood is cut off quickly.
  * The apps never emit leave_room, so a long-lived rider socket would keep every finished order room: instead of refusing
- * a join at the cap, the OLDEST order room is dropped (finished orders are the oldest), keeping at most 10 order rooms.
+ * a join at the cap, the OLDEST order room is dropped (finished orders are the oldest), keeping at most 30 order rooms
+ * (Docs/22: a combined order of 5 restaurants uses 5 rooms, so two of them must fit; the cap only bounds memory per socket, the join rate above bounds the database work).
  */
 export const JOIN_LIMIT = { max: 30, windowMs: 60_000 };
-export const MAX_ORDER_ROOMS_PER_SOCKET = 10;
+export const MAX_ORDER_ROOMS_PER_SOCKET = 30;
 const joinWindows = new SlidingWindow();
 
 /** Registers a successful order_<id> join on the socket and drops the oldest order room when over the cap. */

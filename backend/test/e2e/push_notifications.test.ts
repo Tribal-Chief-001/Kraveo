@@ -903,7 +903,7 @@ describe('Push notifications', () => {
     test('no OTP, phone number, address or private note in any title / body / data of any event', async () => {
       // Make sure each of the 12 events was exercised by the tests above.
       const seen = new Set(everything.map((m) => m.data.event));
-      expect([...PUSH_EVENTS].filter((e) => e !== 'NEW_ORDER_REMINDER' && !seen.has(e))).toEqual([]); // a reminder travels as NEW_ORDER (own test)
+      expect([...PUSH_EVENTS].filter((e) => e !== 'NEW_ORDER_REMINDER' && e !== 'GROUP_READY_TO_COOK' && !seen.has(e))).toEqual([]); // a reminder travels as NEW_ORDER (own test); GROUP_READY_TO_COOK is combined-order only (order_groups_review_fixes.test.ts)
       expect(secrets.otps.size).toBeGreaterThan(0);
 
       const phones = [STUDENT, STUDENT2, STUDENT3, VENDOR, RIDER, RIDER2, ADMIN].map((u) => u.phone.replace(/\D/g, '').slice(-10));

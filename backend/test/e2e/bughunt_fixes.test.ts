@@ -356,9 +356,12 @@ describe('Pre-demo bug hunt fixes', () => {
   // 6. BE2-10 / BE1-10 socket join throttle
   // =========================================================================================
   describe('6. join_room is throttled per socket; reconnect flows keep working', () => {
-    test('a customer keeps at most 10 order rooms (oldest dropped), every join of a real order answers ok', async () => {
+    test('a customer keeps at most MAX_ORDER_ROOMS_PER_SOCKET (30) order rooms (oldest dropped), every join of a real order answers ok', async () => {
       const [c1] = W.customers; const [v1] = W.vendors;
       const w = await watch(c1);
+      // Docs/22 raised the room cap from 10 to 30 (two 5-restaurant groups fit), which is above the join allowance of 30 a minute: lift the throttle for this test only.
+      const savedMax = JOIN_LIMIT.max;
+      JOIN_LIMIT.max = 100;
       const ids: string[] = [];
       for (let i = 0; i < MAX_ORDER_ROOMS_PER_SOCKET + 2; i++) {
         const id = await place(c1, v1, {}, i % 2);
@@ -373,6 +376,7 @@ describe('Pre-demo bug hunt fixes', () => {
       expect(await w.join(`order_${ids[0]}`)).toBe(true);
       expect(await inRoom(ids[0])).toBe(1);
       expect(await inRoom(ids[2])).toBe(0);
+      JOIN_LIMIT.max = savedMax;
     });
 
     test('a flood is refused with a polite answer, and a reconnect (new socket) starts with a fresh allowance', async () => {
