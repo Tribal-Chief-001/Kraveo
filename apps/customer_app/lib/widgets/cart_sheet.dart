@@ -11,6 +11,7 @@ import 'ui/add_stepper.dart';
 import 'ui/bill_breakdown.dart';
 import 'ui/coins_toggle.dart';
 import 'ui/format.dart';
+import 'ui/k_icon_button.dart';
 import 'ui/sheet_chrome.dart';
 import 'ui/snack.dart';
 import 'ui/veg_mark.dart';
@@ -47,15 +48,39 @@ class CartSheet extends StatelessWidget {
       );
     }
 
+    final multi = cart.isMultiRestaurant;
     return KSheetFrame(
-      title: cart.dhabaName ?? 'Your cart',
+      title: multi ? 'Your cart' : (cart.dhabaName ?? 'Your cart'),
       subtitle: Row(children: [
         Icon(LucideIcons.mapPin, size: 14, color: k.brand),
         const SizedBox(width: 4),
-        Flexible(child: Text(selectedHostel == null ? 'Choose your drop-off point at checkout' : 'Delivering to $selectedHostel', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted))),
+        Flexible(
+          child: Text(
+            multi
+                ? '${cart.restaurantCount} restaurants · ${selectedHostel == null ? 'drop-off at checkout' : 'to $selectedHostel'}'
+                : (selectedHostel == null ? 'Choose your drop-off point at checkout' : 'Delivering to $selectedHostel'),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: KraveoType.bodySm.copyWith(color: k.inkMuted),
+          ),
+        ),
       ]),
       children: [
-        for (final cartItem in cart.items) _CartLine(cartItem: cartItem, cart: cart),
+        if (multi) ...[
+          Text('One rider brings everything to the gate, with one OTP. Each extra restaurant adds a small fee.', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+          const SizedBox(height: 14),
+          for (final r in cart.restaurants) ...[
+            _RestaurantHeader(restaurant: r, cart: cart),
+            for (final cartItem in r.items) _CartLine(cartItem: cartItem, cart: cart),
+          ],
+          KButton(
+            label: 'Clear cart',
+            icon: LucideIcons.trash2,
+            kind: KButtonKind.ghost,
+            onPressed: () => _confirmClear(context, cart),
+          ),
+        ] else
+          for (final cartItem in cart.items) _CartLine(cartItem: cartItem, cart: cart),
         const SizedBox(height: 4),
         const CouponBox(),
         const SizedBox(height: 16),
@@ -81,6 +106,73 @@ class CartSheet extends StatelessWidget {
         const SizedBox(height: 8),
         Text('Next: choose how to pay. You get your gate OTP right after.', textAlign: TextAlign.center, style: KraveoType.caption.copyWith(color: k.inkFaint, fontSize: 12)),
       ]),
+    );
+  }
+}
+
+Future<void> _confirmClear(BuildContext context, CartProvider cart) async {
+  final ok = await showKConfirm(
+    context,
+    title: 'Clear your cart?',
+    message: 'This removes the dishes from all ${cart.restaurantCount} restaurants.',
+    confirmLabel: 'Clear cart',
+    cancelLabel: 'Keep it',
+    danger: true,
+  );
+  if (ok == true) cart.clearCart();
+}
+
+/// Restaurant heading inside a combined cart: name, what it adds up to, and a way to drop just
+/// this restaurant.
+class _RestaurantHeader extends StatelessWidget {
+  const _RestaurantHeader({required this.restaurant, required this.cart});
+
+  final CartRestaurant restaurant;
+  final CartProvider cart;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+        decoration: BoxDecoration(color: k.surfaceAlt, borderRadius: BorderRadius.circular(KRadius.md)),
+        child: Row(children: [
+          Icon(LucideIcons.store, size: 18, color: k.brand),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Semantics(
+              container: true,
+              label: '${restaurant.name}, ${restaurant.itemCount} ${restaurant.itemCount == 1 ? 'item' : 'items'}, ${rupee(restaurant.subtotal)}',
+              child: ExcludeSemantics(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(restaurant.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.ink)),
+                  Text('${restaurant.itemCount} ${restaurant.itemCount == 1 ? 'item' : 'items'} · ${rupee(restaurant.subtotal)}', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+                ]),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          KIconButton(
+            icon: LucideIcons.trash2,
+            semanticLabel: 'Remove ${restaurant.name} from your cart',
+            background: k.surface,
+            bordered: false,
+            onTap: () async {
+              final ok = await showKConfirm(
+                context,
+                title: 'Remove ${restaurant.name}?',
+                message: 'This removes its ${restaurant.itemCount} ${restaurant.itemCount == 1 ? 'item' : 'items'} from your cart. Your other restaurants stay.',
+                confirmLabel: 'Remove',
+                cancelLabel: 'Keep it',
+                danger: true,
+              );
+              if (ok == true) cart.removeRestaurant(restaurant.id);
+            },
+          ),
+        ]),
+      ),
     );
   }
 }

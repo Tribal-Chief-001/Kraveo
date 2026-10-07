@@ -207,7 +207,8 @@ class _OrderCard extends StatelessWidget {
     final k = context.k;
     final status = order.status;
     final delivered = status == OrderProgressStatus.delivered;
-    final canRate = delivered && !reviewed;
+    // Ratings are per restaurant order; a combined order has none (yet).
+    final canRate = delivered && !reviewed && !order.isGroup;
     final pillLabel = order.awaitsPayment ? 'Unpaid' : (status == OrderProgressStatus.cancelled && order.paymentStatus == PaymentStatus.refunded ? 'Refunded' : status.pillLabel);
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -225,7 +226,7 @@ class _OrderCard extends StatelessWidget {
             KStatusPill(status: status.kStatus, label: pillLabel, compact: true),
           ]),
           const SizedBox(height: 4),
-          Text('$whenLabel · ${displayDropPoint(order.dropoffHostel)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+          Text('$whenLabel · ${displayDropPoint(order.dropoffHostel)}${order.isGroup ? ' · ${order.group!.size} restaurants' : ''}', maxLines: order.isGroup ? 2 : 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
           const SizedBox(height: 12),
           Text(_summary, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: k.inkMuted, fontSize: 14)),
           const SizedBox(height: 14),

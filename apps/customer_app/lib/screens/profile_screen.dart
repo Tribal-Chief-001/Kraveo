@@ -490,14 +490,14 @@ class _OrdersCard extends StatelessWidget {
           const SizedBox(height: 14),
           KPressable(
             onTap: onTrack,
-            semanticLabel: 'Order from ${active.vendorName}: ${orderHeadline(active)}. Open tracking',
+            semanticLabel: 'Order from ${active.title}: ${orderHeadline(active)}. Open tracking',
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(color: k.brandSoft, borderRadius: BorderRadius.circular(KRadius.md)),
               child: Row(children: [
                 Icon(LucideIcons.bike, size: 18, color: k.brand),
                 const SizedBox(width: 10),
-                Expanded(child: Text('${active.vendorName}: ${orderHeadline(active)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.brand, fontSize: 13))),
+                Expanded(child: Text('${active.title}: ${orderHeadline(active)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.label.copyWith(color: k.brand, fontSize: 13))),
                 const SizedBox(width: 8),
                 Icon(LucideIcons.arrowRight, size: 16, color: k.brand),
               ]),

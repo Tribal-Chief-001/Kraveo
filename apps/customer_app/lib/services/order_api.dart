@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/order.dart';
+import '../models/order_group.dart';
 import 'customer_api_service.dart';
 import 'external_links.dart';
 
@@ -44,7 +45,7 @@ enum OrderErrorKind {
 }
 
 class OrderApiError {
-  const OrderApiError(this.kind, {this.statusCode, this.code, this.message, this.order});
+  const OrderApiError(this.kind, {this.statusCode, this.code, this.message, this.order, this.vendorId, this.maxRestaurants});
 
   final OrderErrorKind kind;
   final int? statusCode;
@@ -58,6 +59,13 @@ class OrderApiError {
   /// The order as the server sees it, when the error body carries one (`data`), e.g. a
   /// verify-signature refused with `ORDER_CANCELLED`.
   final OrderModel? order;
+
+  /// The restaurant a combined-order error is about (`VENDOR_CLOSED`, `VENDOR_UNAVAILABLE`,
+  /// `INVALID_ITEMS` carry `vendorId`, Docs/22 10.1).
+  final String? vendorId;
+
+  /// `TOO_MANY_RESTAURANTS` also reports the allowed number.
+  final int? maxRestaurants;
 
   bool get isNetwork => kind == OrderErrorKind.offline || kind == OrderErrorKind.timeout;
 
@@ -168,6 +176,15 @@ class ReviewReceipt {
 /// app learns about orders; [HttpOrderApi] is the real implementation, tests use fakes.
 abstract class OrderApi {
   Future<OrderResult<OrderModel>> createOrder(CreateOrderRequest request);
+
+  /// `POST /order-groups` (Docs/22): two or more restaurants, one payment. 404 = an old server.
+  Future<OrderResult<OrderGroupView>> createGroup(CreateGroupRequest request);
+
+  /// `GET /order-groups/:id`: the group with all its children.
+  Future<OrderResult<OrderGroupView>> fetchGroup(String groupId);
+
+  /// `POST /orders/quote`: what the cart would be charged. 404 = an old server.
+  Future<OrderResult<OrderQuote>> quote(QuoteRequest request);
   Future<OrderResult<OrdersPage>> fetchOrders({required String scope, int limit = 20, String? cursor});
   Future<OrderResult<OrderModel>> fetchOrder(String orderId);
   Future<OrderResult<OrderModel>> cancelOrder(String orderId, {String? reason});
@@ -189,6 +206,23 @@ class HttpOrderApi implements OrderApi {
   @override
   Future<OrderResult<OrderModel>> createOrder(CreateOrderRequest request) =>
       _call('POST', '/orders', body: request.toJson(), timeout: _write, parse: _orderFromBody);
+
+  @override
+  Future<OrderResult<OrderGroupView>> createGroup(CreateGroupRequest request) => _call(
+        'POST',
+        '/order-groups',
+        body: request.toJson(),
+        timeout: _write,
+        parse: (body) => OrderGroupView.tryParse(body['data'], replay: body['idempotentReplay'] == true),
+      );
+
+  @override
+  Future<OrderResult<OrderGroupView>> fetchGroup(String groupId) =>
+      _call('GET', '/order-groups/${Uri.encodeComponent(groupId)}', timeout: _read, parse: (body) => OrderGroupView.tryParse(body['data']));
+
+  @override
+  Future<OrderResult<OrderQuote>> quote(QuoteRequest request) =>
+      _call('POST', '/orders/quote', body: request.toJson(), timeout: _read, parse: (body) => OrderQuote.tryParse(body['data']));
 
   @override
   Future<OrderResult<OrdersPage>> fetchOrders({required String scope, int limit = 20, String? cursor}) => _call(
@@ -318,7 +352,9 @@ class HttpOrderApi implements OrderApi {
       _ when status >= 500 => OrderErrorKind.server,
       _ => OrderErrorKind.rejected,
     };
-    return OrderApiError(kind, statusCode: status, code: code, message: message, order: order);
+    final vendorId = body['vendorId'];
+    final max = body['maxRestaurants'];
+    return OrderApiError(kind, statusCode: status, code: code, message: message, order: order, vendorId: vendorId is String && vendorId.isNotEmpty ? vendorId : null, maxRestaurants: max is num ? max.toInt() : null);
   }
 }
 
@@ -390,6 +426,7 @@ const Map<String, String> _codeMessages = {
   'AMOUNT_TOO_SMALL': 'The order total must be at least ₹1.',
   'PROVIDER_UNAVAILABLE': 'The payment service is not responding right now. Please try again in a minute.',
   'NOT_FOUND': 'We couldn\'t find this order.',
+  'PAY_VIA_GROUP': 'This order is paid together with the other restaurants in it. Open the combined order to pay.',
 };
 
 /// RFC 4122 version-4 UUID from a cryptographically secure source. Used as the per-checkout

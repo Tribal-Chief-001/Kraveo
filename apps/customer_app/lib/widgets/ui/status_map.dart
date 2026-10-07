@@ -66,7 +66,27 @@ extension OrderStatusUi on OrderProgressStatus {
 }
 
 /// Headline that also accounts for payment (an unpaid order is not "waiting for the restaurant").
+/// A combined order says "restaurants" where the single order says "restaurant".
 String orderHeadline(OrderModel o, {bool confirmingPayment = false}) {
   if (o.awaitsPayment) return confirmingPayment ? 'Confirming your payment' : 'Payment not completed';
+  if (o.isGroup) {
+    switch (o.status) {
+      case OrderProgressStatus.placed:
+        return 'Waiting for the restaurants';
+      case OrderProgressStatus.accepted:
+        return 'Restaurants accepted';
+      default:
+        break;
+    }
+  }
   return o.status.headline;
 }
+
+/// What happens next for a combined order (several restaurants, one rider).
+String groupNextHint(OrderProgressStatus status) => switch (status) {
+      OrderProgressStatus.placed => 'Next: every restaurant confirms its part. If one can\'t, the whole order is cancelled and refunded.',
+      OrderProgressStatus.accepted => 'Next: the kitchens start cooking.',
+      OrderProgressStatus.preparing => 'Next: a rider picks everything up once it is packed.',
+      OrderProgressStatus.readyForPickup => 'Next: your rider collects it from each restaurant.',
+      _ => status.nextHint,
+    };

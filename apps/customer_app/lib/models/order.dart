@@ -206,6 +206,80 @@ class OrderPlace {
   }
 }
 
+/// Text the server puts on the siblings of the restaurant that cancelled a combined order
+/// (Docs/22 4.4: `Another restaurant in your order could not take it: <reason>`).
+const String kReasonSiblingPrefix = 'Another restaurant in your order could not take it';
+
+/// One restaurant of a combined order as `OrderView.group.stops[]` lists it (Docs/22 10.4).
+class GroupStop {
+  const GroupStop({required this.orderId, required this.index, required this.status, required this.vendorName, this.address, this.itemCount = 0});
+
+  final String orderId;
+  final int index;
+  final OrderProgressStatus status;
+  final String vendorName;
+  final String? address;
+
+  /// Total quantity of dishes ordered at this restaurant.
+  final int itemCount;
+
+  static GroupStop? tryParse(Object? raw) {
+    final json = _map(raw);
+    if (json == null) return null;
+    final orderId = _str(json['orderId']);
+    final status = OrderProgressStatusX.parse(json['status']);
+    if (orderId == null || status == null) return null;
+    final vendor = _map(json['vendor']);
+    final index = json['index'];
+    final count = json['itemCount'];
+    return GroupStop(
+      orderId: orderId,
+      index: index is num ? index.toInt() : 0,
+      status: status,
+      vendorName: _str(vendor?['name']) ?? 'Restaurant',
+      address: _str(vendor?['address']),
+      itemCount: count is num ? count.toInt() : 0,
+    );
+  }
+}
+
+/// `OrderView.group` for the customer: which combined order this child belongs to. A single
+/// restaurant order has no `group` key at all; a restaurant's own copy has no `id` (never ours).
+class OrderGroupRef {
+  const OrderGroupRef({required this.id, required this.index, required this.size, required this.primary, this.stops = const []});
+
+  final String id;
+
+  /// 0 = the primary child (carries the payment and the base fee).
+  final int index;
+  final int size;
+  final bool primary;
+  final List<GroupStop> stops;
+
+  static OrderGroupRef? tryParse(Object? raw) {
+    final json = _map(raw);
+    if (json == null) return null;
+    final id = _str(json['id']);
+    if (id == null) return null;
+    final rawStops = json['stops'];
+    final stops = rawStops is List ? (rawStops.map(GroupStop.tryParse).whereType<GroupStop>().toList()..sort((a, b) => a.index.compareTo(b.index))) : <GroupStop>[];
+    final index = json['index'] is num ? (json['index'] as num).toInt() : 0;
+    final size = json['size'] is num ? (json['size'] as num).toInt() : stops.length;
+    return OrderGroupRef(id: id, index: index, size: size < 1 ? (stops.isEmpty ? 1 : stops.length) : size, primary: json['primary'] is bool ? json['primary'] as bool : index == 0, stops: List.unmodifiable(stops));
+  }
+}
+
+/// Status of a combined order from its children. Docs/22 4.4: every cancel path cancels the
+/// whole group, so one cancelled child means a cancelled order (even while the other children's
+/// updates are still on their way). Otherwise the least advanced child leads.
+OrderProgressStatus deriveGroupProgress(Iterable<OrderProgressStatus> children) {
+  final list = children.toList();
+  if (list.isEmpty) return OrderProgressStatus.placed;
+  if (list.any((s) => s == OrderProgressStatus.cancelled)) return OrderProgressStatus.cancelled;
+  if (list.every((s) => s == OrderProgressStatus.delivered)) return OrderProgressStatus.delivered;
+  return list.reduce((a, b) => b.stage < a.stage ? b : a);
+}
+
 /// A server `OrderView`. Immutable: a newer server copy replaces it (see [isNewerThan]).
 class OrderModel {
   const OrderModel({
@@ -242,6 +316,9 @@ class OrderModel {
     this.acceptBy,
     this.refundStatus = RefundStatus.none,
     this.isReviewed = false,
+    this.group,
+    this.members,
+    this.cancelTriggerName,
   });
 
   final String id;
@@ -295,6 +372,20 @@ class OrderModel {
   /// The student already reviewed this order.
   final bool isReviewed;
 
+  /// Set when this order is one restaurant's part of a combined order (absent on single orders).
+  final OrderGroupRef? group;
+
+  /// Only on the composite copy the app builds for a whole combined order ([OrderModel.composite]):
+  /// its children, primary first. Null on server orders and single orders.
+  final List<OrderModel>? members;
+
+  /// Composite only: the restaurant whose part caused the cancellation (its own reason, not the
+  /// generic sibling text), when the app knows it.
+  final String? cancelTriggerName;
+
+  /// True for a combined order (a child of one, or the composite of all its children).
+  bool get isGroup => group != null;
+
   /// Parses an `OrderView`. Returns null when the payload is not an order (no id / status).
   static OrderModel? tryParse(Object? raw) {
     var json = _map(raw);
@@ -345,8 +436,87 @@ class OrderModel {
       acceptBy: _date(json['acceptBy']),
       refundStatus: _parseRefund(json['refundStatus']),
       isReviewed: json['isReviewed'] == true,
+      group: OrderGroupRef.tryParse(json['group']),
     );
   }
+
+  /// The one order the app shows for a whole combined order: built from its [children] (the
+  /// server orders of the group, any subset) and never stored or sent anywhere. `id` is the
+  /// PRIMARY child's id (the one payment, cancel and push all use); money is the sum of the
+  /// children (they add up to the group total to the paisa, Docs/22 section 1). [groupTotal]
+  /// (from `GET /order-groups/:id`) stands in for the sum while some children are not loaded yet.
+  static OrderModel composite(List<OrderModel> children, {double? groupTotal}) {
+    assert(children.isNotEmpty);
+    final list = [...children]..sort((a, b) => (a.group?.index ?? 0).compareTo(b.group?.index ?? 0));
+    final primary = list.firstWhere((o) => o.group?.primary == true, orElse: () => list.first);
+    final ref = primary.group;
+    final byId = {for (final o in list) o.id: o};
+    final stops = ref?.stops ?? const <GroupStop>[];
+    final statuses = stops.isEmpty ? [for (final o in list) o.status] : [for (final s in stops) byId[s.orderId]?.status ?? s.status];
+    final names = stops.isEmpty ? [for (final o in list) o.vendorName] : [for (final s in stops) byId[s.orderId]?.vendorName ?? s.vendorName];
+    T? firstOf<T>(T? Function(OrderModel o) pick) {
+      for (final o in list) {
+        final v = pick(o);
+        if (v != null) return v;
+      }
+      return null;
+    }
+
+    double sum(double Function(OrderModel o) f) => list.fold(0.0, (a, o) => a + f(o));
+    final complete = ref == null || list.length >= ref.size;
+    final cancelled = list.where((o) => o.status == OrderProgressStatus.cancelled).toList();
+    final trigger = cancelled.isEmpty ? null : cancelled.firstWhere((o) => !(o.cancelReason ?? '').startsWith(kReasonSiblingPrefix), orElse: () => cancelled.first);
+    DateTime? earliest(DateTime? Function(OrderModel o) f) {
+      DateTime? best;
+      for (final o in list) {
+        final d = f(o);
+        if (d != null && (best == null || d.isBefore(best))) best = d;
+      }
+      return best;
+    }
+
+    return OrderModel(
+      id: primary.id,
+      status: deriveGroupProgress(statuses),
+      paymentStatus: primary.paymentStatus,
+      subtotal: sum((o) => o.subtotal),
+      deliveryFee: sum((o) => o.deliveryFee),
+      taxAndPackaging: sum((o) => o.taxAndPackaging),
+      discount: sum((o) => o.discount),
+      totalAmount: !complete && groupTotal != null ? groupTotal : sum((o) => o.totalAmount),
+      dropoffHostel: primary.dropoffHostel,
+      dropoffNotes: primary.dropoffNotes,
+      createdAt: primary.createdAt,
+      updatedAt: list.map((o) => o.updatedAt).reduce((a, b) => b.isAfter(a) ? b : a),
+      items: [for (final o in list) ...o.items],
+      vendorId: primary.vendorId,
+      vendorName: names.join(' + '),
+      vendorAddress: primary.vendorAddress,
+      vendorLat: primary.vendorLat,
+      vendorLng: primary.vendorLng,
+      vendorHasLocation: primary.vendorHasLocation,
+      dropoff: primary.dropoff,
+      paidAt: primary.paidAt,
+      acceptedAt: earliest((o) => o.acceptedAt),
+      pickedUpAt: earliest((o) => o.pickedUpAt),
+      deliveredAt: earliest((o) => o.deliveredAt),
+      cancelledAt: earliest((o) => o.cancelledAt),
+      cancelledBy: trigger?.cancelledBy,
+      cancelReason: trigger?.cancelReason,
+      cancelTriggerName: trigger != null && trigger.cancelledBy == CancelledBy.vendor ? trigger.vendorName : null,
+      rider: firstOf((o) => o.rider),
+      otpCode: firstOf((o) => o.otpCode),
+      payBy: primary.payBy,
+      acceptBy: earliest((o) => o.acceptBy),
+      refundStatus: primary.refundStatus,
+      isReviewed: list.every((o) => o.isReviewed),
+      group: ref,
+      members: List.unmodifiable(list),
+    );
+  }
+
+  /// "2 restaurants" for a combined order, else the restaurant's name.
+  String get title => isGroup ? '${group!.size} restaurants' : vendorName;
 
   /// Where the order goes: the server's `dropoff` when present, else the app's own table of
   /// drop points looked up by [dropoffHostel] (legacy spellings included). Null when unknown.
@@ -367,8 +537,13 @@ class OrderModel {
   /// PLACED and not paid yet: the student still has to pay (or it expires).
   bool get awaitsPayment => status == OrderProgressStatus.placed && (paymentStatus == PaymentStatus.pending || paymentStatus == PaymentStatus.failed);
 
-  /// The student may cancel only while PLACED (contract 1.3).
-  bool get canCancel => status == OrderProgressStatus.placed;
+  /// The student may cancel only while PLACED (contract 1.3); a combined order only while EVERY
+  /// restaurant is still PLACED (Docs/22 4.4).
+  bool get canCancel {
+    final all = members;
+    if (all != null) return all.isNotEmpty && all.every((m) => m.status == OrderProgressStatus.placed);
+    return status == OrderProgressStatus.placed;
+  }
 
   /// When the server will cancel this order if it is still unpaid: the server's `payBy`, or
   /// (older backend) createdAt + 15 minutes.

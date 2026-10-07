@@ -61,7 +61,9 @@ void main() {
       expect(cart.grandTotal, equals(205.0)); // 180 + 25 (one all-in fee)
     });
 
-    test('Adding item from different Dhaba clears existing cart', () {
+    // Docs/22: adding from another restaurant NO LONGER wipes the cart (it holds several restaurants).
+    // With the combined-order feature off (maxRestaurants 1) the old behaviour is kept, see below.
+    test('Adding item from a different Dhaba keeps the cart and groups it by restaurant', () {
       cart.addItem(item: dummyItem1, dhabaId: 'ven-1', dhabaName: 'Sharma Dhaba');
       expect(cart.dhabaId, equals('ven-1'));
 
@@ -77,6 +79,19 @@ void main() {
         isVeg: true,
       );
 
+      expect(cart.addItem(item: newItem, dhabaId: 'ven-2', dhabaName: 'FC Night Mess'), isTrue);
+      expect(cart.dhabaId, equals('ven-1'), reason: 'the first restaurant stays the primary one');
+      expect(cart.items.length, equals(2));
+      expect(cart.restaurantCount, 2);
+      expect(cart.restaurants.map((r) => r.name), ['Sharma Dhaba', 'FC Night Mess']);
+      expect(cart.restaurants.last.items.single.item.name, equals('Paneer Roll'));
+    });
+
+    test('Adding item from a different Dhaba replaces the cart when combined orders are off (maxRestaurants 1)', () {
+      cart.setMaxRestaurants(1);
+      cart.addItem(item: dummyItem1, dhabaId: 'ven-1', dhabaName: 'Sharma Dhaba');
+      const newItem = MenuItemModel(id: 'item-201', vendorId: 'ven-2', name: 'Paneer Roll', price: 110, category: 'Fast Food', description: 'Roll', imageUrl: '', isAvailable: true);
+      expect(cart.wouldReplaceCart('ven-2'), isTrue);
       cart.addItem(item: newItem, dhabaId: 'ven-2', dhabaName: 'FC Night Mess');
       expect(cart.dhabaId, equals('ven-2'));
       expect(cart.items.length, equals(1));

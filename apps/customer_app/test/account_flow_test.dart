@@ -1301,7 +1301,8 @@ void main() {
       await tester.tap(find.text('Choose drop-off'));
       await settle(tester);
       expect(find.text('Where should we deliver?'), findsOneWidget);
-      expect(backend.requests, isEmpty);
+      // Docs/22: checkout now asks the server for the price (POST /orders/quote, writes nothing); no order is created.
+      expect(backend.requests.where((r) => !r.url.path.endsWith('/orders/quote')), isEmpty);
 
       await tester.tap(find.text('BH6'));
       await settle(tester);
@@ -1309,7 +1310,7 @@ void main() {
       expect(find.text('BH6'), findsOneWidget);
       expect(find.textContaining('Pay ₹'), findsOneWidget);
       expect(session.deliveryPoint, 'BH6', reason: 'remembered for the next checkout this session');
-      expect(backend.requests, isEmpty, reason: 'a non-student\'s choice is never sent to the server');
+      expect(backend.requests.where((r) => !r.url.path.endsWith('/orders/quote')), isEmpty, reason: 'a non-student\'s choice is never sent to the server');
       expect(tester.takeException(), isNull);
     });
 

@@ -27,6 +27,10 @@ import '../models/drop_point.dart';
 /// Live tracking of one real order. Everything comes from the server: `GET /orders/:id` when
 /// shown, every 15 s while visible (polling), and `order_updated` / `rider_location` on the
 /// socket. The gate OTP is the server's and only appears at ARRIVED_AT_GATE.
+///
+/// A combined order (Docs/22) is ONE screen: opened with the id of any of its restaurants' parts
+/// (history card, push, Track tab), it shows a row per restaurant with its own status, one rider,
+/// one gate OTP and one total. Cancelling or a failed payment applies to the whole order.
 class LiveTrackingScreen extends StatefulWidget {
   /// The order to show. Null (the Track tab) shows the student's current order.
   final String? orderId;
@@ -118,12 +122,11 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
   }
 
   Future<void> _cancel(OrderProvider orders, OrderModel order) async {
+    final whole = order.isGroup ? 'This cancels your whole order, from all ${order.group!.size} restaurants. ' : '';
     final ok = await showKConfirm(
       context,
       title: 'Cancel this order?',
-      message: order.isPaid
-          ? 'The restaurant has not accepted it yet. Your ${rupee(order.totalAmount)} will be refunded to your account.'
-          : 'You have not completed a payment for this order, so nothing is charged. If your bank did take money, Kraveo refunds it automatically.',
+      message: '$whole${order.isPaid ? '${order.isGroup ? 'None of the restaurants has accepted yet. ' : 'The restaurant has not accepted it yet. '}Your ${rupee(order.totalAmount)} will be refunded to your account.' : 'You have not completed a payment for this order, so nothing is charged. If your bank did take money, Kraveo refunds it automatically.'}',
       confirmLabel: 'Cancel order',
       cancelLabel: 'Keep it',
       danger: true,
@@ -138,7 +141,7 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
       showKSnack(
         context,
         e.kind == OrderErrorKind.conflict || e.kind == OrderErrorKind.rejected
-            ? (e.message ?? 'The restaurant already accepted this order, so it can\'t be cancelled in the app.')
+            ? (e.message ?? (order.isGroup ? 'A restaurant already accepted this order, so it can\'t be cancelled in the app.' : 'The restaurant already accepted this order, so it can\'t be cancelled in the app.'))
             : orderErrorMessage(e, action: 'cancel the order'),
         error: true,
       );
@@ -242,7 +245,7 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
       backgroundColor: k.bg,
       appBar: bar(Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
         const Text('Live tracking'),
-        Text('Order ${orderRef(order.id)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+        Text('Order ${orderRef(order.id)}${order.isGroup ? ' · ${order.group!.size} restaurants' : ''}', maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
       ])),
       body: RefreshIndicator(
         onRefresh: () async {
@@ -261,7 +264,7 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
                   itemCount: live.length,
                   separatorBuilder: (_, __) => const SizedBox(width: 8),
                   itemBuilder: (context, i) => KChoiceChip(
-                    label: '${live[i].vendorName} · ${live[i].awaitsPayment ? 'Unpaid' : live[i].status.pillLabel}',
+                    label: '${live[i].title} · ${live[i].awaitsPayment ? 'Unpaid' : live[i].status.pillLabel}',
                     selected: live[i].id == order.id,
                     onTap: () => setState(() => _picked = live[i].id),
                   ),
@@ -288,8 +291,12 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
               ),
               const SizedBox(height: 14),
             ],
-            if (status == OrderProgressStatus.arrivedAtGate) ...[
+            if (status == OrderProgressStatus.arrivedAtGate || (order.isGroup && order.otpCode != null && status != OrderProgressStatus.cancelled)) ...[
               KReveal(key: const ValueKey('otp'), index: 1, child: _OtpCard(order: order)),
+              const SizedBox(height: 14),
+            ],
+            if (order.isGroup) ...[
+              KReveal(key: const ValueKey('restaurants'), index: 1, child: _RestaurantsCard(order: order)),
               const SizedBox(height: 14),
             ],
             if (status == OrderProgressStatus.cancelled)
@@ -336,22 +343,33 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
             if (status == OrderProgressStatus.placed && order.isPaid) ...[
               const SizedBox(height: 14),
               Text(
-                order.acceptBy != null
-                    ? 'The restaurant has until ${clockLabel(order.acceptBy!)} to accept. If it doesn’t, the order is cancelled and refunded automatically.'
-                    : 'The restaurant has 10 minutes to accept. If it doesn’t, the order is cancelled and refunded automatically.',
+                order.isGroup
+                    ? (order.acceptBy != null
+                        ? 'The restaurants have until ${clockLabel(order.acceptBy!)} to accept. If any of them doesn’t, your whole order is cancelled and refunded automatically.'
+                        : 'The restaurants have 10 minutes to accept. If any of them doesn’t, your whole order is cancelled and refunded automatically.')
+                    : (order.acceptBy != null
+                        ? 'The restaurant has until ${clockLabel(order.acceptBy!)} to accept. If it doesn’t, the order is cancelled and refunded automatically.'
+                        : 'The restaurant has 10 minutes to accept. If it doesn’t, the order is cancelled and refunded automatically.'),
                 style: KraveoType.bodySm.copyWith(color: k.inkMuted),
               ),
-              const SizedBox(height: 10),
-              KButton(
-                label: 'Cancel order',
-                icon: LucideIcons.circleX,
-                kind: KButtonKind.ghost,
-                loading: orders.isCancelling(order.id),
-                onPressed: orders.isCancelling(order.id) ? null : () => _cancel(orders, order),
-              ),
+              // A combined order can be cancelled only while EVERY restaurant is still waiting.
+              if (order.canCancel) ...[
+                const SizedBox(height: 10),
+                KButton(
+                  label: 'Cancel order',
+                  icon: LucideIcons.circleX,
+                  kind: KButtonKind.ghost,
+                  loading: orders.isCancelling(order.id),
+                  onPressed: orders.isCancelling(order.id) ? null : () => _cancel(orders, order),
+                ),
+                if (order.isGroup) ...[
+                  const SizedBox(height: 6),
+                  Text('This cancels your whole order, from all ${order.group!.size} restaurants.', textAlign: TextAlign.center, style: KraveoType.caption.copyWith(color: k.inkFaint, fontSize: 12)),
+                ],
+              ],
             ],
             const SizedBox(height: 14),
-            if (status == OrderProgressStatus.delivered && !orders.hasReviewed(order.id)) ...[
+            if (status == OrderProgressStatus.delivered && !order.isGroup && !orders.hasReviewed(order.id)) ...[
               KButton(
                 label: 'Rate your meal',
                 icon: LucideIcons.star,
@@ -395,7 +413,7 @@ class _StatusHero extends StatelessWidget {
     if (unpaid) {
       hint = confirming ? 'Razorpay reported your payment. Kraveo is confirming it; this page updates by itself.' : 'The restaurant only sees your order after you pay.';
     } else {
-      hint = status.nextHint;
+      hint = order.isGroup ? groupNextHint(status) : status.nextHint;
     }
 
     return KCard(
@@ -428,11 +446,83 @@ class _StatusHero extends StatelessWidget {
         ],
         const SizedBox(height: 16),
         Text(
-          '${order.vendorName} · ${order.dropoffHostel.isEmpty ? 'Campus gate' : displayDropPoint(order.dropoffHostel)} · ${rupee(order.totalAmount)}',
+          '${order.title} · ${order.dropoffHostel.isEmpty ? 'Campus gate' : displayDropPoint(order.dropoffHostel)} · ${rupee(order.totalAmount)}',
           style: KraveoType.bodySm.copyWith(color: k.ink, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 2),
         Text('Placed at ${clockLabel(order.createdAt)}', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+      ]),
+    );
+  }
+}
+
+/// One row per restaurant of a combined order: its name, its own status (same wording as a
+/// single order) and what was ordered there.
+class _RestaurantsCard extends StatelessWidget {
+  const _RestaurantsCard({required this.order});
+
+  final OrderModel order;
+
+  String _items(OrderModel? part, GroupStop? stop) {
+    final lines = part?.items ?? const <OrderLine>[];
+    if (lines.isEmpty) {
+      final n = stop?.itemCount ?? 0;
+      return n == 0 ? '' : '$n ${n == 1 ? 'item' : 'items'}';
+    }
+    final parts = lines.map((i) => '${i.quantity} × ${i.name}').toList();
+    return parts.length <= 3 ? parts.join(', ') : '${parts.take(3).join(', ')} +${parts.length - 3} more';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.k;
+    final byId = {for (final m in order.members ?? const <OrderModel>[]) m.id: m};
+    final stops = order.group?.stops ?? const <GroupStop>[];
+    final rows = <({String name, OrderProgressStatus status, String items})>[
+      if (stops.isNotEmpty)
+        for (final s in stops) (name: byId[s.orderId]?.vendorName ?? s.vendorName, status: byId[s.orderId]?.status ?? s.status, items: _items(byId[s.orderId], s))
+      else
+        for (final m in order.members ?? const <OrderModel>[]) (name: m.vendorName, status: m.status, items: _items(m, null)),
+    ];
+    // The whole order is cancelled as soon as one part is: show every row that way.
+    final cancelled = order.status == OrderProgressStatus.cancelled;
+    return KCard(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('Your ${order.group!.size} restaurants', style: KraveoType.titleLg.copyWith(color: k.ink)),
+        const SizedBox(height: 4),
+        Text('One rider brings everything, with one OTP and one payment.', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+        const SizedBox(height: 10),
+        for (var i = 0; i < rows.length; i++) ...[
+          if (i > 0) Divider(height: 1, color: k.line),
+          Builder(builder: (context) {
+            final r = rows[i];
+            final status = cancelled ? OrderProgressStatus.cancelled : r.status;
+            final label = order.awaitsPayment ? 'Unpaid' : status.pillLabel;
+            return Semantics(
+              container: true,
+              label: '${r.name}: $label${r.items.isEmpty ? '' : '. ${r.items}'}',
+              child: ExcludeSemantics(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Padding(padding: const EdgeInsets.only(top: 2), child: Icon(LucideIcons.store, size: 16, color: k.brand)),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(r.name, maxLines: 3, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.ink))),
+                      const SizedBox(width: 10),
+                      KStatusPill(status: status.kStatus, label: label, compact: true),
+                    ]),
+                    if (r.items.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Padding(padding: const EdgeInsets.only(left: 24), child: Text(r.items, maxLines: 3, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted))),
+                    ],
+                  ]),
+                ),
+              ),
+            );
+          }),
+        ],
       ]),
     );
   }
@@ -476,7 +566,7 @@ class _PaymentCard extends StatelessWidget {
         Text('Payment not completed', style: KraveoType.titleLg.copyWith(color: k.ink)),
         const SizedBox(height: 6),
         Text(
-          'Pay by ${clockLabel(order.paymentDeadline)} to send this order to the restaurant. Unpaid orders are cancelled automatically after 15 minutes.',
+          'Pay by ${clockLabel(order.paymentDeadline)} to send this order to ${order.isGroup ? 'the restaurants' : 'the restaurant'}. Unpaid orders are cancelled automatically after 15 minutes.',
           style: KraveoType.bodySm.copyWith(color: k.inkMuted),
         ),
         if (unconfirmed) ...[
@@ -490,6 +580,10 @@ class _PaymentCard extends StatelessWidget {
         KButton(label: 'Try payment again · ${rupee(order.totalAmount)}', icon: LucideIcons.lock, loading: paying, onPressed: paying || cancelling ? null : onPay),
         const SizedBox(height: 8),
         KButton(label: 'Cancel order', kind: KButtonKind.ghost, loading: cancelling, onPressed: paying || cancelling ? null : onCancel),
+        if (order.isGroup) ...[
+          const SizedBox(height: 6),
+          Text('This cancels your whole order, from all ${order.group!.size} restaurants.', textAlign: TextAlign.center, style: KraveoType.caption.copyWith(color: k.inkFaint, fontSize: 12)),
+        ],
       ]),
     );
   }
@@ -520,7 +614,10 @@ class _OtpCard extends StatelessWidget {
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('Your gate OTP', style: KraveoType.titleLg.copyWith(color: k.ink)),
-              Text('Your rider is here. Tell them this code to get your food.', style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+              Text(
+                order.isGroup ? 'Your rider is here with all your food. One code for all ${order.group!.size} restaurants: tell it to them.' : 'Your rider is here. Tell them this code to get your food.',
+                style: KraveoType.bodySm.copyWith(color: k.inkMuted),
+              ),
             ]),
           ),
         ]),
@@ -564,6 +661,10 @@ class _CancelledCard extends StatelessWidget {
       case CancelledBy.customer:
         return 'You cancelled this order.';
       case CancelledBy.vendor:
+        if (order.isGroup) {
+          final who = order.cancelTriggerName ?? 'A restaurant';
+          return reason == null ? '$who couldn’t take its part, so your whole order was cancelled.' : '$who couldn’t take its part, so your whole order was cancelled: $reason';
+        }
         return reason == null ? 'The restaurant couldn’t take your order.' : 'The restaurant couldn’t take your order: $reason';
       case CancelledBy.admin:
         return reason == null ? 'Kraveo support cancelled this order.' : 'Kraveo support cancelled this order: $reason';

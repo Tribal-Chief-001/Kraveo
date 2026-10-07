@@ -8,8 +8,10 @@ import '../models/order.dart';
 import '../providers/cart_provider.dart';
 import '../providers/dhaba_provider.dart';
 import '../providers/order_provider.dart';
+import '../providers/quote_controller.dart';
 import '../providers/session_provider.dart';
 import '../services/order_api.dart';
+import '../models/cart_item.dart';
 import '../models/drop_point.dart';
 import '../widgets/coupon_box.dart';
 import '../widgets/delivery_confirm_sheet.dart';
@@ -30,6 +32,11 @@ import 'payment_success_screen.dart';
 /// the server's bill is shown, then Razorpay runs on that same order. A failed or cancelled
 /// payment keeps the order (PENDING) and offers "Try payment again" on it; nothing here ever
 /// creates a second order for the same cart.
+///
+/// Two or more restaurants (Docs/22) go through `POST /order-groups` instead: still one
+/// checkout, ONE payment (on the primary part of the combined order). While the cart is being
+/// edited the bill is the server's price quote (`POST /orders/quote`); the local estimate only
+/// fills in while that loads or fails.
 class CheckoutScreen extends StatefulWidget {
   /// The saved drop-off point, or null when the student has none (non-students, or no hostel
   /// saved yet). Null forces an explicit choice before the Pay button works.
@@ -70,6 +77,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   /// The drop-off picker is open.
   bool _pickerOpen = false;
 
+  /// The server's price for the cart (debounced `POST /orders/quote`).
+  late final QuoteController _quote;
+
   final List<Map<String, dynamic>> _paymentOptions = [
     {
       'name': 'Pay online via Razorpay',
@@ -94,6 +104,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         _notice = 'You already placed this order. Complete the payment, or cancel it to change something.';
       }
     }
+    _quote = QuoteController(
+      api: context.read<OrderProvider>().api,
+      onMaxRestaurants: (max) {
+        if (mounted) context.read<CartProvider>().setMaxRestaurants(max);
+      },
+    )..addListener(_onQuoteChanged);
     // Ask once (with a reason) whether to send order updates; no-op without push support.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) askForNotificationsOnce(context);
@@ -102,8 +118,37 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   @override
   void dispose() {
+    _quote
+      ..removeListener(_onQuoteChanged)
+      ..dispose();
     _deliveryNoteController.dispose();
     super.dispose();
+  }
+
+  void _onQuoteChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Asks for the server's price of the cart on screen (nothing once the order exists: the bill
+  /// then comes from the order). An unchanged cart is a no-op.
+  void _syncQuote(CartProvider cart, bool placed) {
+    final request = placed || cart.items.isEmpty ? null : CheckoutDraft.fromCart(cart, dropoffHostel: '', dropoffNotes: '').quoteRequest;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _quote.request(request);
+    });
+  }
+
+  /// What the Pay button and the bill show right now: the server's quote when there is one,
+  /// otherwise the local estimate.
+  double _shownTotal(CartProvider cart) => _quote.quote?.total ?? cart.grandTotal;
+
+  /// Why a cart with several restaurants cannot be ordered as it is, or null.
+  String? _blockMessage(CartProvider cart) {
+    if (!cart.isMultiRestaurant) return null;
+    if (cart.maxRestaurants <= 1) return 'Ordering from several restaurants at once is not available right now. Go back and keep one restaurant in your cart.';
+    if (cart.restaurantCount > cart.maxRestaurants) return 'You can order from at most ${cart.maxRestaurants} restaurants at once. Go back and remove a restaurant from your cart.';
+    if (_quote.blocksCheckout) return _quote.problem;
+    return null;
   }
 
   void _setBusy(bool v) {
@@ -169,12 +214,27 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       _chooseDropoff();
       return null;
     }
-    if (!context.read<DhabaProvider>().isLiveVendor(cart.dhabaId)) {
-      _showError('This kitchen\'s live menu hasn\'t loaded, so it can\'t take orders right now. Check your connection, then open the kitchen again from Home.');
-      return null;
+    final dhabas = context.read<DhabaProvider>();
+    if (!cart.isMultiRestaurant) {
+      if (!dhabas.isLiveVendor(cart.dhabaId)) {
+        _showError('This kitchen\'s live menu hasn\'t loaded, so it can\'t take orders right now. Check your connection, then open the kitchen again from Home.');
+        return null;
+      }
+    } else {
+      final blocked = _blockMessage(cart);
+      if (blocked != null) {
+        _showError(blocked);
+        return null;
+      }
+      for (final r in cart.restaurants) {
+        if (!dhabas.isLiveVendor(r.id)) {
+          _showError('${r.name}\'s live menu hasn\'t loaded, so it can\'t take orders right now. Check your connection, then open the kitchen again from Home.');
+          return null;
+        }
+      }
     }
 
-    _previewTotal = cart.grandTotal;
+    _previewTotal = _shownTotal(cart);
     setState(() {
       _busy = true;
       _notice = null;
@@ -200,6 +260,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           // The menu or the kitchen's open state changed since this phone last looked.
           unawaited(context.read<DhabaProvider>().loadCatalog());
       }
+      if (cart.isMultiRestaurant) message = _groupErrorMessage(cart, error, message);
       _showError(message);
       return null;
     }
@@ -219,6 +280,29 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       return null;
     }
     return order;
+  }
+
+  /// Wording for the errors only a combined order can get (Docs/22 10.1): which restaurant is
+  /// closed, how many restaurants are allowed, an old server without combined orders.
+  String _groupErrorMessage(CartProvider cart, OrderApiError error, String fallback) {
+    final name = error.vendorId == null ? null : cart.restaurants.where((r) => r.id == error.vendorId).map((r) => r.name).firstOrNull;
+    switch (error.code) {
+      case 'VENDOR_CLOSED':
+        return name == null ? fallback : '$name is closed for new orders right now. Remove it from your cart to order from the others.';
+      case 'VENDOR_UNAVAILABLE':
+        return name == null ? fallback : '$name isn\'t available right now. Remove it from your cart to order from the others.';
+      case 'MULTI_DISABLED':
+        cart.setMaxRestaurants(1);
+        return 'Ordering from several restaurants at once is switched off right now. Keep one restaurant in your cart.';
+      case 'TOO_MANY_RESTAURANTS':
+        if (error.maxRestaurants != null) cart.setMaxRestaurants(error.maxRestaurants!);
+        return error.message ?? fallback;
+    }
+    if (error.kind == OrderErrorKind.notFound) {
+      cart.setMaxRestaurants(1); // an old server knows no combined orders
+      return 'Ordering from several restaurants at once is not available yet. Please order from one restaurant at a time.';
+    }
+    return fallback;
   }
 
   Future<void> _pay(OrderProvider orders, CartProvider cart) async {
@@ -262,9 +346,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final ok = await showKConfirm(
       context,
       title: 'Cancel this order?',
-      message: _paymentAttempted
-          ? 'If your bank already took money for this order, Kraveo refunds it automatically. Your cart stays as it is, so you can change it and order again.'
-          : 'You have not completed a payment for this order, so nothing is charged. Your cart stays as it is, so you can change it and order again.',
+      message: (order.isGroup ? 'This cancels your whole order, from all ${order.group!.size} restaurants. ' : '') +
+          (_paymentAttempted
+              ? 'If your bank already took money for this order, Kraveo refunds it automatically. Your cart stays as it is, so you can change it and order again.'
+              : 'You have not completed a payment for this order, so nothing is charged. Your cart stays as it is, so you can change it and order again.'),
       confirmLabel: 'Cancel order',
       cancelLabel: 'Keep it',
       danger: true,
@@ -300,7 +385,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         builder: (context) => PaymentSuccessScreen(
           orderId: orderId,
           amountLabel: rupee(order.totalAmount),
-          vendorName: order.vendorName.isEmpty ? 'the kitchen' : order.vendorName,
+          vendorName: order.isGroup ? 'your ${order.group!.size} restaurants' : (order.vendorName.isEmpty ? 'the kitchen' : order.vendorName),
           confirming: confirming,
           onContinue: () {
             if (!context.mounted) return;
@@ -337,6 +422,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final orders = Provider.of<OrderProvider>(context);
     final order = _orderId == null ? null : orders.orderById(_orderId!);
     final busy = _busy || (order != null && orders.isPaying(order.id));
+    _syncQuote(cart, order != null);
+    final multi = cart.isMultiRestaurant;
+    final blockMessage = order == null ? _blockMessage(cart) : null;
     // With the keyboard up on a small phone the footer (notice + button + caption) would leave
     // almost no room for the form: it shrinks to the button, and the notice moves into the list.
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
@@ -364,25 +452,33 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           if (keyboardOpen && _notice != null) _NoticeLine(message: _notice!, error: true),
           KReveal(child: _SectionCard(title: 'Drop-off', icon: LucideIcons.mapPin, child: _buildDropoff(context, k))),
           const SizedBox(height: 14),
-          KReveal(index: 1, child: _SectionCard(title: cart.dhabaName ?? 'Your order', icon: LucideIcons.receiptText, child: _buildSummary(context, k, cart))),
+          KReveal(
+            index: 1,
+            child: _SectionCard(
+              title: multi ? 'Your order · ${cart.restaurantCount} restaurants' : (cart.dhabaName ?? 'Your order'),
+              icon: LucideIcons.receiptText,
+              child: _buildSummary(context, k, cart),
+            ),
+          ),
           const SizedBox(height: 14),
           KReveal(index: 2, child: CoinsBalance(cart: cart)),
           const SizedBox(height: 14),
           KReveal(index: 3, child: _SectionCard(title: 'Payment', icon: LucideIcons.wallet, child: _buildPayment(context, k))),
           const SizedBox(height: 14),
-          KReveal(index: 4, child: BillBreakdown.cart(cart: cart)),
+          KReveal(index: 4, child: _buildBill(cart)),
         ],
       );
       footer = KSheetFooter(
         floating: true,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (_notice != null && !keyboardOpen) _NoticeLine(message: _notice!, error: true),
+          if (blockMessage != null && !keyboardOpen) _NoticeLine(message: blockMessage, error: true),
+          if (_notice != null && !keyboardOpen && _notice != blockMessage) _NoticeLine(message: _notice!, error: true),
           KButton(
-            label: _currentHostel == null ? 'Choose drop-off' : 'Pay ${rupee(cart.grandTotal)}',
+            label: _currentHostel == null ? 'Choose drop-off' : 'Pay ${rupee(_shownTotal(cart))}',
             icon: _currentHostel == null ? LucideIcons.mapPin : LucideIcons.lock,
             kind: _currentHostel == null ? KButtonKind.accent : KButtonKind.primary,
             loading: busy,
-            onPressed: busy ? null : () => _onPrimary(cart, orders),
+            onPressed: busy || blockMessage != null ? null : () => _onPrimary(cart, orders),
           ),
           if (!keyboardOpen) ...[
             const SizedBox(height: 8),
@@ -467,26 +563,45 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ]),
         ),
         const SizedBox(height: 14),
-        _SectionCard(
-          title: order.vendorName,
-          icon: LucideIcons.receiptText,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text('Order ${orderRef(order.id)}', style: KraveoType.label.copyWith(color: k.brand, fontSize: 13)),
-            const SizedBox(height: 6),
-            for (final line in order.items)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Expanded(child: Text('${line.quantity} × ${line.name}', maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: k.ink, fontWeight: FontWeight.w600, fontSize: 14))),
-                  const SizedBox(width: 12),
-                  Text(rupee(line.lineTotal), style: KraveoType.body.copyWith(color: k.ink, fontWeight: FontWeight.w700, fontSize: 14)),
-                ]),
-              ),
-          ]),
-        ),
-        const SizedBox(height: 14),
+        if (order.isGroup && order.members != null && order.members!.length > 1)
+          for (final part in order.members!) ...[
+            _SectionCard(title: part.vendorName, icon: LucideIcons.receiptText, child: _placedLines(k, part, label: 'Order ${orderRef(part.id)}')),
+            const SizedBox(height: 14),
+          ]
+        else ...[
+          _SectionCard(title: order.vendorName, icon: LucideIcons.receiptText, child: _placedLines(k, order, label: 'Order ${orderRef(order.id)}')),
+          const SizedBox(height: 14),
+        ],
         BillBreakdown.order(order: order),
       ],
+    );
+  }
+
+  Widget _placedLines(KraveoTokens k, OrderModel part, {required String label}) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text(label, style: KraveoType.label.copyWith(color: k.brand, fontSize: 13)),
+      const SizedBox(height: 6),
+      for (final line in part.items)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(child: Text('${line.quantity} × ${line.name}', maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: k.ink, fontWeight: FontWeight.w600, fontSize: 14))),
+            const SizedBox(width: 12),
+            Text(rupee(line.lineTotal), style: KraveoType.body.copyWith(color: k.ink, fontWeight: FontWeight.w700, fontSize: 14)),
+          ]),
+        ),
+    ]);
+  }
+
+  /// The server's price when it has answered, else the local estimate (marked as such).
+  Widget _buildBill(CartProvider cart) {
+    final q = _quote.quote;
+    if (q != null) return BillBreakdown.quote(quote: q);
+    return BillBreakdown.cart(
+      cart: cart,
+      loading: _quote.isLoading,
+      problem: _quote.problem,
+      onRetry: _quote.status == QuoteStatus.failed && !_quote.unsupported ? _quote.retry : null,
     );
   }
 
@@ -596,27 +711,51 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     ]);
   }
 
+  Widget _summaryLine(KraveoTokens k, CartItem item) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(padding: const EdgeInsets.only(top: 3), child: VegMark(isVeg: item.item.isVeg, size: 14)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${item.quantity} × ${item.item.name}', maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: k.ink, fontWeight: FontWeight.w600, fontSize: 14)),
+            if (item.selectedOptions.isNotEmpty)
+              Text(item.customizationSummary, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
+          ]),
+        ),
+        const SizedBox(width: 12),
+        Text(rupee(item.totalPrice), style: KraveoType.body.copyWith(color: k.ink, fontWeight: FontWeight.w700, fontSize: 14)),
+      ]),
+    );
+  }
+
   Widget _buildSummary(BuildContext context, KraveoTokens k, CartProvider cart) {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Text('${cart.itemCount} ${cart.itemCount == 1 ? 'item' : 'items'} in your order', style: KraveoType.label.copyWith(color: k.brand, fontSize: 13)),
       const SizedBox(height: 6),
-      for (final item in cart.items)
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Padding(padding: const EdgeInsets.only(top: 3), child: VegMark(isVeg: item.item.isVeg, size: 14)),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('${item.quantity} × ${item.item.name}', maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: k.ink, fontWeight: FontWeight.w600, fontSize: 14)),
-                if (item.selectedOptions.isNotEmpty)
-                  Text(item.customizationSummary, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: k.inkMuted)),
-              ]),
+      if (cart.isMultiRestaurant)
+        for (final r in cart.restaurants) ...[
+          Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 2),
+            child: Semantics(
+              header: true,
+              label: '${r.name}, ${rupee(r.subtotal)}',
+              child: ExcludeSemantics(
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(LucideIcons.store, size: 16, color: k.brand),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(r.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.ink))),
+                  const SizedBox(width: 12),
+                  Text(rupee(r.subtotal), style: KraveoType.body.copyWith(color: k.inkMuted, fontWeight: FontWeight.w700, fontSize: 14)),
+                ]),
+              ),
             ),
-            const SizedBox(width: 12),
-            Text(rupee(item.totalPrice), style: KraveoType.body.copyWith(color: k.ink, fontWeight: FontWeight.w700, fontSize: 14)),
-          ]),
-        ),
+          ),
+          for (final item in r.items) _summaryLine(k, item),
+        ]
+      else
+        for (final item in cart.items) _summaryLine(k, item),
       Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Divider(height: 1, color: k.line)),
       const CouponBox(),
     ]);

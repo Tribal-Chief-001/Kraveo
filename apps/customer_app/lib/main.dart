@@ -133,17 +133,25 @@ class _AuthGateState extends State<AuthGate> {
       _routingTap = false;
       if (!mounted || _session.status != SessionStatus.signedIn) return;
       final navigator = Navigator.of(context);
-      final routeName = 'track:${tap.orderId}';
+      // A push for any restaurant of a combined order opens the one screen of the whole order:
+      // name the route by the order's primary id when it is known, so a second tap (for another
+      // restaurant's part) finds the screen that is already open.
+      final orderId = context.read<OrderProvider>().orderById(tap.orderId)?.id ?? tap.orderId;
+      final routeName = 'track:$orderId';
       String? topName;
       navigator.popUntil((route) {
         topName = route.settings.name;
         return true;
       });
-      if (topName == routeName) return; // already showing it
+      // The screen on top may have been opened through another part of the same combined order.
+      final top = topName;
+      final topId = top != null && top.startsWith('track:') ? top.substring(6) : null;
+      final topCanonical = topId == null ? top : 'track:${context.read<OrderProvider>().orderById(topId)?.id ?? topId}';
+      if (topCanonical == routeName) return; // already showing it
       navigator.popUntil((route) => route.isFirst);
       navigator.push(MaterialPageRoute<void>(
         settings: RouteSettings(name: routeName),
-        builder: (_) => LiveTrackingScreen(orderId: tap.orderId),
+        builder: (_) => LiveTrackingScreen(orderId: orderId),
       ));
     });
   }

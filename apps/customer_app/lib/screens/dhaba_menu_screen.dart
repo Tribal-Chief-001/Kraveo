@@ -70,19 +70,24 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
       showKSnack(context, '${dhaba.name} is not taking orders right now.', error: true, icon: LucideIcons.moon);
       return;
     }
-    if (!cart.canAddMore(item.id) && cart.dhabaId == dhaba.id) {
+    if (!cart.canAddMore(item.id) && cart.hasRestaurant(dhaba.id)) {
       showKSnack(context, CartProvider.maxQuantityMessage, icon: LucideIcons.info);
       return;
     }
-    if (cart.items.isNotEmpty && cart.dhabaId != null && cart.dhabaId != dhaba.id) {
+    if (cart.wouldReplaceCart(dhaba.id)) {
+      // Ordering from several restaurants is off (the server's limit is 1): the old behaviour.
       final replace = await showKConfirm(
         context,
         title: 'Start a new cart?',
-        message: 'Your cart has items from ${cart.dhabaName ?? 'another kitchen'}. You can order from one kitchen at a time, so adding this will clear them.',
+        message: 'Your cart has items from another restaurant. Start a new cart?',
         confirmLabel: 'Start new cart',
         cancelLabel: 'Keep my cart',
       );
       if (replace != true || !mounted) return;
+    } else if (!cart.canAddRestaurant(dhaba.id)) {
+      // Already at the most restaurants one order may hold: say so instead of adding.
+      showKSnack(context, cart.maxRestaurantsMessage, icon: LucideIcons.info);
+      return;
     }
     if (item.hasCustomizations) {
       CustomizationModal.show(
@@ -503,7 +508,8 @@ class _CartBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    final fromOther = cart.dhabaName != null && cart.dhabaName != kitchenName;
+    final multi = cart.isMultiRestaurant;
+    final fromOther = !multi && cart.dhabaName != null && cart.dhabaName != kitchenName;
     final count = cart.itemCount;
     return KFloatingBar(
       semanticLabel: 'View cart, $count ${count == 1 ? 'item' : 'items'}, ${rupee(cart.subtotal)}',
@@ -520,7 +526,9 @@ class _CartBar extends StatelessWidget {
         ),
       ),
       title: KMoneyText(value: cart.subtotal, style: KraveoType.numericSm.copyWith(color: k.onBrand, fontSize: 21)),
-      subtitle: fromOther ? 'From ${cart.dhabaName}' : '${count == 1 ? '1 item' : '$count items'} · plus fees',
+      subtitle: multi
+          ? '${cart.restaurantCount} restaurants · ${count == 1 ? '1 item' : '$count items'}'
+          : (fromOther ? 'From ${cart.dhabaName}' : '${count == 1 ? '1 item' : '$count items'} · plus fees'),
       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
         Text('View cart', style: KraveoType.button.copyWith(color: k.onBrand, fontSize: 14)),
         const SizedBox(width: 6),

@@ -525,7 +525,7 @@ class _ActiveOrderBar extends StatelessWidget {
     final k = context.k;
     final order = orderProvider.activeOrder!;
     return KFloatingBar(
-      semanticLabel: 'Active order from ${order.vendorName}: ${orderHeadline(order)}. Open tracking',
+      semanticLabel: 'Active order from ${order.title}: ${orderHeadline(order)}. Open tracking',
       onTap: onTap,
       leading: Container(
         width: 44,
@@ -536,7 +536,7 @@ class _ActiveOrderBar extends StatelessWidget {
       title: Text(orderHeadline(order), maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.titleMd.copyWith(color: k.onBrand)),
       subtitle: order.otpCode != null
           ? 'Gate OTP ${order.otpCode}'
-          : (order.awaitsPayment ? 'Pay by ${clockLabel(order.paymentDeadline)} · ${order.vendorName}' : order.vendorName),
+          : (order.awaitsPayment ? 'Pay by ${clockLabel(order.paymentDeadline)} · ${order.title}' : order.title),
       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
         Text('Track', style: KraveoType.button.copyWith(color: k.onBrand, fontSize: 14)),
         const SizedBox(width: 4),

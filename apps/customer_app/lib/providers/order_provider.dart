@@ -3,13 +3,15 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../models/order.dart';
+import '../models/order_group.dart';
 import '../services/customer_api_service.dart';
 import '../services/order_api.dart';
 import '../services/order_realtime.dart';
 import '../services/payment_gateway.dart';
 import 'cart_provider.dart';
 
-/// What the student is about to order, as checkout sends it to `POST /orders`.
+/// What the student is about to order, as checkout sends it to `POST /orders` (one restaurant)
+/// or `POST /order-groups` (two or more, Docs/22).
 class CheckoutDraft {
   CheckoutDraft({
     required this.vendorId,
@@ -17,23 +19,53 @@ class CheckoutDraft {
     required this.dropoffHostel,
     required this.dropoffNotes,
     this.couponCode,
-  }) : items = _aggregate(items);
+    List<RestaurantCart> extraRestaurants = const [],
+  })  : items = _aggregate(items),
+        extraRestaurants = [for (final r in extraRestaurants) RestaurantCart(vendorId: r.vendorId, items: _aggregate(r.items))];
 
   /// Builds the draft from the cart. Quantities of the same dish are summed: the server prices
-  /// and stores dishes, not the app's local option variants.
-  factory CheckoutDraft.fromCart(CartProvider cart, {required String dropoffHostel, required String dropoffNotes}) => CheckoutDraft(
+  /// and stores dishes, not the app's local option variants. The first restaurant is the
+  /// primary one (it carries the base fee, the coupon and the payment of a combined order).
+  factory CheckoutDraft.fromCart(CartProvider cart, {required String dropoffHostel, required String dropoffNotes}) {
+    final all = cart.restaurants;
+    if (all.length <= 1) {
+      return CheckoutDraft(
         vendorId: cart.dhabaId ?? '',
         items: [for (final i in cart.items) (itemId: i.item.id, quantity: i.quantity)],
         dropoffHostel: dropoffHostel,
         dropoffNotes: dropoffNotes,
         couponCode: cart.appliedCouponCode,
       );
+    }
+    return CheckoutDraft(
+      vendorId: all.first.id,
+      items: [for (final i in all.first.items) (itemId: i.item.id, quantity: i.quantity)],
+      dropoffHostel: dropoffHostel,
+      dropoffNotes: dropoffNotes,
+      couponCode: cart.appliedCouponCode,
+      extraRestaurants: [
+        for (final r in all.skip(1)) RestaurantCart(vendorId: r.id, items: [for (final i in r.items) (itemId: i.item.id, quantity: i.quantity)]),
+      ],
+    );
+  }
 
   final String vendorId;
   final List<({String itemId, int quantity})> items;
   final String dropoffHostel;
   final String dropoffNotes;
   final String? couponCode;
+
+  /// The restaurants after the first one. Empty for a normal single-restaurant order.
+  final List<RestaurantCart> extraRestaurants;
+
+  /// Two or more restaurants: placed with `POST /order-groups`.
+  bool get isGroup => extraRestaurants.isNotEmpty;
+
+  /// Every restaurant of the order, primary first.
+  List<RestaurantCart> get restaurants => [RestaurantCart(vendorId: vendorId, items: items), ...extraRestaurants];
+
+  /// The same cart as a price-quote request (`POST /orders/quote`).
+  QuoteRequest get quoteRequest => QuoteRequest(restaurants: restaurants, couponCode: couponCode);
 
   static List<({String itemId, int quantity})> _aggregate(List<({String itemId, int quantity})> raw) {
     final totals = <String, int>{};
@@ -46,7 +78,12 @@ class CheckoutDraft {
 
   /// Identifies "the same cart": a repeat checkout of an unchanged cart reuses the same
   /// idempotency key (and therefore the same server order).
-  String get cartKey => [vendorId, for (final i in items) '${i.itemId}x${i.quantity}', (couponCode ?? '').toUpperCase()].join('|');
+  String get cartKey {
+    if (!isGroup) return [vendorId, for (final i in items) '${i.itemId}x${i.quantity}', (couponCode ?? '').toUpperCase()].join('|');
+    // Order of the restaurants does not matter for "the same cart".
+    final parts = [for (final r in restaurants) '${r.vendorId}:${[for (final i in r.items) '${i.itemId}x${i.quantity}'].join(',')}']..sort();
+    return ['group', ...parts, (couponCode ?? '').toUpperCase()].join('|');
+  }
 }
 
 class _CheckoutAttempt {
@@ -60,6 +97,7 @@ class _CheckoutAttempt {
   /// 409 CLIENT_REQUEST_MISMATCH otherwise.
   final String dropoffHostel;
   final String dropoffNotes;
+  /// The id to pay and cancel: the order, or the PRIMARY child of a combined order.
   String? orderId;
 }
 
@@ -144,6 +182,13 @@ class OrderProvider with ChangeNotifier {
   List<String> _activeIds = const [];
   List<String> _historyIds = const [];
   final Map<String, DateTime> _locallyAddedAt = {};
+
+  /// Group total from `GET /order-groups/:id` / the place answer: stands in for the sum of the
+  /// children while some of them are not loaded yet. Groups themselves are never stored: they are
+  /// derived from the child orders in [_orders] (see [_view]).
+  final Map<String, double> _groupTotals = {};
+  final Map<String, Future<OrderResult<OrderGroupView>>> _groupRefreshing = {};
+  final Set<String> _completionTried = {};
   final Map<String, RiderLocation> _riderLocations = {};
 
   /// One notifier per order so a rider fix repaints only the map that listens to it, not every
@@ -187,11 +232,44 @@ class OrderProvider with ChangeNotifier {
 
   String? get userId => _userId;
 
-  OrderModel? orderById(String id) => _orders[id];
+  /// The API this provider talks to (the checkout's price quote uses the same one).
+  OrderApi get api => _api;
+
+  /// The order as the screens show it: for a single order the server copy, for a part of a
+  /// combined order the COMPOSITE of the whole group (id = the primary child's id).
+  OrderModel? orderById(String id) => _view(id);
+
+  OrderModel? _view(String id) {
+    final o = _orders[id];
+    if (o == null) return null;
+    final gid = o.group?.id;
+    return gid == null ? o : _composite(gid) ?? o;
+  }
+
+  OrderModel? _composite(String groupId) {
+    final kids = _orders.values.where((o) => o.group?.id == groupId).toList();
+    return kids.isEmpty ? null : OrderModel.composite(kids, groupTotal: _groupTotals[groupId]);
+  }
+
+  /// One entry per combined order (its composite), single orders as they are; first occurrence wins.
+  List<OrderModel> _collapse(Iterable<OrderModel> kids) {
+    final out = <OrderModel>[];
+    final seen = <String>{};
+    for (final o in kids) {
+      final gid = o.group?.id;
+      if (gid == null) {
+        out.add(o);
+      } else if (seen.add(gid)) {
+        out.add(_composite(gid) ?? o);
+      }
+    }
+    return out;
+  }
 
   /// Orders in progress (newest first) followed by ones that finished in the last few minutes.
+  /// A combined order is ONE entry.
   List<OrderModel> get activeOrders {
-    final list = _activeIds.map((id) => _orders[id]).whereType<OrderModel>().where(_isActiveNow).toList();
+    final list = _collapse(_activeIds.map((id) => _orders[id]).whereType<OrderModel>()).where(_isActiveNow).toList();
     list.sort((a, b) {
       if (a.isLive != b.isLive) return a.isLive ? -1 : 1;
       return b.createdAt.compareTo(a.createdAt);
@@ -215,7 +293,7 @@ class OrderProvider with ChangeNotifier {
     return live.isEmpty ? null : live.first;
   }
 
-  List<OrderModel> get history => _historyIds.map((id) => _orders[id]).whereType<OrderModel>().toList();
+  List<OrderModel> get history => _collapse(_historyIds.map((id) => _orders[id]).whereType<OrderModel>());
 
   /// Alias kept for screens/tests written against the previous API.
   List<OrderModel> get orderHistory => history;
@@ -295,7 +373,7 @@ class OrderProvider with ChangeNotifier {
   OrderModel? openCheckoutOrder(CheckoutDraft draft) {
     final a = _attempt;
     if (a == null || a.orderId == null || a.cartKey != draft.cartKey) return null;
-    final order = _orders[a.orderId];
+    final order = _view(a.orderId!);
     return order != null && order.isLive ? order : null;
   }
 
@@ -336,6 +414,9 @@ class OrderProvider with ChangeNotifier {
     _activeIds = const [];
     _historyIds = const [];
     _locallyAddedAt.clear();
+    _groupTotals.clear();
+    _groupRefreshing.clear();
+    _completionTried.clear();
     _riderLocations.clear();
     _riderNotifiers.clear(); // (not reset in place: this may run mid-build)
     _reviewed.clear();
@@ -398,6 +479,7 @@ class OrderProvider with ChangeNotifier {
       _activeIds = ids;
       _activeLoaded = true;
       _activeError = null;
+      _ensureGroupsComplete();
     } else {
       _activeError = r.error;
     }
@@ -435,6 +517,7 @@ class OrderProvider with ChangeNotifier {
       _historyHasMore = page.nextCursor != null;
       _historyLoaded = true;
       _historyError = null;
+      _ensureGroupsComplete();
     } else {
       _historyError = r.error;
     }
@@ -442,10 +525,74 @@ class OrderProvider with ChangeNotifier {
   }
 
   /// `GET /orders/:id`, merged by `updatedAt`. Returns the freshest copy (or null on failure).
-  Future<OrderModel?> refreshOrder(String orderId) => _refreshing[orderId] ??= _refreshOrder(orderId).whenComplete(() {
+  ///
+  /// A part of a combined order refreshes the WHOLE group with one `GET /order-groups/:id` (so
+  /// the screen never shows restaurants at different moments); the freshest composite is returned.
+  Future<OrderModel?> refreshOrder(String orderId) {
+    final gid = _orders[orderId]?.group?.id;
+    if (gid != null) return _refreshViaGroup(orderId, gid);
+    return _refreshSingle(orderId);
+  }
+
+  Future<OrderModel?> _refreshSingle(String orderId) => _refreshing[orderId] ??= _refreshOrder(orderId).whenComplete(() {
         // Block body: returning the removed Future here would make whenComplete wait on itself.
         _refreshing.remove(orderId);
       });
+
+  Future<OrderModel?> _refreshViaGroup(String orderId, String groupId) async {
+    final gen = _generation;
+    final r = await refreshGroup(groupId);
+    if (gen != _generation) return null;
+    final e = r.error;
+    // An answer that is not about the network (the group endpoint refused or is missing): read
+    // the part itself, so polling can never go blind.
+    if (e != null && !e.isNetwork && e.kind != OrderErrorKind.unauthorized) {
+      await _refreshSingle(orderId);
+      if (gen != _generation) return null;
+    }
+    return _view(orderId);
+  }
+
+  /// `GET /order-groups/:id`: loads every part of a combined order and merges them like any
+  /// order. Concurrent calls share one request.
+  Future<OrderResult<OrderGroupView>> refreshGroup(String groupId) => _groupRefreshing[groupId] ??= _refreshGroup(groupId).whenComplete(() {
+        _groupRefreshing.remove(groupId);
+      });
+
+  Future<OrderResult<OrderGroupView>> _refreshGroup(String groupId) async {
+    final gen = _generation;
+    final r = await _api.fetchGroup(groupId);
+    if (gen != _generation) return const OrderResult.fail(OrderApiError(OrderErrorKind.unauthorized));
+    final g = r.value;
+    if (g != null) _storeGroup(g);
+    return r;
+  }
+
+  void _storeGroup(OrderGroupView g) {
+    _groupTotals[g.id] = g.total;
+    for (final child in g.orders) {
+      _ingest(child);
+    }
+  }
+
+  /// A list page can hold only some parts of a combined order: fetch the rest once.
+  void _ensureGroupsComplete() {
+    final loaded = <String, int>{};
+    final sizes = <String, int>{};
+    for (final o in _orders.values) {
+      final g = o.group;
+      if (g == null) continue;
+      loaded[g.id] = (loaded[g.id] ?? 0) + 1;
+      sizes[g.id] = g.size;
+    }
+    for (final gid in loaded.keys) {
+      if (loaded[gid]! < sizes[gid]! && !_groupRefreshing.containsKey(gid) && _completionTried.add(gid)) {
+        unawaited(refreshGroup(gid).then((r) {
+          if (!r.ok) _completionTried.remove(gid); // try again on the next list load
+        }));
+      }
+    }
+  }
 
   Future<OrderModel?> _refreshOrder(String orderId) async {
     final gen = _generation;
@@ -465,12 +612,13 @@ class OrderProvider with ChangeNotifier {
           }
         }
       }
-      return _orders[orderId];
+      return _view(orderId);
     }
     final hadError = _loadErrors.remove(orderId) != null;
     _ingest(o);
     if (hadError) _ensurePolling(); // polling was switched off for a missing order: it exists now
-    return _orders[orderId];
+    if (o.group != null) _ensureGroupsComplete(); // the other restaurants of a combined order
+    return _view(orderId);
   }
 
   // ---- merging -------------------------------------------------------------------------------
@@ -523,7 +671,7 @@ class OrderProvider with ChangeNotifier {
   Future<OrderResult<OrderModel>> _placeOrder(CheckoutDraft draft) async {
     var attempt = _attempt;
     if (attempt != null && attempt.cartKey == draft.cartKey && attempt.orderId != null) {
-      final existing = _orders[attempt.orderId];
+      final existing = _view(attempt.orderId!);
       if (existing != null && existing.isLive) return OrderResult.ok(existing);
       attempt = null; // that order is finished (expired / cancelled): a new order needs a new key
     }
@@ -549,20 +697,44 @@ class OrderProvider with ChangeNotifier {
     final order = r.value;
     if (order != null) {
       attempt.orderId = order.id;
-      _ingest(order);
-      return OrderResult.ok(_orders[order.id] ?? order);
+      // A combined order was merged part by part in [_createGroup]; [order] is its composite.
+      if (!draft.isGroup) _ingest(order);
+      return OrderResult.ok(_view(order.id) ?? order);
     }
     return r;
   }
 
-  Future<OrderResult<OrderModel>> _createOrder(CheckoutDraft draft, _CheckoutAttempt attempt) => _api.createOrder(CreateOrderRequest(
-        vendorId: draft.vendorId,
-        items: draft.items,
-        dropoffHostel: draft.dropoffHostel,
-        dropoffNotes: draft.dropoffNotes,
-        couponCode: draft.couponCode,
-        clientRequestId: attempt.clientRequestId,
-      ));
+  Future<OrderResult<OrderModel>> _createOrder(CheckoutDraft draft, _CheckoutAttempt attempt) {
+    if (draft.isGroup) return _createGroup(draft, attempt);
+    return _api.createOrder(CreateOrderRequest(
+      vendorId: draft.vendorId,
+      items: draft.items,
+      dropoffHostel: draft.dropoffHostel,
+      dropoffNotes: draft.dropoffNotes,
+      couponCode: draft.couponCode,
+      clientRequestId: attempt.clientRequestId,
+    ));
+  }
+
+  /// `POST /order-groups` (two or more restaurants). The parts are merged into the order store
+  /// here; the returned order is the composite of the whole group (id = the primary part, the id
+  /// to pay). Same idempotency key for the same cart and drop point as the single flow.
+  Future<OrderResult<OrderModel>> _createGroup(CheckoutDraft draft, _CheckoutAttempt attempt) async {
+    final gen = _generation;
+    final r = await _api.createGroup(CreateGroupRequest(
+      restaurants: draft.restaurants,
+      dropoffHostel: draft.dropoffHostel,
+      dropoffNotes: draft.dropoffNotes,
+      couponCode: draft.couponCode,
+      clientRequestId: attempt.clientRequestId,
+    ));
+    if (gen != _generation) return const OrderResult.fail(OrderApiError(OrderErrorKind.unauthorized));
+    final g = r.value;
+    if (g == null) return OrderResult.fail(r.error!);
+    _storeGroup(g);
+    final primary = _orders[g.payOrderId] ?? g.orders.first;
+    return OrderResult.ok(_view(primary.id) ?? OrderModel.composite(g.orders, groupTotal: g.total));
+  }
 
   /// Forget the checkout attempt (after a successful payment, or when the student cancels the
   /// unpaid order). The next checkout gets a fresh idempotency key.
@@ -595,7 +767,7 @@ class OrderProvider with ChangeNotifier {
         // cancelled it yet): the next checkout must create a new order.
         if (_attempt?.orderId == orderId) _attempt = null;
         unawaited(refreshOrder(orderId));
-        return PaymentOutcome(PaymentOutcomeKind.orderClosed, order: _orders[orderId], message: orderErrorMessage(error));
+        return PaymentOutcome(PaymentOutcomeKind.orderClosed, order: _view(orderId), message: orderErrorMessage(error));
       }
       if (!error.isNetwork && error.kind != OrderErrorKind.server && error.kind != OrderErrorKind.unauthorized) {
         // Refused: maybe it was paid meanwhile (webhook, `ALREADY_PAID`) or it expired. Ask the server.
@@ -607,7 +779,7 @@ class OrderProvider with ChangeNotifier {
       return PaymentOutcome(PaymentOutcomeKind.failed, message: orderErrorMessage(error, action: 'start the payment'));
     }
 
-    final order = _orders[orderId];
+    final order = _view(orderId);
     if (order != null && session.value!.amountPaise != order.totalPaise) {
       // The gateway would charge something other than the total we show: re-read the order
       // and refuse to open the sheet until both agree.
@@ -653,19 +825,19 @@ class OrderProvider with ChangeNotifier {
         _paymentSubmittedAt.remove(orderId);
         if (_attempt?.orderId == orderId) _attempt = null;
         unawaited(refreshOrder(orderId));
-        return PaymentOutcome(PaymentOutcomeKind.orderClosed, order: _orders[orderId], message: orderErrorMessage(verifyError!));
+        return PaymentOutcome(PaymentOutcomeKind.orderClosed, order: _view(orderId), message: orderErrorMessage(verifyError!));
       case 'DUPLICATE_PAYMENT':
         unawaited(refreshOrder(orderId));
-        return PaymentOutcome(PaymentOutcomeKind.paid, order: _orders[orderId], message: orderErrorMessage(verifyError!));
+        return PaymentOutcome(PaymentOutcomeKind.paid, order: _view(orderId), message: orderErrorMessage(verifyError!));
       case 'PAYMENT_AMOUNT_MISMATCH':
         // Not marked paid and support has to sort out the money: never ask to "confirm" forever.
         _paymentSubmittedAt.remove(orderId);
         _notify();
-        return PaymentOutcome(PaymentOutcomeKind.failed, order: _orders[orderId], message: orderErrorMessage(verifyError!));
+        return PaymentOutcome(PaymentOutcomeKind.failed, order: _view(orderId), message: orderErrorMessage(verifyError!));
     }
     final fresh = await refreshOrder(orderId);
     if (gen != _generation) return const PaymentOutcome(PaymentOutcomeKind.failed);
-    final latest = fresh ?? _orders[orderId];
+    final latest = fresh ?? _view(orderId);
     if (latest != null && latest.isPaid) return PaymentOutcome(PaymentOutcomeKind.paid, order: latest);
     if (v.ok) {
       // The server accepted the signature but the order is still unpaid on its side: it answers
@@ -698,6 +870,9 @@ class OrderProvider with ChangeNotifier {
     if (r.value != null) {
       _ingest(r.value!);
       if (_attempt?.orderId == orderId) _attempt = null;
+      // Cancelling any part cancels the whole combined order: load the other parts.
+      final gid = r.value!.group?.id;
+      if (gid != null) unawaited(refreshGroup(gid));
     } else if (!r.error!.isNetwork) {
       unawaited(refreshOrder(orderId));
     }
@@ -743,7 +918,11 @@ class OrderProvider with ChangeNotifier {
   bool get isPolling => _pollTimer != null;
 
   /// Whether a tracking screen is currently showing [orderId] (used to avoid a duplicate push banner).
-  bool isWatching(String orderId) => _watchers.containsKey(orderId);
+  bool isWatching(String orderId) {
+    if (_watchers.containsKey(orderId)) return true;
+    final gid = _orders[orderId]?.group?.id;
+    return gid != null && _watchers.keys.any((w) => _orders[w]?.group?.id == gid);
+  }
 
   Iterable<String> get _pollIds => _watchers.keys.where(_isWatchedAndWanted);
 
@@ -781,12 +960,19 @@ class OrderProvider with ChangeNotifier {
         for (final id in _activeIds)
           if (_orders[id] != null && _needsUpdates(_orders[id]!)) id,
         for (final id in _watchers.keys)
-          if (_isWatchedAndWanted(id)) id,
+          if (_isWatchedAndWanted(id)) ..._roomsOf(id),
       };
+
+  /// The order rooms to join for a watched order: itself, or every part of its combined order.
+  Iterable<String> _roomsOf(String id) {
+    final g = _orders[id]?.group;
+    if (g == null) return [id];
+    return {id, for (final s in g.stops) s.orderId, for (final o in _orders.values) if (o.group?.id == g.id) o.id};
+  }
 
   /// A watched order (loaded, or not loaded yet but not known to be missing) that still needs updates.
   bool _isWatchedAndWanted(String id) {
-    final o = _orders[id];
+    final o = _view(id);
     return o == null ? !_isGone(id) : _needsUpdates(o);
   }
 
@@ -865,7 +1051,9 @@ class OrderProvider with ChangeNotifier {
     if (o == null) return;
     // Only orders this student already knows about or is watching (rooms are server-checked,
     // this is defence in depth).
-    if (!_orders.containsKey(o.id) && !_watchers.containsKey(o.id)) return;
+    final gid = o.group?.id;
+    final knownGroup = gid != null && _orders.values.any((x) => x.group?.id == gid);
+    if (!_orders.containsKey(o.id) && !_watchers.containsKey(o.id) && !knownGroup) return;
     _ingest(o);
   }
 
@@ -878,6 +1066,15 @@ class OrderProvider with ChangeNotifier {
     // Only the rider assigned to this order (the server already filters; defence in depth).
     if (loc.driverId != null && loc.driverId != order.rider!.id) return;
     _setRider(loc.orderId, loc);
+    // One rider carries every part of a combined order: the group's map listens on the primary id.
+    final g = order.group;
+    if (g != null) {
+      for (final o in _orders.values) {
+        if (o.group?.id == g.id && o.id != loc.orderId && o.group!.primary) {
+          _setRider(o.id, RiderLocation(orderId: o.id, driverId: loc.driverId, lat: loc.lat, lng: loc.lng, heading: loc.heading, at: loc.at, receivedAt: loc.receivedAt));
+        }
+      }
+    }
   }
 
   // ---- plumbing ------------------------------------------------------------------------------

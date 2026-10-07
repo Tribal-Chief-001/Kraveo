@@ -4,6 +4,10 @@ import 'customization.dart';
 class CartItem {
   final String cartItemId;
   final MenuItemModel item;
+
+  /// The restaurant this line is ordered from (a cart can hold several, Docs/22).
+  final String dhabaId;
+  final String dhabaName;
   int quantity;
   final List<CustomizationOption> selectedOptions;
   final String? specialInstructions;
@@ -11,6 +15,8 @@ class CartItem {
   CartItem({
     required this.cartItemId,
     required this.item,
+    this.dhabaId = '',
+    this.dhabaName = '',
     this.quantity = 1,
     this.selectedOptions = const [],
     this.specialInstructions,
@@ -39,6 +45,8 @@ class CartItem {
     return CartItem(
       cartItemId: cartItemId,
       item: item,
+      dhabaId: dhabaId,
+      dhabaName: dhabaName,
       quantity: quantity ?? this.quantity,
       selectedOptions: selectedOptions ?? this.selectedOptions,
       specialInstructions: specialInstructions ?? this.specialInstructions,
