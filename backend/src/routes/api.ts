@@ -12,8 +12,12 @@ import { errSummary } from '../utils/log';
 import { NAME_RE } from '../utils/names';
 import { startOfIstDay, istHour } from '../utils/time';
 import { dropFromPartnerRooms } from '../realtime';
-import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem, vendorMenuItemView, isCustomerVisible } from '../utils/catalog';
+import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem, vendorMenuItemView, isCustomerVisible, CUISINES_INCLUDE, withCuisines, cuisineFields } from '../utils/catalog';
 import { catalogRouter } from './catalog';
+import { categoriesRouter } from './categories';
+import { uploadRouter } from './uploads';
+import { prepareNewVendorCuisines, linkNewVendorCuisines, checkCuisineIds } from '../services/categories';
+import { editVendorProfile } from '../services/vendorProfile';
 import { financeRouter } from './finance';
 import { createDish, vendorEditDish, toggleAvailability, adminDishView, DishRow } from '../services/catalog';
 import { getSettings } from '../services/settings';
@@ -24,7 +28,7 @@ import { lockOrderInTx, OrderFlowError } from '../services/orderFlow';
 import { deviceRouter } from './devices';
 import { disableUserTokens } from '../services/push/deviceTokens';
 import { adminPinData, vendorLocationView, describePin, VENDOR_LOCATION_SELECT } from '../services/vendorLocation';
-import { partnerRouter, requireApprovedPartner, validateVendorFields, validateDriverFields, newRunnerCode, writeAudit, DEFAULT_BANNER } from './partners';
+import { partnerRouter, requireApprovedPartner, validateVendorFields, validateDriverFields, newRunnerCode, writeAudit, DEFAULT_BANNER, clean } from './partners';
 
 export const apiRouter = Router();
 
@@ -38,6 +42,10 @@ apiRouter.use(orderRouter);
 apiRouter.use(deviceRouter);
 // Pricing, catalog approval and settings (Docs/21): restaurant menu-manage, /admin/catalog*, /admin/settings*, /admin/vendors/:id/commission.
 apiRouter.use(catalogRouter);
+// Managed categories (Docs/23): public GET /categories and the admin category tools.
+apiRouter.use(categoriesRouter);
+// Admin image upload (Docs/23 section 3.6); the files themselves are served by mountUploads() in routes/uploads.ts.
+apiRouter.use(uploadRouter);
 // Payout details, settlements, finance analytics and the rider payout ledger (Docs/21 phase 2).
 apiRouter.use(financeRouter);
 
@@ -259,9 +267,9 @@ apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
     }
     recordSuccess(key);
 
-    const vendors = role === 'VENDOR' ? await prisma.vendor.findMany({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true, approvalStatus: true, rejectionReason: true, category: true, address: true, fssaiNumber: true, ...VENDOR_LOCATION_SELECT }, orderBy: { createdAt: 'asc' } }) : [];
+    const vendors = role === 'VENDOR' ? await prisma.vendor.findMany({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true, approvalStatus: true, rejectionReason: true, category: true, address: true, fssaiNumber: true, ...VENDOR_LOCATION_SELECT, ...CUISINES_INCLUDE }, orderBy: { createdAt: 'asc' } }) : [];
     const vendorRow = vendors.find((v) => v.approvalStatus === 'APPROVED') ?? vendors[0] ?? null;
-    const vendor = vendorRow ? { ...vendorRow, ...vendorLocationView(vendorRow) } : null;
+    const vendor = vendorRow ? { ...vendorRow, ...vendorLocationView(vendorRow), ...cuisineFields(vendorRow) } : null;
     const driver = role === 'DRIVER' ? await prisma.driverPartner.findFirst({ where: { userId: user.id }, select: { id: true, runnerCode: true, approvalStatus: true, rejectionReason: true, vehicleType: true, vehicleRegNo: true, emergencyPhone: true, upiId: true, dutyStatus: true } }) : null;
     const approvalStatus = (vendor ?? driver)?.approvalStatus ?? 'APPROVED';
     const rejectionReason = (vendor ?? driver)?.rejectionReason ?? null;
@@ -506,6 +514,7 @@ apiRouter.post('/admin/partners', requireAuth, requireRole('ADMIN'), async (req:
         const v = validateVendorFields(b);
         if (!v.ok) return bad(v.error.field, v.error.message);
         vendorData = v.data;
+        if (b.cuisineIds !== undefined) checkCuisineIds(b.cuisineIds); // Docs/23: managed categories instead of the free text
         if (b.lat !== undefined || b.lng !== undefined) {
           const check = checkVendorLocation(b.lat, b.lng);
           if (!check.ok) return bad(check.field, check.message);
@@ -529,7 +538,10 @@ apiRouter.post('/admin/partners', requireAuth, requireRole('ADMIN'), async (req:
         await tx.vendor.update({ where: { id: String(vendorId) }, data: { userId: created.id } });
         profileId = String(vendorId);
       } else if (role === 'VENDOR' && vendorData) {
-        const v = await tx.vendor.create({ data: { ...vendorData, userId: created.id, bannerImage: DEFAULT_BANNER, isAcceptingOrders: true, approvalStatus: 'APPROVED', ...(pin ? adminPinData(pin.lat, pin.lng) : {}) } });
+        // Docs/23: `cuisineIds` wins; the old free text is matched to the managed categories (unknown words become restaurant-only ones).
+        const prep = await prepareNewVendorCuisines(tx, { cuisineIds: b.cuisineIds, text: typeof b.category === 'string' ? clean(b.category, 60) : null }, vendorData.category);
+        const v = await tx.vendor.create({ data: { ...vendorData, category: prep.category, userId: created.id, bannerImage: DEFAULT_BANNER, isAcceptingOrders: true, approvalStatus: 'APPROVED', ...(pin ? adminPinData(pin.lat, pin.lng) : {}) } });
+        await linkNewVendorCuisines(tx, v.id, prep.cuisines);
         profileId = v.id;
       }
       if (role === 'DRIVER' && driverData) {
@@ -549,10 +561,10 @@ apiRouter.get('/admin/partners', requireAuth, requireRole('ADMIN'), async (_req:
   try {
     const users = await prisma.user.findMany({
       where: { role: { in: [Role.VENDOR, Role.DRIVER] } },
-      select: { id: true, name: true, phone: true, role: true, createdAt: true, vendorsOwned: { select: { id: true, name: true, approvalStatus: true, ...VENDOR_LOCATION_SELECT } }, driverProfile: { select: { id: true, runnerCode: true, approvalStatus: true } } },
+      select: { id: true, name: true, phone: true, role: true, createdAt: true, vendorsOwned: { select: { id: true, name: true, approvalStatus: true, ...VENDOR_LOCATION_SELECT, ...CUISINES_INCLUDE } }, driverProfile: { select: { id: true, runnerCode: true, approvalStatus: true } } },
       orderBy: { createdAt: 'desc' },
     });
-    const data = users.map((u) => ({ ...u, vendorsOwned: u.vendorsOwned.map((v) => ({ ...v, ...vendorLocationView(v) })) }));
+    const data = users.map((u) => ({ ...u, vendorsOwned: u.vendorsOwned.map((v) => ({ ...v, ...vendorLocationView(v), ...cuisineFields(v) })) }));
     return res.json({ success: true, data });
   } catch (err: any) {
     return fail(res, err, 'Could not list partners');
@@ -591,10 +603,11 @@ const withoutCommission = <T extends { commissionType?: unknown; commissionValue
   const { commissionType: _t, commissionValue: _v, ...rest } = v;
   return rest;
 };
-const fullVendorView = (v: any, viewer: { id: string; role: Role } | null) => {
-  if (viewer?.role === Role.ADMIN) return { ...v, hasLocation: vendorHasLocation(v.lat, v.lng) };
+export const fullVendorView = (v: any, viewer: { id: string; role: Role } | null) => {
+  // Docs/23: `cuisines` (ordered {id,name,icon}) and `tags` (their names) ride along; the raw link rows are replaced.
+  if (viewer?.role === Role.ADMIN) return { ...withCuisines(v), hasLocation: vendorHasLocation(v.lat, v.lng) };
   if (viewer?.role === Role.VENDOR && !!v.userId && v.userId === viewer.id) {
-    return { ...withoutCommission(v), menuItems: (v.menuItems ?? []).map(vendorMenuItemView), hasLocation: vendorHasLocation(v.lat, v.lng) };
+    return { ...withoutCommission(withCuisines(v)), menuItems: (v.menuItems ?? []).map(vendorMenuItemView), hasLocation: vendorHasLocation(v.lat, v.lng) };
   }
   return null;
 };
@@ -602,7 +615,7 @@ const fullVendorView = (v: any, viewer: { id: string; role: Role } | null) => {
 apiRouter.get('/vendors', async (req: Request, res: Response) => {
   try {
     const viewer = await optionalViewer(req);
-    const dbVendors = await prisma.vendor.findMany({ include: { menuItems: { where: { deletedAt: null } } } });
+    const dbVendors = await prisma.vendor.findMany({ include: { menuItems: { where: { deletedAt: null } }, ...CUISINES_INCLUDE } });
     const visible = dbVendors.filter((v) => canSeeVendor(v, viewer)).map((v) => fullVendorView(v, viewer) ?? publicVendorView(v));
     return res.json({ success: true, count: visible.length, data: visible });
   } catch (err: any) {
@@ -614,7 +627,7 @@ apiRouter.get('/vendors/:id', validParams('id'), async (req: Request, res: Respo
   try {
     const dbVendor = await prisma.vendor.findUnique({
       where: { id: req.params.id },
-      include: { menuItems: { where: { deletedAt: null } } }
+      include: { menuItems: { where: { deletedAt: null } }, ...CUISINES_INCLUDE }
     });
     const viewer = await optionalViewer(req);
     if (!dbVendor || !canSeeVendor(dbVendor, viewer)) return res.status(404).json({ success: false, message: 'Vendor not found' });
@@ -627,7 +640,7 @@ apiRouter.get('/vendors/:id', validParams('id'), async (req: Request, res: Respo
 
 apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { name, category, address, lat, lng, bannerImage } = req.body ?? {};
+    const { name, category, address, lat, lng, bannerImage, cuisineIds } = req.body ?? {};
     if (typeof name !== 'string' || !name.trim() || name.trim().length > 60) {
       return res.status(400).json({ success: false, message: 'Vendor name is required (up to 60 characters).' });
     }
@@ -644,21 +657,28 @@ apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: Authen
       pin = { lat: check.lat, lng: check.lng };
     }
 
-    const createdVendor = await prisma.vendor.create({
-      data: {
-        name: name.trim(),
-        category: category || 'North Indian • Campus Dhaba',
-        address: address || 'Ashta Highway, near VIT Bhopal',
-        lat: pin ? pin.lat : 23.0768,
-        lng: pin ? pin.lng : 76.8524,
-        ...(pin ? adminPinData(pin.lat, pin.lng) : {}),
-        bannerImage: bannerImage || 'https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=600',
-        isAcceptingOrders: true,
-      },
-      include: { menuItems: true }
+    if (cuisineIds !== undefined) checkCuisineIds(cuisineIds); // 400 before anything is written
+
+    // Docs/23: `cuisineIds` (managed categories) or the old free text (matched / created like the migration did); Vendor.category is derived.
+    const createdVendor = await prisma.$transaction(async (tx) => {
+      const prep = await prepareNewVendorCuisines(tx, { cuisineIds, text: typeof category === 'string' ? category : null }, 'North Indian • Campus Dhaba');
+      const row = await tx.vendor.create({
+        data: {
+          name: name.trim(),
+          category: prep.category,
+          address: address || 'Ashta Highway, near VIT Bhopal',
+          lat: pin ? pin.lat : 23.0768,
+          lng: pin ? pin.lng : 76.8524,
+          ...(pin ? adminPinData(pin.lat, pin.lng) : {}),
+          bannerImage: bannerImage || 'https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=600',
+          isAcceptingOrders: true,
+        },
+      });
+      await linkNewVendorCuisines(tx, row.id, prep.cuisines);
+      return tx.vendor.findUniqueOrThrow({ where: { id: row.id }, include: { menuItems: true, ...CUISINES_INCLUDE } });
     });
 
-    return res.status(201).json({ success: true, message: 'Vendor onboarded successfully', data: createdVendor });
+    return res.status(201).json({ success: true, message: 'Vendor onboarded successfully', data: withCuisines(createdVendor) });
   } catch (err: any) {
     return fail(res, err, 'Error onboarding vendor');
   }
@@ -677,6 +697,17 @@ apiRouter.patch('/admin/vendors/:id/location', requireAuth, requireRole('ADMIN')
     return res.json({ success: true, data: { ...updated, hasLocation: vendorHasLocation(updated.lat, updated.lng) } });
   } catch (err: any) {
     return fail(res, err, 'Error setting the vendor location');
+  }
+});
+
+// ADMIN: edit a restaurant's profile (Docs/23 section 3.3): name, categories (cuisines), address, banner, FSSAI, ETA.
+apiRouter.patch('/admin/vendors/:id/profile', requireAuth, requireRole('ADMIN'), validParams('id'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const out = await editVendorProfile(req.params.id, body, { id: req.user!.id, role: req.user!.role as string });
+    return res.json({ success: true, changed: out.changed, message: out.changed ? 'Restaurant saved.' : 'Nothing to change.', data: fullVendorView(out.vendor, { id: req.user!.id, role: Role.ADMIN }) });
+  } catch (err: any) {
+    return fail(res, err, 'Error editing the restaurant');
   }
 });
 
@@ -728,10 +759,14 @@ apiRouter.post('/vendors/:id/items', requireAuth, requireRole('VENDOR', 'ADMIN')
     if (!(await canManageVendor(req.params.id, req.user))) return res.status(403).json({ success: false, message: 'Forbidden. You do not own this vendor.' });
     if (!(await prisma.vendor.findUnique({ where: { id: req.params.id }, select: { id: true } }))) return res.status(404).json({ success: false, message: 'Vendor not found' });
 
+    // The old restaurant app sends a free-text `category` (still accepted: it must match an active dish category); newer callers may send
+    // `categoryId`. Neither = 'Main Course' (Docs/23 section 3.4).
+    const rawBody = (req.body ?? {}) as Record<string, unknown>;
     const created = await createDish(req.params.id, {
       name: v.data.name,
       price: v.data.price,
-      category: v.data.category,
+      category: typeof rawBody.category === 'string' && rawBody.category.trim() ? v.data.category : undefined,
+      categoryId: rawBody.categoryId === undefined || rawBody.categoryId === null ? undefined : (rawBody.categoryId as string),
       description: v.data.description,
       imageUrl: v.data.imageUrl || 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400',
       isVeg: v.data.isVeg,

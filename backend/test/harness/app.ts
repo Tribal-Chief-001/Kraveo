@@ -7,6 +7,8 @@ import { apiRouter } from '../../src/routes/api';
 import { attachRealtime } from '../../src/realtime';
 import { securityHeaders } from '../../src/middleware/securityHeaders';
 import { globalErrorHandler } from '../../src/middleware/errorHandler';
+import { mountUploads } from '../../src/routes/uploads';
+import { mountBodyLimits } from '../../src/middleware/bodyLimits';
 
 export interface TestServerInstance {
   app: Express;
@@ -31,6 +33,9 @@ export const createTestApp = (): { app: Express; server: http.Server; io: Socket
 
   app.use(securityHeaders);
   app.use(cors());
+  // Same as src/index.ts (Docs/23): uploaded photos and the menu-import JSON limit, before the global json parser.
+  mountUploads(app);
+  mountBodyLimits(app);
   app.use(express.json({
     verify: (req: any, res, buf) => {
       req.rawBody = buf;

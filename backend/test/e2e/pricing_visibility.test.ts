@@ -348,6 +348,10 @@ describe('Pricing: money and visibility', () => {
         ['put', '/api/admin/settings/fees', { baseFee: 1 }], ['patch', `/api/admin/vendors/${VENDOR.vendorId}/commission`, { type: 'FLAT', value: 0 }],
         ['post', '/api/admin/catalog/preview', { vendorId: VENDOR.vendorId, vendorPrice: 5 }], ['get', '/api/orders/available'],
         ['post', '/api/payments/create-order', { orderId: id }], ['post', `/api/admin/orders/${id}/cancel`, { reason: 'abc' }],
+        // Docs/23: the managed-category, restaurant-edit, bulk, import and upload tools are admin only too
+        ['get', '/api/admin/categories'], ['post', '/api/admin/categories', { name: 'Nope Category' }], ['post', '/api/admin/categories/reorder', { ids: ['a'] }],
+        ['patch', `/api/admin/vendors/${VENDOR.vendorId}/profile`, { name: 'Hijacked' }], ['post', '/api/admin/catalog/bulk', { ids: ['a'], action: 'DELETE' }],
+        ['post', `/api/admin/vendors/${VENDOR.vendorId}/menu-import`, { rows: [{ name: 'x', category: 'Main Course', vendorPrice: 5 }], dryRun: false }], ['post', '/api/admin/uploads/image?purpose=dish', {}],
       ];
       for (const [m, p, b] of closed) {
         const r = await (request as any)[m](p).set(H(tVendor)).send(b ?? {});

@@ -6,6 +6,7 @@ import { getSettings } from './settings';
 import { checkCommissionRule, CommissionRule, DishPrice, priceDish, ruleFromColumns, toPaise } from './pricing';
 import { dishStatus, DishStatus, priceProblem, text } from '../utils/catalog';
 import { SettingsMap } from './pricing';
+import { resolveDishCategory } from './categories';
 
 /**
  * Catalog rules (Docs/21 sections 2-4): who may create / change / approve a dish and what the customer price becomes.
@@ -18,14 +19,14 @@ import { SettingsMap } from './pricing';
 type Tx = Prisma.TransactionClient;
 export type Actor = { id: string; role: string };
 
-const notFound = () => new AppError(404, 'NOT_FOUND', 'Menu item not found.');
+export const notFound = () => new AppError(404, 'NOT_FOUND', 'Menu item not found.');
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export const MAX_PENDING_DISHES_PER_RESTAURANT = 50;
 export const MAX_NAME = 80;
 
 const VENDOR_SELECT = { id: true, name: true, userId: true, commissionType: true, commissionValue: true } as const;
-const WITH_VENDOR = { vendor: { select: VENDOR_SELECT } } satisfies Prisma.MenuItemInclude;
+export const WITH_VENDOR = { vendor: { select: VENDOR_SELECT } } satisfies Prisma.MenuItemInclude;
 export type DishRow = Prisma.MenuItemGetPayload<{ include: typeof WITH_VENDOR }>;
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -33,7 +34,7 @@ export type DishRow = Prisma.MenuItemGetPayload<{ include: typeof WITH_VENDOR }>
 // ---------------------------------------------------------------------------------------------------------------------
 type Rules = { dish: CommissionRule | null; vendor: CommissionRule | null };
 
-const rulesOf = (item: { commissionType: string | null; commissionValue: number | null; vendor: { commissionType: string | null; commissionValue: number | null } }): Rules => ({
+export const rulesOf = (item: { commissionType: string | null; commissionValue: number | null; vendor: { commissionType: string | null; commissionValue: number | null } }): Rules => ({
   dish: ruleFromColumns(item.commissionType, item.commissionValue),
   vendor: ruleFromColumns(item.vendor.commissionType, item.vendor.commissionValue),
 });
@@ -56,6 +57,7 @@ export const adminDishView = (item: DishRow, settings: SettingsMap) => {
     vendorName: item.vendor.name,
     name: item.name,
     category: item.category,
+    categoryId: item.categoryId ?? null,
     description: item.description,
     imageUrl: item.imageUrl,
     isVeg: item.isVeg,
@@ -103,10 +105,10 @@ const pricePreview = (before: { price: number; vendorPrice: number }, after: Dis
 // ---------------------------------------------------------------------------------------------------------------------
 // Locking helpers
 // ---------------------------------------------------------------------------------------------------------------------
-const TX_OPTS = { maxWait: 10_000, timeout: 20_000 };
+export const TX_OPTS = { maxWait: 10_000, timeout: 20_000 };
 
 /** Row-locks the dish and returns it with its restaurant, or null when it does not exist. */
-const lockDish = async (tx: Tx, id: string): Promise<DishRow | null> => {
+export const lockDish = async (tx: Tx, id: string): Promise<DishRow | null> => {
   const rows = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "MenuItem" WHERE "id" = ${id} FOR UPDATE`;
   if (rows.length === 0) return null;
   return tx.menuItem.findUnique({ where: { id }, include: WITH_VENDOR });
@@ -142,12 +144,14 @@ export const vendorDishes = (vendorId: string) =>
  */
 export const createDish = async (
   vendorId: string,
-  input: { name: string; price: number; category: string; description: string; imageUrl: string; isVeg: boolean; isAvailable?: boolean; commission?: CommissionRule | null },
+  input: { name: string; price: number; category?: string | null; categoryId?: string | null; description: string; imageUrl: string; isVeg: boolean; isAvailable?: boolean; commission?: CommissionRule | null },
   actor: Actor,
 ) => {
   const settings = await getSettings();
   const byAdmin = actor.role === 'ADMIN';
   const created = await prisma.$transaction(async (tx) => {
+    // Docs/23 lock order: the category (FOR SHARE, so it cannot be renamed / merged / deleted under us) comes BEFORE the restaurant row.
+    const cat = await resolveDishCategory(tx, { name: input.category, id: input.categoryId }, { admin: byAdmin });
     // Lock the restaurant row: the pending cap below cannot be raced by parallel posts.
     const vendorRows = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "Vendor" WHERE "id" = ${vendorId} FOR UPDATE`;
     if (vendorRows.length === 0) throw new AppError(404, 'NOT_FOUND', 'Vendor not found');
@@ -167,7 +171,8 @@ export const createDish = async (
         name: input.name,
         price: priced.price,
         vendorPrice: input.price,
-        category: input.category,
+        category: cat.name,
+        categoryId: cat.id,
         description: input.description,
         imageUrl: input.imageUrl,
         isVeg: input.isVeg,
@@ -443,7 +448,7 @@ const checkImageUrl = (raw: unknown): string => {
   return t;
 };
 
-const EDIT_KEYS = ['name', 'description', 'category', 'imageUrl', 'isVeg', 'isAvailable', 'vendorPrice', 'commissionType', 'commissionValue'];
+const EDIT_KEYS = ['name', 'description', 'category', 'categoryId', 'imageUrl', 'isVeg', 'isAvailable', 'vendorPrice', 'commissionType', 'commissionValue'];
 
 /** PATCH /admin/catalog/:id. Any change of the restaurant price or the commission recomputes the customer price. */
 export const adminEditDish = async (itemId: string, b: Record<string, unknown>, actor: Actor) => {
@@ -454,7 +459,8 @@ export const adminEditDish = async (itemId: string, b: Record<string, unknown>, 
   const description = optionalText(b.description, 300, 'description', 'Description');
   if (description !== undefined) data.description = description;
   const category = optionalText(b.category, 40, 'category', 'Category');
-  if (category !== undefined) data.category = category || 'Main Course';
+  // Docs/23 section 3.4: a changed category must be an active dish category (matched by name or categoryId); blank = 'Main Course' as before.
+  const categoryTouched = category !== undefined || b.categoryId !== undefined;
   if (b.imageUrl !== undefined) data.imageUrl = checkImageUrl(b.imageUrl);
   if (b.isVeg !== undefined) {
     if (typeof b.isVeg !== 'boolean') throw new AppError(400, 'BAD_REQUEST', 'isVeg must be true or false.', 'isVeg');
@@ -466,10 +472,17 @@ export const adminEditDish = async (itemId: string, b: Record<string, unknown>, 
   }
   const newVendorPrice = b.vendorPrice !== undefined ? money(b.vendorPrice) : undefined;
   const override = commissionOverrideFrom(b);
-  if (Object.keys(data).length === 0 && newVendorPrice === undefined && override === undefined) throw new AppError(400, 'BAD_REQUEST', `Send at least one of: ${EDIT_KEYS.join(', ')}.`);
+  if (Object.keys(data).length === 0 && newVendorPrice === undefined && override === undefined && !categoryTouched) throw new AppError(400, 'BAD_REQUEST', `Send at least one of: ${EDIT_KEYS.join(', ')}.`);
 
   const settings = await getSettings();
   const out = await prisma.$transaction(async (tx) => {
+    // Lock order (Docs/23): category (FOR SHARE) -> dish. The category is resolved before the dish row is locked.
+    let resolved: { id: string; name: string } | undefined;
+    if (categoryTouched) {
+      const current = await tx.menuItem.findUnique({ where: { id: itemId }, select: { categoryId: true, category: true } });
+      if (!current) throw notFound();
+      resolved = await resolveDishCategory(tx, { name: category ?? undefined, id: b.categoryId }, { admin: true, current });
+    }
     const item = await lockDish(tx, itemId);
     if (!item) throw notFound();
     if (item.deletedAt) throw new AppError(409, 'ITEM_DELETED', 'This dish is deleted. Restore it first.');
@@ -477,6 +490,7 @@ export const adminEditDish = async (itemId: string, b: Record<string, unknown>, 
     const rule = override === undefined ? ruleFromColumns(item.commissionType, item.commissionValue) : override;
     const priced = priceFor(vendorPrice, { dish: rule, vendor: ruleFromColumns(item.vendor.commissionType, item.vendor.commissionValue) }, settings);
     const full: Prisma.MenuItemUpdateInput = { ...data };
+    if (resolved) Object.assign(full, { category: resolved.name, categoryRef: { connect: { id: resolved.id } } });
     const repriced = newVendorPrice !== undefined || override !== undefined;
     if (repriced) {
       Object.assign(full, { vendorPrice, price: priced.price });
@@ -503,14 +517,14 @@ export const adminCreateDish = async (b: Record<string, unknown>, actor: Actor) 
   const priceRaw = b.vendorPrice !== undefined ? b.vendorPrice : b.price;
   const price = money(priceRaw);
   const name = requireNonEmptyText(b.name, MAX_NAME, 'name', 'Name');
-  const category = optionalText(b.category, 40, 'category', 'Category') || 'Main Course';
+  const category = optionalText(b.category, 40, 'category', 'Category') || undefined; // blank = 'Main Course' (resolved with the lock)
   const description = optionalText(b.description, 300, 'description', 'Description') ?? '';
   const imageUrl = b.imageUrl === undefined || b.imageUrl === null || b.imageUrl === '' ? 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400' : checkImageUrl(b.imageUrl);
   if (b.isVeg !== undefined && typeof b.isVeg !== 'boolean') throw new AppError(400, 'BAD_REQUEST', 'isVeg must be true or false.', 'isVeg');
   if (b.isAvailable !== undefined && typeof b.isAvailable !== 'boolean') throw new AppError(400, 'BAD_REQUEST', 'isAvailable must be true or false.', 'isAvailable');
   const commission = commissionOverrideFrom(b);
   const settings = await getSettings();
-  const row = await createDish(b.vendorId, { name, price, category, description, imageUrl, isVeg: b.isVeg !== false, isAvailable: b.isAvailable !== false, commission: commission ?? null }, actor);
+  const row = await createDish(b.vendorId, { name, price, category, categoryId: b.categoryId as string | undefined, description, imageUrl, isVeg: b.isVeg !== false, isAvailable: b.isAvailable !== false, commission: commission ?? null }, actor);
   return { item: row, settings };
 };
 

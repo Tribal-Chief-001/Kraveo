@@ -122,6 +122,8 @@ model Vendor {
   orders    Order[]
   reviews   ReviewRecord[]
   settlements Settlement[]
+  // Docs/23: the managed categories (cuisines) of this restaurant, ordered by `position` (first = main). `category` above is DERIVED from them.
+  cuisines  VendorCategory[]
 
   @@index([approvalStatus])
 }
@@ -132,7 +134,10 @@ model MenuItem {
   name        String
   // The CUSTOMER price (what the apps and the cart read). The restaurant's own price is `vendorPrice`.
   price       Float
+  // Display name of the dish's category, kept in sync with Category.name (Docs/23). Old app builds read this string.
   category    String
+  // Docs/23: the managed category (null only for legacy rows the backfill could not match). ON DELETE RESTRICT.
+  categoryId  String?
   description String
   imageUrl    String
   isAvailable Boolean  @default(true)
@@ -159,11 +164,48 @@ model MenuItem {
   createdBy          String             @default("VENDOR") // VENDOR | ADMIN
   updatedAt          DateTime           @default(now()) @updatedAt
 
-  vendor     Vendor      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
-  orderItems OrderItem[]
+  vendor      Vendor      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  categoryRef Category?   @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  orderItems  OrderItem[]
 
   @@index([vendorId, approvalStatus, deletedAt])
   @@index([approvalStatus, deletedAt])
+  @@index([categoryId])
+}
+
+/// Docs/23: ONE managed list for restaurants (many per restaurant, via VendorCategory) and dishes (exactly one, MenuItem.categoryId).
+/// `slug` (lower case, [^a-z0-9]+ -> "-") is the uniqueness key, so names are unique ignoring case and spacing.
+model Category {
+  id             String   @id @default(uuid())
+  name           String
+  slug           String   @unique
+  nameHi         String?
+  icon           String   @default("restaurant")
+  sortOrder      Int      @default(0)
+  isActive       Boolean  @default(true)
+  forRestaurants Boolean  @default(true)
+  forDishes      Boolean  @default(true)
+  showOnHome     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  menuItems MenuItem[]
+  vendors   VendorCategory[]
+
+  @@index([isActive, sortOrder])
+}
+
+/// A restaurant's category (cuisine) tag. Deleting a restaurant removes its tags; a category in use cannot be deleted (RESTRICT).
+model VendorCategory {
+  vendorId   String
+  categoryId String
+  position   Int
+
+  vendor   Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@id([vendorId, categoryId])
+  @@index([categoryId])
 }
 
 model Order {

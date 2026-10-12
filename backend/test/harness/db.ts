@@ -3,7 +3,20 @@ import { Role, OrderStatus, PaymentStatus, DutyStatus } from '@prisma/client';
 
 export { prisma };
 
+/**
+ * Docs/23 section 3.4: a dish category must be an ACTIVE dish category. `prisma db push` (the test DB) has no migration backfill, so the
+ * names that older suites type into dish requests ('Main', 'Starters', 'Drinks', the six of the restaurant app ...) are created here.
+ */
+export const TEST_DISH_CATEGORIES = ['Main Course', 'Breads', 'Beverages', 'Snacks', 'Desserts', 'Fast Food', 'Thalis', 'Parathas', 'Main', 'Starters', 'Drinks'];
+export const slugOfName = (n: string) => n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+export const ensureTestCategories = async (names: string[] = TEST_DISH_CATEGORIES) => {
+  for (const [i, name] of names.entries()) {
+    await prisma.category.upsert({ where: { slug: slugOfName(name) }, update: {}, create: { name, slug: slugOfName(name), sortOrder: i + 1, forDishes: true, forRestaurants: false, showOnHome: false } });
+  }
+};
+
 export const seedTestDatabase = async () => {
+  await ensureTestCategories();
   // 1. Seed standard test users
   const student = await prisma.user.upsert({
     where: { phone: '+91 9876543210' },
@@ -109,6 +122,11 @@ export const seedTestDatabase = async () => {
       isVeg: true
     }
   });
+
+  for (const item of [menuItem1, menuItem2]) {
+    const c = await prisma.category.findUnique({ where: { slug: slugOfName(item.category) } });
+    if (c && item.categoryId !== c.id) await prisma.menuItem.update({ where: { id: item.id }, data: { categoryId: c.id } });
+  }
 
   // 4. Seed Driver Partner
   await prisma.driverPartner.upsert({

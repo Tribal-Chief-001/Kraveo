@@ -10,6 +10,7 @@ import {
   restoreDish, setVendorCommission, softDeleteDish, vendorDishes,
 } from '../services/catalog';
 import { getSettingGroup, getSettings, updateSettingGroup } from '../services/settings';
+import { bulkDishAction, importMenu } from '../services/catalogBulk';
 import { isSettingGroup, SETTING_GROUPS } from '../services/pricing';
 
 /**
@@ -89,6 +90,31 @@ catalogRouter.post('/admin/catalog/recalculate', ...adminOnly, async (req: Authe
     return res.json({ success: true, message: out.dryRun ? `${out.changed} of ${out.total} dishes would change.` : `${out.changed} of ${out.total} dishes updated.`, data: out });
   } catch (err) {
     return fail(res, err, 'recalculate prices');
+  }
+});
+
+// Docs/23 section 3.5. Each dish is its own transaction with the same checks and audit as the single endpoints; a failure never aborts the others.
+catalogRouter.post('/admin/catalog/bulk', ...adminOnly, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const out = await bulkDishAction(body(req), actorOf(req));
+    return res.json({ success: true, message: out.failed ? `${out.ok} done, ${out.failed} could not be changed.` : `${out.ok} done.`, data: out });
+  } catch (err) {
+    return fail(res, err, 'bulk dish action');
+  }
+});
+
+// Whole-menu import. dryRun defaults to TRUE (nothing is written); dryRun:false applies every row in ONE transaction or none at all.
+catalogRouter.post('/admin/vendors/:id/menu-import', ...adminOnly, validParams('id'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const out = await importMenu(req.params.id, body(req), actorOf(req));
+    const s = out.summary;
+    return res.json({
+      success: true,
+      message: out.dryRun ? `Preview only: ${s.create} to add, ${s.update} to update, ${s.skip} to skip, ${s.invalid} not valid.` : `Imported: ${s.create} added, ${s.update} updated, ${s.skip} skipped.`,
+      data: out,
+    });
+  } catch (err) {
+    return fail(res, err, 'menu import');
   }
 });
 

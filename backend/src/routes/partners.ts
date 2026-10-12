@@ -14,6 +14,7 @@ import { validParams } from '../utils/http';
 import { disableUserTokens } from '../services/push/deviceTokens';
 import { checkVendorLocation } from '../config/campus';
 import { vendorLocationView, checkAccuracy, devicePinData, describePin } from '../services/vendorLocation';
+import { CUISINES_INCLUDE, cuisineFields } from '../utils/catalog';
 
 /**
  * Partner (restaurant / rider) applications and the admin tools around them.
@@ -183,6 +184,7 @@ const vendorView = (v: any) => v && ({
   id: v.id, name: v.name, category: v.category, address: v.address, fssaiNumber: v.fssaiNumber ?? null,
   isAcceptingOrders: v.isAcceptingOrders, approvalStatus: v.approvalStatus, rejectionReason: v.rejectionReason ?? null,
   ...vendorLocationView(v),
+  ...cuisineFields(v), // Docs/23: `cuisines` + `tags`
 });
 const driverView = (d: any) => d && ({
   id: d.id, runnerCode: d.runnerCode, vehicleType: d.vehicleType, vehicleRegNo: d.vehicleRegNo ?? null,
@@ -270,7 +272,7 @@ partnerRouter.post('/auth/partner-signup', async (req: Request, res: Response) =
 
 const loadOwnProfile = async (userId: string, role: Role) => {
   if (role === Role.VENDOR) {
-    const vendors = await prisma.vendor.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } });
+    const vendors = await prisma.vendor.findMany({ where: { userId }, orderBy: { createdAt: 'asc' }, include: CUISINES_INCLUDE });
     // Prefer an APPROVED restaurant, otherwise whatever was applied for.
     const vendor = vendors.find((v) => v.approvalStatus === 'APPROVED') ?? vendors[0] ?? null;
     return { vendor, driver: null as any, status: (vendor?.approvalStatus ?? 'APPROVED') as ApprovalStatus, reason: vendor?.rejectionReason ?? null };
@@ -412,7 +414,7 @@ const applicationRow = (kind: Kind, row: any) => ({
   reviewedAt: row.reviewedAt ?? null,
   createdAt: row.createdAt,
   ...(kind === 'VENDOR'
-    ? { vendor: { name: row.name, category: row.category, address: row.address, fssaiNumber: row.fssaiNumber ?? null, isAcceptingOrders: row.isAcceptingOrders, ...vendorLocationView(row) } }
+    ? { vendor: { name: row.name, category: row.category, address: row.address, fssaiNumber: row.fssaiNumber ?? null, isAcceptingOrders: row.isAcceptingOrders, ...vendorLocationView(row), ...cuisineFields(row) } }
     : { driver: { runnerCode: row.runnerCode, vehicleType: row.vehicleType, vehicleRegNo: row.vehicleRegNo ?? null, emergencyPhone: row.emergencyPhone ?? null, upiId: row.upiId ?? null } }),
 });
 
@@ -422,7 +424,7 @@ partnerRouter.get('/admin/applications', requireAuth, requireRole('ADMIN'), asyn
     const kindFilter = String(req.query.kind ?? '').toUpperCase();
     const statusWhere = wanted === 'ALL' ? {} : (['PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED'].includes(wanted) ? { approvalStatus: wanted as ApprovalStatus } : { approvalStatus: 'PENDING' as ApprovalStatus });
     const [vendors, drivers, vc, dc] = await Promise.all([
-      kindFilter === 'DRIVER' ? [] : prisma.vendor.findMany({ where: { ...statusWhere, userId: { not: null } }, include: { user: { select: { id: true, name: true, phone: true } } }, orderBy: { createdAt: 'desc' }, take: 200 }),
+      kindFilter === 'DRIVER' ? [] : prisma.vendor.findMany({ where: { ...statusWhere, userId: { not: null } }, include: { user: { select: { id: true, name: true, phone: true } }, ...CUISINES_INCLUDE }, orderBy: { createdAt: 'desc' }, take: 200 }),
       kindFilter === 'VENDOR' ? [] : prisma.driverPartner.findMany({ where: statusWhere, include: { user: { select: { id: true, name: true, phone: true } } }, orderBy: { createdAt: 'desc' }, take: 200 }),
       prisma.vendor.groupBy({ by: ['approvalStatus'], _count: true, where: { userId: { not: null } } }),
       prisma.driverPartner.groupBy({ by: ['approvalStatus'], _count: true }),
@@ -449,7 +451,7 @@ partnerRouter.post('/admin/partners/:kind/:id/status', requireAuth, requireRole(
     if ((next === 'REJECTED' || next === 'SUSPENDED') && reason.length < 3) return res.status(400).json({ success: false, field: 'reason', message: 'Please give a short reason (the partner will see it).' });
 
     const row: any = kind === 'VENDOR'
-      ? await prisma.vendor.findUnique({ where: { id: req.params.id }, include: { user: true } })
+      ? await prisma.vendor.findUnique({ where: { id: req.params.id }, include: { user: true, ...CUISINES_INCLUDE } })
       : await prisma.driverPartner.findUnique({ where: { id: req.params.id }, include: { user: true } });
     if (!row) return res.status(404).json({ success: false, message: 'Partner not found.' });
 
@@ -464,7 +466,7 @@ partnerRouter.post('/admin/partners/:kind/:id/status', requireAuth, requireRole(
       else data.dutyStatus = 'OFFLINE';
     }
     const updated: any = kind === 'VENDOR'
-      ? await prisma.vendor.update({ where: { id: row.id }, data, include: { user: { select: { id: true, name: true, phone: true } } } })
+      ? await prisma.vendor.update({ where: { id: row.id }, data, include: { user: { select: { id: true, name: true, phone: true } }, ...CUISINES_INCLUDE } })
       : await prisma.driverPartner.update({ where: { id: row.id }, data, include: { user: { select: { id: true, name: true, phone: true } } } });
 
     const label = `${kind.toLowerCase()} ${row.name} (${row.user?.phone ?? 'no phone'})`;

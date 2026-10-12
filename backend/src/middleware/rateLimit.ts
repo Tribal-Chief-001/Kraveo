@@ -115,6 +115,16 @@ const RULES: Rule[] = [
     applies: (r, p) => ['POST', 'PATCH', 'PUT', 'DELETE'].includes(r.method) && ((/^\/admin\/catalog(\/|$)/.test(p) && p !== '/admin/catalog/preview' && p !== '/admin/catalog/recalculate') || /^\/admin\/vendors\/[^/]+\/commission$/.test(p)),
     message: 'Too many catalog changes. Please wait a few minutes.',
   },
+  // Docs/23: managed categories, restaurant profile edits, bulk dish actions, menu import and image upload (all ADMIN only).
+  {
+    name: 'ADMIN_CATEGORY_WRITE', scope: 'user', max: 120, windowMs: 10 * MIN,
+    applies: (r, p) => ['POST', 'PATCH', 'DELETE'].includes(r.method) && /^\/admin\/categories(\/|$)/.test(p),
+    message: 'Too many category changes. Please wait a few minutes.',
+  },
+  { name: 'ADMIN_VENDOR_PROFILE_WRITE', scope: 'user', max: 120, windowMs: 10 * MIN, applies: (r, p) => r.method === 'PATCH' && /^\/admin\/vendors\/[^/]+\/profile$/.test(p), message: 'Too many restaurant edits. Please wait a few minutes.' },
+  { name: 'ADMIN_CATALOG_BULK', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/catalog/bulk', message: 'Too many bulk changes. Please wait a few minutes.' },
+  { name: 'ADMIN_MENU_IMPORT', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && /^\/admin\/vendors\/[^/]+\/menu-import$/.test(p), message: 'Too many menu imports. Please wait a few minutes.' },
+  { name: 'ADMIN_UPLOAD', scope: 'user', max: 60, windowMs: 60 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/uploads/image', message: 'Too many image uploads. Please try again in an hour.' },
   { name: 'ADMIN_RECALCULATE', scope: 'user', max: 20, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/catalog/recalculate', message: 'Too many price recalculations. Please wait a few minutes.' },
   { name: 'ADMIN_SETTINGS_WRITE', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => r.method === 'PUT' && /^\/admin\/settings\/[^/]+$/.test(p), message: 'Too many settings changes. Please wait a few minutes.' },
   // Docs/21 phase 2: payout details, settlement actions and the rider ledger. Money endpoints: tight enough that a stuck loop or a

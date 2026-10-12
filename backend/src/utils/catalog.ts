@@ -16,6 +16,7 @@ export const publicMenuItem = (m: any) => ({
   name: m.name,
   price: m.price,
   category: m.category,
+  categoryId: m.categoryId ?? null,
   description: m.description,
   imageUrl: m.imageUrl,
   isAvailable: m.isAvailable,
@@ -24,22 +25,45 @@ export const publicMenuItem = (m: any) => ({
   ratingCount: m.ratingCount ?? null,
 });
 
+/** Prisma `include` that loads a restaurant's categories (cuisines) in order: one extra query for a whole list, no N+1. */
+export const CUISINES_INCLUDE = {
+  cuisines: { orderBy: [{ position: 'asc' as const }, { categoryId: 'asc' as const }], select: { category: { select: { id: true, name: true, icon: true } } } },
+};
+
+/** Docs/23: `cuisines` = [{ id, name, icon }] in the admin's order; `tags` = the same names (old customer builds already read `tags`). */
+export const cuisineList = (v: any): { id: string; name: string; icon: string }[] =>
+  (Array.isArray(v?.cuisines) ? v.cuisines : [])
+    .map((c: any) => c?.category ?? c)
+    .filter((c: any) => c && typeof c.id === 'string' && typeof c.name === 'string')
+    .map((c: any) => ({ id: c.id, name: c.name, icon: typeof c.icon === 'string' ? c.icon : 'restaurant' }));
+/** Just the two payload fields (use after spreading a row that still carries the raw link rows, so they replace them). */
+export const cuisineFields = (v: any) => { const cuisines = cuisineList(v); return { cuisines, tags: cuisines.map((c) => c.name) }; };
+export const withCuisines = <T extends { cuisines?: unknown }>(v: T) => {
+  const cuisines = cuisineList(v);
+  return { ...v, cuisines, tags: cuisines.map((c) => c.name) };
+};
+
 /** What a customer needs to see of a restaurant (no owner id, FSSAI number, review state or timestamps). */
-export const publicVendorView = (v: any) => ({
-  id: v.id,
-  name: v.name,
-  category: v.category,
-  rating: v.rating,
-  totalRatingsCount: v.totalRatingsCount,
-  eta: v.eta,
-  bannerImage: v.bannerImage,
-  address: v.address,
-  isAcceptingOrders: v.isAcceptingOrders,
-  lat: v.lat,
-  lng: v.lng,
-  // Defence in depth: the queries already filter, an unapproved or deleted dish must never reach a customer even if one forgets to.
-  menuItems: (v.menuItems ?? []).filter(isCustomerVisible).map(publicMenuItem),
-});
+export const publicVendorView = (v: any) => {
+  const cuisines = cuisineList(v);
+  return {
+    id: v.id,
+    name: v.name,
+    category: v.category,
+    rating: v.rating,
+    totalRatingsCount: v.totalRatingsCount,
+    eta: v.eta,
+    bannerImage: v.bannerImage,
+    address: v.address,
+    isAcceptingOrders: v.isAcceptingOrders,
+    lat: v.lat,
+    lng: v.lng,
+    cuisines,
+    tags: cuisines.map((c) => c.name),
+    // Defence in depth: the queries already filter, an unapproved or deleted dish must never reach a customer even if one forgets to.
+    menuItems: (v.menuItems ?? []).filter(isCustomerVisible).map(publicMenuItem),
+  };
+};
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Restaurant view of a dish (Docs/21 section 4): ITS price and a status. Never the customer price or the commission.
@@ -62,6 +86,7 @@ export const vendorMenuItemView = (m: any) => ({
   vendorId: m.vendorId,
   name: m.name,
   category: m.category,
+  categoryId: m.categoryId ?? null,
   description: m.description,
   imageUrl: m.imageUrl,
   isVeg: m.isVeg,

@@ -844,8 +844,8 @@ describe('Backend hardening', () => {
     test('customers (and anonymous callers) get only what the app needs; the admin and the owner keep the full row', async () => {
       const [v1, v2] = W.vendors;
       await prisma.vendor.update({ where: { id: v1.vendorId }, data: { fssaiNumber: '12345678901234' } });
-      const allowedVendor = ['id', 'name', 'category', 'rating', 'totalRatingsCount', 'eta', 'bannerImage', 'address', 'isAcceptingOrders', 'lat', 'lng', 'menuItems'];
-      const allowedItem = ['id', 'vendorId', 'name', 'price', 'category', 'description', 'imageUrl', 'isAvailable', 'isVeg', 'rating', 'ratingCount'];
+      const allowedVendor = ['id', 'name', 'category', 'rating', 'totalRatingsCount', 'eta', 'bannerImage', 'address', 'isAcceptingOrders', 'lat', 'lng', 'menuItems', 'cuisines', 'tags']; // Docs/23 added cuisines + tags
+      const allowedItem = ['id', 'vendorId', 'name', 'price', 'category', 'categoryId', 'description', 'imageUrl', 'isAvailable', 'isVeg', 'rating', 'ratingCount'];
       const ownerHeaders = bearer(v2.token);
       for (const headers of [{}, bearer(W.customers[0].token), ownerHeaders, bearer(W.riders[0].token)]) {
         const list = await request.get('/api/vendors').set(headers);

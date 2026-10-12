@@ -449,6 +449,37 @@ async function main() {
     },
   });
 
+  // 4b. Managed categories (Docs/23): the six names the restaurant app hard-codes, the categories of the demo dishes, and the restaurants' cuisines.
+  // Same rule as the migration backfill: slug = lower case, [^a-z0-9]+ -> "-".
+  const slugOf = (n: string) => n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const dishCategories = ['Main Course', 'Breads', 'Beverages', 'Snacks', 'Desserts', 'Fast Food', 'Thalis', 'Parathas'];
+  const cuisineNames: Record<string, string[]> = {
+    'ven-1': ['North Indian', 'Thalis', 'Parathas'],
+    'ven-2': ['Fast Food', 'Maggi', 'Beverages'],
+    'ven-3': ['Butter Chicken', 'Naan'],
+  };
+  const everyName = [...new Set([...dishCategories, ...Object.values(cuisineNames).flat()])];
+  let sortOrder = 0;
+  for (const name of everyName) {
+    sortOrder += 1;
+    await prisma.category.upsert({
+      where: { slug: slugOf(name) },
+      update: {},
+      create: { name, slug: slugOf(name), sortOrder, forDishes: dishCategories.includes(name), forRestaurants: Object.values(cuisineNames).flat().includes(name), showOnHome: dishCategories.includes(name) },
+    });
+  }
+  for (const [vendorId, names] of Object.entries(cuisineNames)) {
+    await prisma.vendorCategory.deleteMany({ where: { vendorId } });
+    for (const [position, name] of names.entries()) {
+      const c = await prisma.category.findUniqueOrThrow({ where: { slug: slugOf(name) } });
+      await prisma.vendorCategory.create({ data: { vendorId, categoryId: c.id, position } });
+    }
+  }
+  for (const item of await prisma.menuItem.findMany({ where: { id: { in: ['item-1', 'item-2', 'item-3', 'item-4', 'item-5', 'item-6', 'item-7'] } }, select: { id: true, category: true } })) {
+    const c = await prisma.category.findUnique({ where: { slug: slugOf(item.category) } });
+    if (c) await prisma.menuItem.update({ where: { id: item.id }, data: { categoryId: c.id, category: c.name } });
+  }
+
   // 5. Create Initial Orders (ord-101, ord-102)
   await prisma.order.upsert({
     where: { id: 'ord-101' },

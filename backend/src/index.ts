@@ -11,6 +11,8 @@ import { globalErrorHandler } from './middleware/errorHandler';
 import { assertRuntimeConfig } from './config/runtimeConfig';
 import { installProcessGuards } from './processGuards';
 import { initPushProvider, getPushProvider } from './services/push/provider';
+import { mountUploads } from './routes/uploads';
+import { mountBodyLimits } from './middleware/bodyLimits';
 
 dotenv.config();
 
@@ -72,6 +74,9 @@ const PORT = process.env.PORT || 5000;
 
 app.use(securityHeaders);
 app.use(cors(corsOptions));
+// Docs/23: uploaded photos (GET /uploads/*) and the larger JSON limit of the menu import; both before the global 100 KB json parser.
+mountUploads(app);
+mountBodyLimits(app);
 app.use(express.json({
   verify: (req: any, res, buf) => {
     req.rawBody = buf;
