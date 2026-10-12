@@ -1,3 +1,5 @@
+import 'food_category.dart';
+
 class Dhaba {
   final String id;
   final String name;
@@ -12,6 +14,9 @@ class Dhaba {
   final bool isFavorite;
   final List<String> tags;
 
+  /// The restaurant's managed categories in the admin's order (empty on old servers or self sign-up kitchens).
+  final List<Cuisine> cuisines;
+
   Dhaba({
     required this.id,
     required this.name,
@@ -25,7 +30,11 @@ class Dhaba {
     this.minOrder = 99.0,
     this.isFavorite = false,
     this.tags = const [],
+    this.cuisines = const [],
   });
+
+  /// What cards, the menu header and search show: the cuisines joined with " • ", else the legacy `category` text.
+  String get cuisineLabel => cuisines.isEmpty ? category : cuisines.map((c) => c.name).join(' • ');
 
   Dhaba copyWith({
     String? id,
@@ -40,6 +49,7 @@ class Dhaba {
     double? minOrder,
     bool? isFavorite,
     List<String>? tags,
+    List<Cuisine>? cuisines,
   }) {
     return Dhaba(
       id: id ?? this.id,
@@ -54,6 +64,7 @@ class Dhaba {
       minOrder: minOrder ?? this.minOrder,
       isFavorite: isFavorite ?? this.isFavorite,
       tags: tags ?? this.tags,
+      cuisines: cuisines ?? this.cuisines,
     );
   }
 
@@ -70,7 +81,8 @@ class Dhaba {
       deliveryFee: (json['deliveryFee'] ?? 25.0).toDouble(),
       minOrder: (json['minOrder'] ?? 99.0).toDouble(),
       isFavorite: json['isFavorite'] ?? false,
-      tags: (json['tags'] as List<dynamic>?)?.map((t) => t.toString()).toList() ?? [],
+      tags: json['tags'] is List ? [for (final t in json['tags'] as List) if (t != null) t.toString()] : [],
+      cuisines: Cuisine.parseList(json['cuisines']),
     );
   }
 }

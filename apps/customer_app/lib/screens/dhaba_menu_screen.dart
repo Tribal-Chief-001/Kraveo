@@ -123,7 +123,7 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
     final open = dhaba.isAcceptingOrders;
 
     // Unique categories from menu items
-    final categories = ['All', ...allItems.map((i) => i.category).toSet()];
+    final categories = ['All', ...dhabaProvider.orderDishCategories(allItems.map((i) => i.category).toSet())];
     final selectedCategory = categories.contains(_selectedCategory) ? _selectedCategory : 'All';
 
     final filteredItems = allItems.where((item) {
@@ -333,7 +333,7 @@ class _MenuHeader extends StatelessWidget {
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
               KDisplayText(dhaba.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.displayMd.copyWith(color: Colors.white)),
               const SizedBox(height: 4),
-              Text(dhaba.category, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: Colors.white.withValues(alpha: 0.88))),
+              Text(dhaba.cuisineLabel, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.body.copyWith(color: Colors.white.withValues(alpha: 0.88))),
             ]),
           ),
         ),

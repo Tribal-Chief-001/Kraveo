@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/dhaba.dart';
+import '../models/food_category.dart';
 import '../models/menu_item.dart';
 import '../services/customer_api_service.dart';
 
@@ -17,6 +20,14 @@ enum CatalogStatus {
 
   /// The first load failed and there is nothing to show; the screen offers "Try again".
   failed,
+}
+
+/// One chip on Home: its [label] is also the category name a restaurant is matched on; [iconKey] is
+/// the server's icon key (null for chips derived from dish categories).
+class CategoryChip {
+  const CategoryChip(this.label, {this.iconKey});
+  final String label;
+  final String? iconKey;
 }
 
 class DhabaProvider with ChangeNotifier {
@@ -41,6 +52,20 @@ class DhabaProvider with ChangeNotifier {
   CatalogStatus _status = CatalogStatus.idle;
   Future<bool>? _loading;
 
+  /// The most chips the server list may add after "All" (Docs/23 section 5).
+  static const int maxServerChips = 10;
+
+  /// Managed categories for Home chips (`GET /categories?for=home`), kept in memory. Empty = not
+  /// loaded / old server / failed: Home then derives its chips from the dish categories as before.
+  List<FoodCategory> _homeCategories = const [];
+
+  /// Admin order of every dish category we know (lower-case name -> sortOrder), used to order the
+  /// category tabs inside a restaurant. Empty = unavailable: the tabs keep the menu's own order.
+  final Map<String, int> _categoryOrder = {};
+
+  Future<void>? _loadingCategories;
+  bool _disposed = false;
+
   final List<Dhaba> _dhabas = [];
   final Map<String, List<MenuItemModel>> _menuItems = {};
 
@@ -52,6 +77,23 @@ class DhabaProvider with ChangeNotifier {
   /// Test seam: treat these kitchens as coming from the live catalog.
   @visibleForTesting
   void markLiveForTest(Iterable<String> ids) => _liveVendorIds.addAll(ids);
+
+  /// Test seam: pretend these server categories were loaded.
+  @visibleForTesting
+  void setCategoriesForTest({List<FoodCategory> home = const [], List<FoodCategory> dishes = const []}) {
+    _applyCategories(home, dishes);
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
 
   // Getters
   String get searchQuery => _searchQuery;
@@ -77,9 +119,19 @@ class DhabaProvider with ChangeNotifier {
     return null;
   }
 
-  /// Home's category chips: "All" plus the dish categories that really exist on the live menus
-  /// (most common first), so a chip can never lead to "No kitchens match".
-  List<String> get categories {
+  /// Home's chips: "All" plus the admin's managed categories when the server list is loaded (server
+  /// order, at most [maxServerChips], with their icon keys); otherwise the dish categories that
+  /// really exist on the live menus (most common first), so a chip can never lead to "No kitchens match".
+  List<CategoryChip> get categoryChips {
+    if (_homeCategories.isNotEmpty) {
+      final seen = <String>{_all.toLowerCase()};
+      final chips = <CategoryChip>[const CategoryChip(_all)];
+      for (final c in _homeCategories) {
+        if (chips.length > maxServerChips) break;
+        if (seen.add(c.name.toLowerCase())) chips.add(CategoryChip(c.name, iconKey: c.icon));
+      }
+      return chips;
+    }
     final counts = <String, int>{};
     final spelling = <String, String>{};
     for (final d in _dhabas) {
@@ -93,7 +145,33 @@ class DhabaProvider with ChangeNotifier {
       }
     }
     final keys = counts.keys.toList()..sort((a, b) => counts[b] != counts[a] ? counts[b]!.compareTo(counts[a]!) : a.compareTo(b));
-    return [_all, for (final key in keys.take(8)) spelling[key]!];
+    return [const CategoryChip(_all), for (final key in keys.take(8)) CategoryChip(spelling[key]!)];
+  }
+
+  /// The chip labels of [categoryChips].
+  List<String> get categories => [for (final c in categoryChips) c.label];
+
+  /// Whether Home's chips come from the server's managed categories (false = derived fallback).
+  bool get hasServerCategories => _homeCategories.isNotEmpty;
+
+  /// Orders the dish category tabs of one restaurant by the admin's category order; categories the
+  /// server does not know (legacy text) go last, alphabetically. Without a server list the given
+  /// order is kept.
+  List<String> orderDishCategories(Iterable<String> names) {
+    final list = names.toList();
+    if (_categoryOrder.isEmpty) return list;
+    final known = <String>[];
+    final unknown = <String>[];
+    for (final n in list) {
+      (_categoryOrder.containsKey(n.trim().toLowerCase()) ? known : unknown).add(n);
+    }
+    int byName(String a, String b) => a.toLowerCase().compareTo(b.toLowerCase());
+    known.sort((a, b) {
+      final c = _categoryOrder[a.trim().toLowerCase()]!.compareTo(_categoryOrder[b.trim().toLowerCase()]!);
+      return c != 0 ? c : byName(a, b);
+    });
+    unknown.sort(byName);
+    return [...known, ...unknown];
   }
 
   /// Index of the selected chip in [categories] (0 = All; also 0 when that category disappeared).
@@ -105,7 +183,8 @@ class DhabaProvider with ChangeNotifier {
   bool _matchesCategory(Dhaba d, String category) {
     final wanted = category.toLowerCase();
     if ((_menuItems[d.id] ?? const <MenuItemModel>[]).any((i) => i.category.trim().toLowerCase() == wanted)) return true;
-    return d.category.toLowerCase().contains(wanted) || d.tags.any((t) => t.toLowerCase() == wanted);
+    if (d.cuisines.any((c) => c.name.trim().toLowerCase() == wanted)) return true;
+    return d.category.toLowerCase().contains(wanted) || d.tags.any((t) => t.trim().toLowerCase() == wanted);
   }
 
   /// The kitchens Home shows: [allDhabas] narrowed by favourites, the selected chip and the search text.
@@ -120,7 +199,8 @@ class DhabaProvider with ChangeNotifier {
         final query = _searchQuery.trim().toLowerCase();
         final nameMatch = d.name.toLowerCase().contains(query);
         final catMatch = d.category.toLowerCase().contains(query);
-        final tagMatch = d.tags.any((t) => t.toLowerCase().contains(query));
+        final tagMatch = d.tags.any((t) => t.toLowerCase().contains(query)) ||
+            d.cuisines.any((c) => c.name.toLowerCase().contains(query));
 
         // Also search in dhaba menu items!
         final items = _menuItems[d.id] ?? [];
@@ -144,6 +224,46 @@ class DhabaProvider with ChangeNotifier {
   /// answered. A failed refresh keeps what is already on screen; only a failed first load
   /// switches to [CatalogStatus.failed].
   Future<bool> loadCatalog() => _loading ??= _loadCatalog().whenComplete(() => _loading = null);
+
+  /// What Home refreshes together (open / resume / pull-to-refresh): the categories start in the
+  /// background and never delay or fail the catalog; the result is the catalog's.
+  Future<bool> refreshHome() {
+    unawaited(loadCategories());
+    return loadCatalog();
+  }
+
+  /// Loads the managed categories (`GET /categories?for=home` for the chips and `?for=dishes` for the
+  /// tab order). Never throws and never blocks Home: on any failure the last good list stays (none on
+  /// the first load = the fallback chips). Concurrent calls share one request.
+  Future<void> loadCategories() => _loadingCategories ??= _loadCategories().whenComplete(() => _loadingCategories = null);
+
+  Future<void> _loadCategories() async {
+    Future<List<FoodCategory>?> fetch(String forWhat) async {
+      try {
+        return await CustomerApiService.fetchCategories(forWhat: forWhat);
+      } catch (error) {
+        debugPrint('[Categories] $forWhat unavailable: ${error.runtimeType}');
+        return null;
+      }
+    }
+
+    final results = await Future.wait([fetch('home'), fetch('dishes')]);
+    if (_disposed) return;
+    final home = results[0];
+    final dishes = results[1];
+    if (home == null && dishes == null) return;
+    _applyCategories(home ?? _homeCategories, dishes);
+    notifyListeners();
+  }
+
+  void _applyCategories(List<FoodCategory> home, List<FoodCategory>? dishes) {
+    _homeCategories = List.unmodifiable(home);
+    // A failed dishes request (null) keeps the order we already know; a successful one replaces it.
+    if (dishes != null) _categoryOrder.clear();
+    for (final c in [...?dishes, ...home]) {
+      _categoryOrder[c.name.trim().toLowerCase()] = c.sortOrder;
+    }
+  }
 
   Future<bool> _loadCatalog() async {
     if (_status != CatalogStatus.ready) {

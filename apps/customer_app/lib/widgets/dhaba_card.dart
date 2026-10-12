@@ -89,7 +89,7 @@ class DhabaCard extends StatelessWidget {
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                         Text(dhaba.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: KraveoType.headlineSm.copyWith(color: Colors.white)),
                         const SizedBox(height: 2),
-                        Text(dhaba.category, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: Colors.white.withValues(alpha: 0.85))),
+                        Text(dhaba.cuisineLabel, maxLines: 1, overflow: TextOverflow.ellipsis, style: KraveoType.bodySm.copyWith(color: Colors.white.withValues(alpha: 0.85))),
                       ]),
                     ),
                     const SizedBox(width: 10),

@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
 import '../models/auth_results.dart';
+import '../models/food_category.dart';
 
 class CustomerApiService {
   static const String _tokenPrefKey = 'kraveo_customer_jwt_token';
@@ -217,6 +218,21 @@ class CustomerApiService {
         .whereType<Map>()
         .map((vendor) => Map<String, dynamic>.from(vendor))
         .toList();
+  }
+
+  /// Managed categories (`GET /categories?for=home|dishes|restaurants`, public, no login). Returns the
+  /// parsed rows in the server's order; unusable rows are dropped. Throws when the call does not
+  /// work out (offline, timeout, 404 on an old server, non-JSON, `success` false or `data` not a
+  /// list): the caller falls back to today's behaviour.
+  static Future<List<FoodCategory>> fetchCategories({String forWhat = 'home'}) async {
+    final response = await _get(
+      Uri.parse('${ApiConfig.baseUrl}/categories').replace(queryParameters: {'for': forWhat}),
+      timeout: const Duration(seconds: 10),
+    );
+    if (response.statusCode != 200) throw Exception('Categories unavailable (${response.statusCode}).');
+    final body = jsonDecode(response.body);
+    if (body is! Map || body['success'] == false || body['data'] is! List) throw Exception('Categories answer not understood.');
+    return FoodCategory.parseList(body['data']);
   }
 
   /// Builds authenticated request headers dynamically

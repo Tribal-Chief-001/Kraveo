@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
+import '../models/dish_category.dart';
 import '../services/failure_messages.dart';
 import 'ui/ui.dart';
 
@@ -11,7 +13,12 @@ class AddDishModal extends StatefulWidget {
   /// (the sheet stays open with the message, nothing typed is lost).
   final Future<FailureText?> Function(String name, String category, double price, bool inStock, {bool isVeg}) onSubmit;
 
-  const AddDishModal({super.key, required this.onSubmit});
+  /// Loads the ACTIVE dish categories in the admin's order (null / empty / throws = not available: the built-in
+  /// six stay). Called when the sheet opens and again after the server refused a category. Without it the form
+  /// only offers the built-in six.
+  final Future<List<DishCategory>?> Function()? loadCategories;
+
+  const AddDishModal({super.key, required this.onSubmit, this.loadCategories});
 
   @override
   State<AddDishModal> createState() => _AddDishModalState();
@@ -21,21 +28,57 @@ class _AddDishModalState extends State<AddDishModal> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _priceController = TextEditingController();
-  String _selectedCategory = 'Main Course';
+  /// The picked category name (sent as is), or null when the list changed under the cook and the pick is gone.
+  String? _selectedCategory = DishCategory.defaultName;
+
+  /// True once the cook tapped a category himself (a later list change then never moves his pick silently).
+  bool _picked = false;
 
   /// Veg by default; the customer app shows the green or red mark from this.
   bool _isVeg = true;
   bool _saving = false;
   FailureText? _error;
 
-  final List<String> _categories = [
-    'Main Course',
-    'Breads',
-    'Beverages',
-    'Snacks',
-    'Desserts',
-    'Fast Food',
-  ];
+  /// The categories on offer: the built-in six until the server list arrives.
+  List<DishCategory> _categories = DishCategory.fallback;
+  bool _loadingCategories = false;
+  String? _categoryError;
+  int _loadSeq = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _reloadCategories();
+  }
+
+  /// Fetches the server list (if the screen gave a loader) and swaps it in. The form is usable meanwhile; a failed or
+  /// empty answer keeps what is on screen. The pick is kept when it still exists, else (nothing picked yet) the
+  /// first category, else cleared so the cook must choose again.
+  Future<void> _reloadCategories() async {
+    final loader = widget.loadCategories;
+    if (loader == null) return;
+    final seq = ++_loadSeq;
+    setState(() => _loadingCategories = true);
+    List<DishCategory>? loaded;
+    try {
+      loaded = await loader();
+    } catch (_) {
+      loaded = null;
+    }
+    if (!mounted || seq != _loadSeq) return;
+    setState(() {
+      _loadingCategories = false;
+      if (loaded == null || loaded.isEmpty) return;
+      _categories = loaded;
+      final current = _selectedCategory?.toLowerCase();
+      final same = current == null ? null : loaded.where((c) => c.name.toLowerCase() == current).firstOrNull;
+      if (same != null) {
+        _selectedCategory = same.name;
+      } else {
+        _selectedCategory = _picked ? null : loaded.first.name;
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -46,11 +89,17 @@ class _AddDishModalState extends State<AddDishModal> {
 
   Future<void> _submitForm() async {
     if (_saving || !_formKey.currentState!.validate()) return;
+    final category = _selectedCategory;
+    if (category == null) {
+      setState(() => _categoryError = 'Pick a category from the list.');
+      return;
+    }
     setState(() {
       _saving = true;
       _error = null;
+      _categoryError = null;
     });
-    final problem = await widget.onSubmit(_nameController.text.trim(), _selectedCategory, double.parse(_priceController.text.trim()), true, isVeg: _isVeg);
+    final problem = await widget.onSubmit(_nameController.text.trim(), category, double.parse(_priceController.text.trim()), true, isVeg: _isVeg);
     if (!mounted) return;
     if (problem == null) {
       Navigator.pop(context);
@@ -60,6 +109,8 @@ class _AddDishModalState extends State<AddDishModal> {
       _saving = false;
       _error = problem;
     });
+    // The server refused the category (renamed or hidden meanwhile): show its sentence, keep the form, refresh the list.
+    if (problem.code == 'CATEGORY_UNKNOWN') unawaited(_reloadCategories());
   }
 
   Widget _fieldLabel(KraveoTokens k, String en, String hi) => Padding(
@@ -123,16 +174,37 @@ class _AddDishModalState extends State<AddDishModal> {
             ),
             const SizedBox(height: 18),
 
-            _fieldLabel(k, 'Category', 'प्रकार'),
+            Row(children: [
+              Flexible(child: _fieldLabel(k, 'Category', 'प्रकार')),
+              if (_loadingCategories)
+                const Padding(
+                  padding: EdgeInsets.only(left: 8, bottom: 8),
+                  child: SizedBox(key: ValueKey('dish-categories-loading'), width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                ),
+            ]),
             Wrap(spacing: 8, runSpacing: 8, children: [
               for (final cat in _categories)
                 VChoiceChip(
-                  label: cat,
-                  sublabel: hindiCategory(cat),
-                  selected: _selectedCategory == cat,
-                  onTap: () => setState(() => _selectedCategory = cat),
+                  key: ValueKey('dish-category-${cat.name}'),
+                  label: cat.name,
+                  sublabel: cat.hindiLabel,
+                  selected: _selectedCategory == cat.name,
+                  onTap: () => setState(() {
+                    _selectedCategory = cat.name;
+                    _picked = true;
+                    _categoryError = null;
+                  }),
                 ),
             ]),
+            if (_categoryError != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 4, top: 8),
+                child: Text(
+                  '$_categoryError  ·  सूची में से प्रकार चुनें',
+                  key: const ValueKey('add-dish-category-error'),
+                  style: KraveoType.titleMd.copyWith(color: kDangerDeep, fontSize: 15),
+                ),
+              ),
             const SizedBox(height: 18),
 
             _fieldLabel(k, 'Veg or non-veg?', 'शाकाहारी या मांसाहारी?'),

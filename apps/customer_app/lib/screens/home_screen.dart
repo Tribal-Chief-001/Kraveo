@@ -8,6 +8,7 @@ import '../providers/dhaba_provider.dart';
 import '../providers/order_provider.dart';
 import '../providers/session_provider.dart';
 import '../widgets/dhaba_card.dart';
+import '../widgets/ui/category_icons.dart';
 import '../widgets/ui/display_text.dart';
 import '../widgets/ui/format.dart';
 import '../widgets/ui/floating_bar.dart';
@@ -35,7 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () {
     if (!mounted) return;
     context.read<OrderProvider>().onAppResumed();
-    unawaited(context.read<DhabaProvider>().loadCatalog());
+    unawaited(context.read<DhabaProvider>().refreshHome());
   });
   final TextEditingController _searchController = TextEditingController();
 
@@ -45,7 +46,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _lifecycle; // start listening
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      unawaited(Provider.of<DhabaProvider>(context, listen: false).loadCatalog());
+      unawaited(Provider.of<DhabaProvider>(context, listen: false).refreshHome());
     });
   }
 
@@ -54,7 +55,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final orders = context.read<OrderProvider>();
     final dhabas = context.read<DhabaProvider>();
     unawaited(orders.refreshActive());
-    final ok = await dhabas.loadCatalog();
+    final ok = await dhabas.refreshHome();
     if (!mounted || ok) return;
     showKSnack(context, 'Couldn\'t refresh the kitchens. Check your connection and try again.', error: true);
   }
@@ -147,7 +148,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final catalogLoading = dhabaProvider.isCatalogLoading;
     final catalogFailed = dhabaProvider.hasCatalogFailed;
     final noKitchens = dhabaProvider.allDhabas.isEmpty;
-    final chips = dhabaProvider.categories;
+    final chips = dhabaProvider.categoryChips;
     final filtering = dhabaProvider.searchQuery.trim().isNotEmpty || dhabaProvider.selectedCategoryIndex != 0 || dhabaProvider.showFavoritesOnly;
     // With extendBody the scaffold reports the floating nav's height as bottom padding.
     final navInset = MediaQuery.paddingOf(context).bottom;
@@ -241,10 +242,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         itemCount: chips.length,
                         separatorBuilder: (_, __) => const SizedBox(width: 8),
                         itemBuilder: (context, index) {
-                          final label = chips[index];
+                          final chip = chips[index];
                           return KChoiceChip(
-                            label: label,
-                            icon: _categoryIcon(label),
+                            label: chip.label,
+                            icon: categoryIcon(key: chip.iconKey, label: chip.label),
                             selected: dhabaProvider.selectedCategoryIndex == index,
                             onTap: () => dhabaProvider.setSelectedCategoryIndex(index),
                           );
@@ -280,7 +281,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     kind: KButtonKind.tonal,
                     expand: false,
                     icon: LucideIcons.rotateCcw,
-                    onPressed: () => unawaited(dhabaProvider.loadCatalog()),
+                    onPressed: () => unawaited(dhabaProvider.refreshHome()),
                   ),
                 ),
               )
@@ -367,27 +368,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ]),
     );
-  }
-
-  static IconData _categoryIcon(String label) {
-    switch (label.toLowerCase()) {
-      case 'all':
-        return LucideIcons.utensilsCrossed;
-      case 'night mess':
-        return LucideIcons.moon;
-      case 'thalis':
-        return LucideIcons.cookingPot;
-      case 'fast food':
-        return LucideIcons.sandwich;
-      case 'beverages':
-        return LucideIcons.cupSoda;
-      case 'north indian':
-        return LucideIcons.flame;
-      case 'parathas':
-        return LucideIcons.wheat;
-      default:
-        return LucideIcons.utensils;
-    }
   }
 }
 

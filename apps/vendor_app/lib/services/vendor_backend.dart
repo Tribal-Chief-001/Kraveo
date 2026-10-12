@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io' show HttpDate;
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
+import '../models/dish_category.dart';
 import '../models/dish_model.dart';
 import '../models/order_model.dart';
 import 'vendor_api_service.dart';
@@ -119,7 +120,16 @@ abstract class VendorBackend {
   Future<ApiResult<DishModel>> updateDish(String itemId, {bool? isAvailable, double? price});
 }
 
-class HttpVendorBackend implements VendorBackend {
+/// Optional capability of a backend: the managed dish categories (`GET /categories?for=dishes`, public). Kept apart
+/// from [VendorBackend] so that fakes written before the categories existed keep working (they simply have none,
+/// and the Add-dish form then offers its built-in six).
+abstract interface class DishCategorySource {
+  /// The ACTIVE dish categories in the admin's order. Failure (offline, 404 on an old server, unreadable answer) is
+  /// a normal outcome: the caller falls back to the built-in list.
+  Future<ApiResult<List<DishCategory>>> fetchDishCategories();
+}
+
+class HttpVendorBackend implements VendorBackend, DishCategorySource {
   const HttpVendorBackend({this.timeout = const Duration(seconds: 10)});
 
   final Duration timeout;
@@ -285,6 +295,15 @@ class HttpVendorBackend implements VendorBackend {
       return _menuFrom(await _send('GET', '/menus/$id'));
     }
     return _menuFrom(managed);
+  }
+
+  @override
+  Future<ApiResult<List<DishCategory>>> fetchDishCategories() async {
+    final res = await _send('GET', '/categories?for=dishes');
+    if (!res.ok) return res.cast();
+    final json = res.data;
+    if (json is! Map || json['data'] is! List) return const ApiResult.failure(ApiFailure.server, message: 'Unreadable category list');
+    return ApiResult.success(DishCategory.parseList(json['data']));
   }
 
   @override

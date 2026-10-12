@@ -3,9 +3,12 @@ import 'vendor_backend.dart';
 /// A short English line and its Hindi twin for a failed call, so a cook always knows what happened
 /// and whether trying again makes sense.
 class FailureText {
-  const FailureText(this.english, this.hindi);
+  const FailureText(this.english, this.hindi, {this.code});
   final String english;
   final String hindi;
+
+  /// The server's machine code when it decides what the screen does next (e.g. `CATEGORY_UNKNOWN` reloads the list).
+  final String? code;
 
   String get both => '$english  ·  $hindi';
 }
@@ -29,6 +32,9 @@ FailureText failureText(ApiFailure failure, {String? serverMessage, String? code
       return const FailureText('Your restaurant account cannot do this step.', 'यह कदम रेस्टोरेंट खाते से नहीं हो सकता');
     case 'PARTNER_NOT_APPROVED':
       return const FailureText('Your restaurant is not active on Kraveo right now.', 'आपका रेस्टोरेंट अभी चालू नहीं है');
+    case 'CATEGORY_UNKNOWN':
+      // Docs/23: the server's own sentence ("Pick a category from the list."); the form reloads the list.
+      return FailureText(_serverOr('Pick a category from the list.', serverMessage), 'सूची में से प्रकार चुनें', code: code);
     case 'NOT_FOUND':
       return const FailureText('This order is not available to your restaurant.', 'यह ऑर्डर आपके रेस्टोरेंट के लिए नहीं है');
   }

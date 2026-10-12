@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import '../models/dish_category.dart';
 import '../models/dish_model.dart';
 import 'failure_messages.dart';
 import 'vendor_backend.dart';
@@ -158,6 +159,21 @@ class MenuStockController extends ChangeNotifier {
     if (sentAgain || d.status == DishStatus.pending) return _Saved(price: want, status: DishStatus.pending);
     final live = _confirmed[d.id]?.price ?? d.price;
     return want == live ? _Saved(price: live, status: DishStatus.live) : _Saved(price: live, pending: want, status: DishStatus.changePending);
+  }
+
+  /// The dish categories for the Add-dish form (`GET /categories?for=dishes`), or null when they cannot be had
+  /// (offline, an old server, an empty or unreadable list, a backend without categories): the form then keeps its
+  /// built-in six. Never throws.
+  Future<List<DishCategory>?> loadDishCategories() async {
+    final Object source = backend;
+    if (source is! DishCategorySource) return null;
+    try {
+      final res = await source.fetchDishCategories();
+      final list = res.data;
+      return res.ok && list != null && list.isNotEmpty ? list : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Creates a dish on the server. Returns null on success, or what went wrong.
