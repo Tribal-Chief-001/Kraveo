@@ -4,6 +4,7 @@ import { prisma } from '../db';
 import { AppError } from '../utils/appError';
 import { ID_RE } from '../utils/http';
 import { writeAudit } from './audit';
+import { BAD_LABEL_CHARS, BAD_SCRIPT_LABEL_CHARS, collapse } from '../utils/labels';
 
 /**
  * Managed categories (Docs/23). ONE list for restaurants (0..6 per restaurant, VendorCategory) and dishes (exactly one, MenuItem.categoryId).
@@ -28,22 +29,46 @@ export const MAX_NAME_LEN = 30;
 export const DEFAULT_DISH_CATEGORY = 'Main Course';
 export const DEFAULT_VENDOR_CATEGORY = 'Campus kitchen';
 export const CUISINE_SEPARATOR = ' • ';
+export const MAX_DISH_CATEGORY_TEXT = 40;
 const TX_OPTS = { maxWait: 10_000, timeout: 20_000 };
+
+/**
+ * The six names the OLD restaurant app hard-codes in its add-dish picker (and sends as free text). Renaming, hiding, switching off
+ * `forDishes`, merging away or deleting one of them would make every old build fail with CATEGORY_UNKNOWN, so those changes are refused
+ * (409 CATEGORY_PROTECTED) until the old builds are gone: set ALLOW_LEGACY_CATEGORY_CHANGES=1 on the server to lift the guard.
+ */
+export const LEGACY_PROTECTED_SLUGS: readonly string[] = ['main-course', 'breads', 'beverages', 'snacks', 'desserts', 'fast-food'];
+const legacyChangesAllowed = () => process.env.ALLOW_LEGACY_CATEGORY_CHANGES === '1';
+const assertNotProtected = (c: { slug: string }, what: string) => {
+  if (LEGACY_PROTECTED_SLUGS.includes(c.slug) && !legacyChangesAllowed()) {
+    throw new AppError(409, 'CATEGORY_PROTECTED', `Older restaurant apps still use this name (${what}). It stays as it is until those builds are gone.`);
+  }
+};
+
+// Public list cache (GET /api/categories): the grouped counts query is memoised for a short time and dropped by every category write.
+// Off under NODE_ENV=test unless CATEGORIES_CACHE_TTL_MS is set, like the settings cache, so suites that edit rows directly stay exact.
+let publicCache: { at: number; rows: CategoryWithCounts[] } | null = null;
+export const invalidatePublicCategories = () => { publicCache = null; };
+const cacheTtlMs = (): number => {
+  const raw = process.env.CATEGORIES_CACHE_TTL_MS;
+  if (raw !== undefined && raw.trim() !== '') { const n = Number(raw); return Number.isFinite(n) && n >= 0 ? n : 0; }
+  return process.env.NODE_ENV === 'test' ? 0 : 30_000;
+};
 
 const bad = (field: string, message: string, code = 'BAD_REQUEST') => new AppError(400, code, message, field);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Names and slugs
 // ---------------------------------------------------------------------------------------------------------------------
-export const collapse = (s: string): string => s.trim().replace(/\s+/g, ' ');
+export { collapse };
 /** Same rule as the migration: lower case, every run of characters outside a-z0-9 becomes "-", trimmed. Unique per category. */
 export const slugOf = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
 const NAME_CHARS = /^[A-Za-z0-9 &'\-/+]+$/;
-const BAD_LABEL_CHARS = /[<>\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
 export const checkCategoryName = (raw: unknown, field = 'name'): { name: string; slug: string } => {
   if (typeof raw !== 'string') throw bad(field, 'Enter a name for the category (2 to 30 characters).');
+  if (BAD_LABEL_CHARS.test(raw.normalize('NFC'))) throw bad(field, 'The name cannot contain control, hidden or direction-changing characters.');
   const name = collapse(raw);
   if (name.length < 2 || name.length > MAX_NAME_LEN) throw bad(field, `The name must be 2 to ${MAX_NAME_LEN} characters.`);
   if (!NAME_CHARS.test(name)) throw bad(field, "Use only letters, digits, spaces and & - ' / + in the name. Put the Hindi label in the Hindi name field.");
@@ -57,7 +82,7 @@ export const checkNameHi = (raw: unknown): string | null => {
   if (typeof raw !== 'string') throw bad('nameHi', 'The Hindi name must be text.');
   const v = collapse(raw);
   if (v === '') return null;
-  if (v.length > MAX_NAME_LEN || BAD_LABEL_CHARS.test(v)) throw bad('nameHi', `The Hindi name can be at most ${MAX_NAME_LEN} characters, without symbols like < >.`);
+  if (v.length > MAX_NAME_LEN || /[<>]/.test(v) || BAD_SCRIPT_LABEL_CHARS.test(raw.normalize('NFC'))) throw bad('nameHi', `The Hindi name can be at most ${MAX_NAME_LEN} characters, without symbols like < > or hidden characters.`);
   return v;
 };
 
@@ -132,9 +157,12 @@ const withCounts = async (client: Tx | typeof prisma, where: Prisma.Sql): Promis
       GROUP BY vc."categoryId"
     ) r ON r."categoryId" = c."id"
     LEFT JOIN (
-      SELECT "categoryId", COUNT(*) FILTER (WHERE "approvalStatus" = 'APPROVED' AND "deletedAt" IS NULL) AS visible, COUNT(*) AS total
-      FROM "MenuItem" WHERE "categoryId" IS NOT NULL
-      GROUP BY "categoryId"
+      SELECT m."categoryId",
+             COUNT(*) FILTER (WHERE m."approvalStatus" = 'APPROVED' AND m."deletedAt" IS NULL AND mv."approvalStatus" = 'APPROVED') AS visible,
+             COUNT(*) AS total
+      FROM "MenuItem" m JOIN "Vendor" mv ON mv."id" = m."vendorId"
+      WHERE m."categoryId" IS NOT NULL
+      GROUP BY m."categoryId"
     ) d ON d."categoryId" = c."id"
     WHERE ${where}
     ORDER BY c."sortOrder" ASC, c."name" ASC, c."id" ASC
@@ -144,7 +172,13 @@ export const listPublicCategories = async (filter: unknown) => {
   if (filter !== undefined && filter !== 'restaurants' && filter !== 'dishes' && filter !== 'home') {
     throw bad('for', "'for' must be restaurants, dishes or home.");
   }
-  const rows = await withCounts(prisma, Prisma.sql`c."isActive" = true`);
+  const ttl = cacheTtlMs();
+  let rows: CategoryWithCounts[];
+  if (ttl > 0 && publicCache && Date.now() - publicCache.at < ttl) rows = publicCache.rows;
+  else {
+    rows = await withCounts(prisma, Prisma.sql`c."isActive" = true`);
+    if (ttl > 0) publicCache = { at: Date.now(), rows };
+  }
   const list = rows.filter((c) => {
     if (filter === 'restaurants') return c.forRestaurants;
     if (filter === 'dishes') return c.forDishes;
@@ -203,7 +237,8 @@ export type DishCategoryInput = { name?: unknown; id?: unknown };
 export type ResolvedCategory = { id: string; name: string };
 const UNKNOWN_MESSAGE = 'Pick a category from the list.';
 
-const distance = (a: string, b: string): number => {
+const distance = (a: string, b: string, limit = 4): number => {
+  if (Math.abs(a.length - b.length) > limit) return Infinity; // cannot be close enough: skip the O(n*m) table
   const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...new Array<number>(b.length).fill(0)]);
   for (let j = 1; j <= b.length; j += 1) dp[0][j] = j;
   for (let i = 1; i <= a.length; i += 1) {
@@ -216,7 +251,7 @@ const distance = (a: string, b: string): number => {
 
 /** Up to 5 active dish categories closest to what was typed (admin error messages only). */
 export const suggestDishCategories = async (client: Tx | typeof prisma, typed: string): Promise<string[]> => {
-  const slug = slugOf(typed);
+  const slug = slugOf(typed.slice(0, MAX_DISH_CATEGORY_TEXT));
   if (!slug) return [];
   const all = await client.category.findMany({ where: { isActive: true, forDishes: true }, select: { name: true, slug: true }, take: MAX_CATEGORIES });
   return all
@@ -235,6 +270,7 @@ const ensureDefaultDishCategory = async (tx: Tx) => {
     INSERT INTO "Category" ("id", "name", "slug", "icon", "sortOrder", "isActive", "forRestaurants", "forDishes", "showOnHome", "createdAt", "updatedAt")
     SELECT ${randomUUID()}, ${DEFAULT_DISH_CATEGORY}, ${slug}, 'restaurant', COALESCE(MAX("sortOrder"), 0) + 1, true, false, true, false, now(), now() FROM "Category"
     ON CONFLICT ("slug") DO NOTHING`;
+  invalidatePublicCategories();
 };
 
 /**
@@ -250,8 +286,10 @@ export const resolveDishCategory = async (
 ): Promise<ResolvedCategory> => {
   let typed: string | null = null;
   if (input.name !== undefined && input.name !== null) {
-    if (typeof input.name !== 'string') throw bad('category', UNKNOWN_MESSAGE, 'CATEGORY_UNKNOWN');
+    // Checked FIRST, before any normalisation, lookup or suggestion work: no category name is longer than this.
+    if (typeof input.name !== 'string' || input.name.length > MAX_DISH_CATEGORY_TEXT * 4) throw bad('category', UNKNOWN_MESSAGE, 'CATEGORY_UNKNOWN');
     typed = collapse(input.name) || null;
+    if (typed && typed.length > MAX_DISH_CATEGORY_TEXT) throw bad('category', UNKNOWN_MESSAGE, 'CATEGORY_UNKNOWN');
   }
   let wantedId: string | null = null;
   if (input.id !== undefined && input.id !== null && input.id !== '') {
@@ -283,6 +321,28 @@ export const resolveDishCategory = async (
     return { id: fresh.id, name: fresh.name };
   }
   return unknownCategory(tx, typed ?? '', opts.admin);
+};
+
+/**
+ * Resolution for an EDIT of an existing dish. A legacy dish (no categoryId yet) whose category text is sent back unchanged never fails,
+ * even when the text has no letters or digits or matches no category (an old dashboard echoes the whole dish): it is linked when a category
+ * matches and otherwise left exactly as it is (`null` = keep).
+ */
+export const resolveDishCategoryForEdit = async (
+  tx: Tx,
+  input: DishCategoryInput,
+  opts: { admin: boolean; current: { categoryId: string | null; category: string } },
+): Promise<ResolvedCategory | null> => {
+  const typed = typeof input.name === 'string' ? collapse(input.name) : '';
+  const noId = input.id === undefined || input.id === null || input.id === '';
+  const echo = !opts.current.categoryId && !!typed && noId && typed === collapse(opts.current.category);
+  if (!echo) return resolveDishCategory(tx, input, opts);
+  try {
+    return await resolveDishCategory(tx, input, opts);
+  } catch (e) {
+    if (e instanceof AppError && e.code === 'CATEGORY_UNKNOWN') return null;
+    throw e;
+  }
 };
 
 const unknownCategory = async (tx: Tx, typed: string, admin: boolean): Promise<never> => {
@@ -374,6 +434,7 @@ export const cuisinesFromText = async (tx: Tx, text: string): Promise<Cuisine[]>
         ON CONFLICT ("slug") DO NOTHING`;
     }
     existing = await tx.category.findMany({ where: { slug: { in: slugs } } });
+    invalidatePublicCategories();
   }
   const bySlug = new Map(existing.map((c) => [c.slug, c] as const));
   const wanted = slugs.map((s) => bySlug.get(s)).filter((c): c is Category => !!c && c.isActive && c.forRestaurants);
@@ -405,6 +466,23 @@ export const prepareNewVendorCuisines = async (
   if (!text) return { category: fallbackText, cuisines: [] };
   const cuisines = await cuisinesFromText(tx, text);
   return { category: cuisines.length ? deriveVendorCategory(cuisines.map((c) => c.name)) : text.slice(0, 60), cuisines };
+};
+
+/**
+ * An OWNER path that rewrites the restaurant's category TEXT (PUT /partner/application of a pending or rejected restaurant): the text goes
+ * through the same legacy-token parser as creation and the links follow, so Vendor.category, VendorCategory and `tags` always agree. The
+ * string is DERIVED from the links (never cut to 60 characters while the links stay longer); text that matches nothing usable clears the
+ * links and is kept as typed. Runs in the caller's transaction: categories (FOR SHARE) first, then the restaurant row.
+ */
+export const applyOwnerCategoryText = async (tx: Tx, vendorId: string, text: string) => {
+  const cuisines = await cuisinesFromText(tx, text);
+  const rows = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "Vendor" WHERE "id" = ${vendorId} FOR UPDATE`;
+  if (rows.length === 0) throw new AppError(404, 'NOT_FOUND', 'Vendor not found');
+  if (cuisines.length) await writeVendorCuisines(tx, vendorId, cuisines);
+  else {
+    await tx.vendorCategory.deleteMany({ where: { vendorId } });
+    await tx.vendor.update({ where: { id: vendorId }, data: { category: collapse(text).slice(0, 60) || DEFAULT_VENDOR_CATEGORY } });
+  }
 };
 
 export const linkNewVendorCuisines = async (tx: Tx, vendorId: string, cuisines: Cuisine[]) => {
@@ -442,6 +520,7 @@ export const createCategory = async (b: Record<string, unknown>, actor: Actor) =
       const next = (await tx.category.aggregate({ _max: { sortOrder: true } }))._max.sortOrder ?? 0;
       return tx.category.create({ data: { name, slug, nameHi, icon, forRestaurants, forDishes, showOnHome, sortOrder: next + 1 } });
     }, TX_OPTS);
+    invalidatePublicCategories();
     await writeAudit('CATEGORY_CREATED', 'CATEGORY', created.id, `Admin created category "${name}" (restaurants ${forRestaurants}, dishes ${forDishes}, home ${showOnHome}, icon ${icon})`);
     return (await adminViewOf(prisma, created.id))!;
   } catch (e) {
@@ -456,7 +535,9 @@ export const patchCategory = async (id: string, b: Record<string, unknown>, acto
   rejectUnknownKeys(b, PATCH_KEYS);
   if (Object.keys(b).length === 0) throw bad('body', `Send at least one of: ${PATCH_KEYS.join(', ')}.`);
   const want: PatchPlan = {};
-  if (b.name !== undefined) { const n = checkCategoryName(b.name); want.name = n.name; want.slug = n.slug; }
+  // `name` is validated (strict rules) only when it actually CHANGES, inside the transaction: a legacy name that the backfill created
+  // ("Rolls (Veg)", a long or non-ASCII word) can be sent back unchanged together with other fields.
+  if (b.name !== undefined && typeof b.name !== 'string') throw bad('name', 'Enter a name for the category (2 to 30 characters).');
   if (b.nameHi !== undefined) want.nameHi = checkNameHi(b.nameHi);
   if (b.icon !== undefined) want.icon = checkIcon(b.icon);
   for (const k of ['forRestaurants', 'forDishes', 'showOnHome', 'isActive'] as const) if (b[k] !== undefined) want[k] = checkBool(b[k], k);
@@ -469,9 +550,17 @@ export const patchCategory = async (id: string, b: Record<string, unknown>, acto
     const out = await prisma.$transaction(async (tx) => {
       if ((await lockCategories(tx, [id], 'UPDATE')).length === 0) throw new AppError(404, 'NOT_FOUND', 'Category not found.');
       const before = await tx.category.findUniqueOrThrow({ where: { id } });
+      if (typeof b.name === 'string' && collapse(b.name) !== collapse(before.name)) {
+        const n = checkCategoryName(b.name);
+        want.name = n.name;
+        want.slug = n.slug;
+      }
       const diff: PatchPlan = {};
       for (const [k, v] of Object.entries(want)) if ((before as Record<string, unknown>)[k] !== v) (diff as Record<string, unknown>)[k] = v;
       if (Object.keys(diff).length === 0) return { changed: false, before, renamed: false, moved: { dishes: 0, restaurants: 0 } };
+      if (diff.slug !== undefined && diff.slug !== before.slug) assertNotProtected(before, 'rename');
+      if (diff.isActive === false) assertNotProtected(before, 'hide');
+      if (diff.forDishes === false) assertNotProtected(before, 'dish category off');
 
       const nextR = diff.forRestaurants ?? before.forRestaurants;
       const nextD = diff.forDishes ?? before.forDishes;
@@ -504,6 +593,7 @@ export const patchCategory = async (id: string, b: Record<string, unknown>, acto
       return { changed: true, before, diff, renamed, moved };
     }, TX_OPTS);
 
+    if (out.changed) invalidatePublicCategories();
     const data = (await adminViewOf(prisma, id))!;
     if (out.changed && 'diff' in out && out.diff) {
       const parts = Object.entries(out.diff).filter(([k]) => k !== 'slug').map(([k, v]) => `${k} ${JSON.stringify((out.before as Record<string, unknown>)[k])} -> ${JSON.stringify(v)}`);
@@ -528,23 +618,28 @@ export const reorderCategories = async (rawIds: unknown, actor: Actor) => {
   }
   const out = await prisma.$transaction(async (tx) => {
     const all = await tx.category.findMany({ select: { id: true } });
-    const known = new Set(all.map((c) => c.id));
-    const unknown = ids.find((i) => !known.has(i));
-    if (unknown) throw bad('ids', 'One of the categories does not exist (it may have been deleted). Reload the list and try again.', 'CATEGORY_UNKNOWN');
-    await lockCategories(tx, [...known], 'UPDATE');
+    await lockCategories(tx, all.map((c) => c.id), 'UPDATE');
+    // Read AGAIN after the locks: a category deleted between the first read and the lock is simply not in this list any more,
+    // so the request is a clean 400 (reload the list) and never a failed update.
     const current = await tx.category.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }], select: { id: true, sortOrder: true } });
-    const rest = current.filter((c) => !ids.includes(c.id)).map((c) => c.id);
-    const order = [...ids, ...rest];
+    const known = new Set(current.map((c) => c.id));
+    if (ids.some((i) => !known.has(i))) throw bad('ids', 'One of the categories does not exist (it may have been deleted). Reload the list and try again.', 'CATEGORY_UNKNOWN');
+    const listed = new Set(ids);
+    const order = [...ids, ...current.filter((c) => !listed.has(c.id)).map((c) => c.id)];
     const bySort = new Map(current.map((c) => [c.id, c.sortOrder] as const));
-    let moved = 0;
+    const changedIds: string[] = [];
+    const newOrders: number[] = [];
     for (const [i, cid] of order.entries()) {
-      if (bySort.get(cid) !== i + 1) {
-        await tx.category.update({ where: { id: cid }, data: { sortOrder: i + 1 } });
-        moved += 1;
-      }
+      if (bySort.get(cid) !== i + 1) { changedIds.push(cid); newOrders.push(i + 1); }
     }
-    return { moved, total: order.length };
+    if (changedIds.length) {
+      await tx.$executeRaw`
+        UPDATE "Category" c SET "sortOrder" = v."so", "updatedAt" = now()
+        FROM unnest(${changedIds}::text[], ${newOrders}::int[]) AS v("id", "so") WHERE c."id" = v."id"`;
+    }
+    return { moved: changedIds.length, total: order.length };
   }, { maxWait: 10_000, timeout: 30_000 });
+  if (out.moved > 0) invalidatePublicCategories();
   if (out.moved > 0) await writeAudit('CATEGORY_REORDERED', 'CATEGORY', 'all', `Admin reordered the categories: ${out.moved} of ${out.total} changed position`);
   return { changed: out.moved > 0, moved: out.moved, data: await listAdminCategories(true) };
 };
@@ -564,6 +659,7 @@ export const mergeCategory = async (fromId: string, b: Record<string, unknown>, 
     const into = rows.find((c) => c.id === intoId);
     if (!from) throw new AppError(404, 'NOT_FOUND', 'The category to merge was not found (it may already be merged or deleted).');
     if (!into) throw new AppError(404, 'NOT_FOUND', 'The category to merge into was not found.', 'intoId');
+    assertNotProtected(from, 'merge away'); // the preview refuses it too, so the admin never sees a merge that would fail on apply
     const [dishes, links] = await Promise.all([
       tx.menuItem.count({ where: { categoryId: fromId } }),
       tx.vendorCategory.findMany({ where: { categoryId: fromId }, select: { vendorId: true } }),
@@ -612,6 +708,7 @@ export const mergeCategory = async (fromId: string, b: Record<string, unknown>, 
     return { from: p.from, into: p.into, dishes, restaurants: p.vendorIds.length };
   }, { maxWait: 10_000, timeout: 30_000 });
 
+  invalidatePublicCategories();
   await writeAudit('CATEGORY_MERGED', 'CATEGORY', fromId, `Admin merged category "${done.from.name}" into "${done.into.name}": ${done.dishes} dishes and ${done.restaurants} restaurants moved; "${done.from.name}" was removed`);
   return {
     dryRun: false,
@@ -627,6 +724,8 @@ export const mergeCategory = async (fromId: string, b: Record<string, unknown>, 
 export const deleteCategory = async (id: string, actor: Actor) => {
   const gone = await prisma.$transaction(async (tx) => {
     if ((await lockCategories(tx, [id], 'UPDATE')).length === 0) throw new AppError(404, 'NOT_FOUND', 'Category not found (it may already be deleted).');
+    const row = await tx.category.findUniqueOrThrow({ where: { id }, select: { slug: true } });
+    assertNotProtected(row, 'delete');
     const [dishes, restaurants] = await Promise.all([tx.menuItem.count({ where: { categoryId: id } }), tx.vendorCategory.count({ where: { categoryId: id } })]);
     if (dishes + restaurants > 0) {
       throw new AppError(409, 'CATEGORY_IN_USE', `This category is used by ${restaurants} restaurant${restaurants === 1 ? '' : 's'} and ${dishes} dish${dishes === 1 ? '' : 'es'}. Hide it, or merge it into another category.`, undefined, { restaurants, dishes });
@@ -637,6 +736,7 @@ export const deleteCategory = async (id: string, actor: Actor) => {
     if ((e as { code?: string })?.code === 'P2003') throw new AppError(409, 'CATEGORY_IN_USE', 'This category is in use. Hide it, or merge it into another category.');
     throw e;
   });
+  invalidatePublicCategories();
   await writeAudit('CATEGORY_DELETED', 'CATEGORY', id, `Admin deleted the unused category "${gone.name}"`);
   return { id, name: gone.name };
 };

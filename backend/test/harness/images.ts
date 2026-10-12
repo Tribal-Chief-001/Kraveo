@@ -35,31 +35,39 @@ export const makeJpeg = (width: number, height: number, progressive = false): Bu
   return Buffer.concat([Buffer.from([0xff, 0xd8]), app0, dqt, sof, sos, Buffer.alloc(32, 0x55), Buffer.from([0xff, 0xd9])]);
 };
 
-const riff = (fourcc: string, data: Buffer) => {
-  const chunk = Buffer.concat([Buffer.from(fourcc, 'latin1'), (() => { const l = Buffer.alloc(4); l.writeUInt32LE(data.length); return l; })(), data, data.length % 2 ? Buffer.alloc(1) : Buffer.alloc(0)]);
+const chunkOf = (fourcc: string, data: Buffer) => {
+  const l = Buffer.alloc(4);
+  l.writeUInt32LE(data.length);
+  return Buffer.concat([Buffer.from(fourcc, 'latin1'), l, data, data.length % 2 ? Buffer.alloc(1) : Buffer.alloc(0)]);
+};
+const riffOf = (chunks: Buffer[]) => {
+  const body = Buffer.concat(chunks);
   const head = Buffer.alloc(12);
   head.write('RIFF', 0, 'latin1');
-  head.writeUInt32LE(4 + chunk.length, 4);
+  head.writeUInt32LE(4 + body.length, 4);
   head.write('WEBP', 8, 'latin1');
-  return Buffer.concat([head, chunk]);
+  return Buffer.concat([head, body]);
+};
+
+const vp8 = (width: number, height: number) => {
+  const d = Buffer.alloc(20);
+  d[3] = 0x9d; d[4] = 0x01; d[5] = 0x2a;
+  d.writeUInt16LE(width, 6); d.writeUInt16LE(height, 8);
+  return chunkOf('VP8 ', d);
+};
+const vp8l = (width: number, height: number) => {
+  const d = Buffer.alloc(16);
+  d[0] = 0x2f;
+  d.writeUInt32LE(((width - 1) & 0x3fff) | (((height - 1) & 0x3fff) << 14), 1);
+  return chunkOf('VP8L', d);
 };
 
 export const makeWebp = (width: number, height: number, kind: 'lossy' | 'lossless' | 'extended' = 'lossy'): Buffer => {
-  if (kind === 'lossy') {
-    const d = Buffer.alloc(20);
-    d[3] = 0x9d; d[4] = 0x01; d[5] = 0x2a;
-    d.writeUInt16LE(width, 6); d.writeUInt16LE(height, 8);
-    return riff('VP8 ', d);
-  }
-  if (kind === 'lossless') {
-    const d = Buffer.alloc(16);
-    d[0] = 0x2f;
-    d.writeUInt32LE(((width - 1) & 0x3fff) | (((height - 1) & 0x3fff) << 14), 1);
-    return riff('VP8L', d);
-  }
-  const d = Buffer.alloc(18);
+  if (kind === 'lossy') return riffOf([vp8(width, height)]);
+  if (kind === 'lossless') return riffOf([vp8l(width, height)]);
+  const d = Buffer.alloc(10);
   d.writeUIntLE(width - 1, 4, 3); d.writeUIntLE(height - 1, 7, 3);
-  return riff('VP8X', d);
+  return riffOf([chunkOf('VP8X', d), vp8l(width, height)]); // extended format = VP8X header + the frame chunk
 };
 
 export const SVG = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400"><script>alert(1)</script></svg>');

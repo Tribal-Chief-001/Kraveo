@@ -1,7 +1,8 @@
 -- Managed categories (cuisines for restaurants, categories for dishes), Docs/23_taxonomy_restaurant_dish_edit_contract.md section 2.
 -- ADDITIVE and IDEMPOTENT (safe to run twice): two new tables (Category, VendorCategory), one NULLABLE column MenuItem."categoryId",
 -- indexes and foreign keys (all guarded with IF NOT EXISTS), then a backfill that turns today's free text into rows:
---   (a) every distinct MenuItem."category" (trimmed, spaces collapsed, unique ignoring case and punctuation = the slug) becomes a category
+--   (a) every distinct MenuItem."category" (trimmed and collapsed the way the app does: tabs, newlines, no-break and other Unicode spaces
+--       count as spaces, zero-width characters are dropped; unique ignoring case and punctuation = the slug) becomes a category
 --       with forDishes, forRestaurants, showOnHome = true (this reproduces today's Home chips); sortOrder by dish count, most used first;
 --   (b) the six names the old restaurant app hard-codes (Main Course, Breads, Beverages, Snacks, Desserts, Fast Food) are added when missing
 --       (forDishes only, not on Home) so old restaurant apps keep working;
@@ -90,7 +91,7 @@ BEGIN
            ROW_NUMBER() OVER (PARTITION BY s.slug ORDER BY s.n DESC, (s.name <> LOWER(s.name)) DESC, s.name ASC) AS rk
     FROM (
       SELECT btrim(regexp_replace(lower(m."category"), '[^a-z0-9]+', '-', 'g'), '-') AS slug,
-             regexp_replace(btrim(m."category"), '\s+', ' ', 'g') AS name,
+             btrim(regexp_replace(regexp_replace(m."category", '[\u200b-\u200d\u2060\ufeff]', '', 'g'), '[[:space:]\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+', ' ', 'g')) AS name,
              COUNT(*) AS n
       FROM "MenuItem" m
       GROUP BY 1, 2
@@ -157,7 +158,7 @@ BEGIN
            ROW_NUMBER() OVER (PARTITION BY z."vendorId", z.slug ORDER BY z.ord) AS dupe
     FROM (
       SELECT v."id" AS "vendorId", t.ord,
-             regexp_replace(btrim(t.raw), '\s+', ' ', 'g') AS name,
+             btrim(regexp_replace(regexp_replace(t.raw, '[\u200b-\u200d\u2060\ufeff]', '', 'g'), '[[:space:]\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+', ' ', 'g')) AS name,
              btrim(regexp_replace(lower(t.raw), '[^a-z0-9]+', '-', 'g'), '-') AS slug
       FROM "Vendor" v
       CROSS JOIN LATERAL regexp_split_to_table(v."category", '[•,|]') WITH ORDINALITY AS t(raw, ord)

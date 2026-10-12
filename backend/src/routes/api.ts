@@ -14,6 +14,7 @@ import { startOfIstDay, istHour } from '../utils/time';
 import { dropFromPartnerRooms } from '../realtime';
 import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem, vendorMenuItemView, isCustomerVisible, CUISINES_INCLUDE, withCuisines, cuisineFields } from '../utils/catalog';
 import { catalogRouter } from './catalog';
+import { retryStaleRead } from '../utils/prismaRetry';
 import { categoriesRouter } from './categories';
 import { uploadRouter } from './uploads';
 import { prepareNewVendorCuisines, linkNewVendorCuisines, checkCuisineIds } from '../services/categories';
@@ -267,7 +268,7 @@ apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
     }
     recordSuccess(key);
 
-    const vendors = role === 'VENDOR' ? await prisma.vendor.findMany({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true, approvalStatus: true, rejectionReason: true, category: true, address: true, fssaiNumber: true, ...VENDOR_LOCATION_SELECT, ...CUISINES_INCLUDE }, orderBy: { createdAt: 'asc' } }) : [];
+    const vendors = role === 'VENDOR' ? await retryStaleRead(() => prisma.vendor.findMany({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true, approvalStatus: true, rejectionReason: true, category: true, address: true, fssaiNumber: true, ...VENDOR_LOCATION_SELECT, ...CUISINES_INCLUDE }, orderBy: { createdAt: 'asc' } })) : [];
     const vendorRow = vendors.find((v) => v.approvalStatus === 'APPROVED') ?? vendors[0] ?? null;
     const vendor = vendorRow ? { ...vendorRow, ...vendorLocationView(vendorRow), ...cuisineFields(vendorRow) } : null;
     const driver = role === 'DRIVER' ? await prisma.driverPartner.findFirst({ where: { userId: user.id }, select: { id: true, runnerCode: true, approvalStatus: true, rejectionReason: true, vehicleType: true, vehicleRegNo: true, emergencyPhone: true, upiId: true, dutyStatus: true } }) : null;
@@ -559,11 +560,11 @@ apiRouter.post('/admin/partners', requireAuth, requireRole('ADMIN'), async (req:
 
 apiRouter.get('/admin/partners', requireAuth, requireRole('ADMIN'), async (_req: AuthenticatedRequest, res: Response) => {
   try {
-    const users = await prisma.user.findMany({
+    const users = await retryStaleRead(() => prisma.user.findMany({
       where: { role: { in: [Role.VENDOR, Role.DRIVER] } },
       select: { id: true, name: true, phone: true, role: true, createdAt: true, vendorsOwned: { select: { id: true, name: true, approvalStatus: true, ...VENDOR_LOCATION_SELECT, ...CUISINES_INCLUDE } }, driverProfile: { select: { id: true, runnerCode: true, approvalStatus: true } } },
       orderBy: { createdAt: 'desc' },
-    });
+    }));
     const data = users.map((u) => ({ ...u, vendorsOwned: u.vendorsOwned.map((v) => ({ ...v, ...vendorLocationView(v), ...cuisineFields(v) })) }));
     return res.json({ success: true, data });
   } catch (err: any) {
@@ -615,7 +616,7 @@ export const fullVendorView = (v: any, viewer: { id: string; role: Role } | null
 apiRouter.get('/vendors', async (req: Request, res: Response) => {
   try {
     const viewer = await optionalViewer(req);
-    const dbVendors = await prisma.vendor.findMany({ include: { menuItems: { where: { deletedAt: null } }, ...CUISINES_INCLUDE } });
+    const dbVendors = await retryStaleRead(() => prisma.vendor.findMany({ include: { menuItems: { where: { deletedAt: null } }, ...CUISINES_INCLUDE } }));
     const visible = dbVendors.filter((v) => canSeeVendor(v, viewer)).map((v) => fullVendorView(v, viewer) ?? publicVendorView(v));
     return res.json({ success: true, count: visible.length, data: visible });
   } catch (err: any) {
@@ -625,10 +626,10 @@ apiRouter.get('/vendors', async (req: Request, res: Response) => {
 
 apiRouter.get('/vendors/:id', validParams('id'), async (req: Request, res: Response) => {
   try {
-    const dbVendor = await prisma.vendor.findUnique({
+    const dbVendor = await retryStaleRead(() => prisma.vendor.findUnique({
       where: { id: req.params.id },
       include: { menuItems: { where: { deletedAt: null } }, ...CUISINES_INCLUDE }
-    });
+    }));
     const viewer = await optionalViewer(req);
     if (!dbVendor || !canSeeVendor(dbVendor, viewer)) return res.status(404).json({ success: false, message: 'Vendor not found' });
     const shaped = fullVendorView(dbVendor, viewer) ?? publicVendorView(dbVendor);
@@ -675,7 +676,7 @@ apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: Authen
         },
       });
       await linkNewVendorCuisines(tx, row.id, prep.cuisines);
-      return tx.vendor.findUniqueOrThrow({ where: { id: row.id }, include: { menuItems: true, ...CUISINES_INCLUDE } });
+      return retryStaleRead(() => tx.vendor.findUniqueOrThrow({ where: { id: row.id }, include: { menuItems: true, ...CUISINES_INCLUDE } }));
     });
 
     return res.status(201).json({ success: true, message: 'Vendor onboarded successfully', data: withCuisines(createdVendor) });

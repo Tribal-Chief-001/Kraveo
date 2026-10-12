@@ -3,7 +3,9 @@ import { prisma } from '../db';
 import { AppError } from '../utils/appError';
 import { CUISINES_INCLUDE, cuisineList } from '../utils/catalog';
 import { writeAudit } from './audit';
-import { checkCuisineIds, collapse, deriveVendorCategory, lockCuisines, writeVendorCuisines } from './categories';
+import { retryStaleRead } from '../utils/prismaRetry';
+import { checkCuisineIds, deriveVendorCategory, lockCuisines, writeVendorCuisines } from './categories';
+import { BAD_LABEL_CHARS, collapse } from '../utils/labels';
 import type { Actor } from './categories';
 
 /**
@@ -15,13 +17,12 @@ export const DEFAULT_BANNER_URL = 'https://images.unsplash.com/photo-15859374216
 const PROFILE_KEYS = ['name', 'cuisineIds', 'address', 'bannerImage', 'fssaiNumber', 'eta'];
 const TX_OPTS = { maxWait: 10_000, timeout: 20_000 };
 const bad = (field: string, message: string, code = 'BAD_REQUEST') => new AppError(400, code, message, field);
-const LABEL_BAD = /[<>\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
 const checkText = (raw: unknown, field: string, label: string, min: number, max: number): string => {
   if (typeof raw !== 'string') throw bad(field, `${label} must be text.`);
   const v = collapse(raw);
+  if (/[<>]/.test(v) || BAD_LABEL_CHARS.test(raw.normalize('NFC'))) throw bad(field, `${label} cannot contain symbols like < > or hidden, control or direction-changing characters.`);
   if (v.length < min || v.length > max) throw bad(field, `${label} must be ${min} to ${max} characters.`);
-  if (LABEL_BAD.test(v)) throw bad(field, `${label} cannot contain symbols like < > or control characters.`);
   return v;
 };
 
@@ -50,7 +51,7 @@ const checkEta = (raw: unknown): string => {
 };
 
 const ADMIN_INCLUDE = { menuItems: { where: { deletedAt: null } }, ...CUISINES_INCLUDE } satisfies Prisma.VendorInclude;
-export const adminVendorRow = (id: string) => prisma.vendor.findUnique({ where: { id }, include: ADMIN_INCLUDE });
+export const adminVendorRow = (id: string) => retryStaleRead(() => prisma.vendor.findUnique({ where: { id }, include: ADMIN_INCLUDE }));
 
 export const editVendorProfile = async (vendorId: string, b: Record<string, unknown>, actor: Actor) => {
   const unknown = Object.keys(b).find((k) => !PROFILE_KEYS.includes(k));

@@ -240,3 +240,102 @@ describe('migration 20261012_categories: backfill on production-shaped data', ()
   });
 });
 
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Review fixes (Docs/bughunt/TAXONOMY_review.md): white space the way the app slugifier sees it, volume, a failed run, the lock timeout
+// ---------------------------------------------------------------------------------------------------------------------
+describe('migration 20261012_categories: review fixes', () => {
+  test('white space at the edges and inside (tab, newline, no-break space, other Unicode spaces) and zero-width characters give clean names', async () => {
+    await withCopies(
+      async (q) => {
+        await insertVendor(q, 'w1', '\tRolls  \n•  Café (Veg), Dal\u200b  Rice •　Momos ');
+        await insertDish(q, 'w-1', 'w1', '\tSnacks\n');
+        await insertDish(q, 'w-2', 'w1', 'snacks');
+        await insertDish(q, 'w-3', 'w1', 'Street  Food');
+        await insertDish(q, 'w-4', 'w1', ' Street \u200bFood ');
+        await insertDish(q, 'w-5', 'w1', 'Thali\u200b');
+        await insertDish(q, 'w-6', 'w1', '\ufeffMain\t\tCourse\r\n');
+      },
+      async (run, read) => {
+        await run();
+        const a = await read();
+        const names = a.categories.map((c) => [c.name, c.slug]);
+        // no name starts or ends with a space, none holds a tab, newline, no-break or zero-width character, inner runs are one space
+        for (const [name] of names) expect(name).toMatch(/^[^\s \u200b\ufeff](?:.*[^\s \u200b\ufeff])?$/);
+        for (const [name] of names) expect(name).not.toMatch(/\s{2,}|[\t\n\r   　\u200b\ufeff]/);
+        expect(names).toEqual(expect.arrayContaining([['Snacks', 'snacks'], ['Street Food', 'street-food'], ['Thali', 'thali'], ['Main Course', 'main-course'], ['Rolls', 'rolls'], ['Café (Veg)', 'caf-veg'], ['Dal Rice', 'dal-rice'], ['Momos', 'momos']]));
+        expect(a.categories.filter((c) => c.slug === 'snacks')).toHaveLength(1);
+        expect(a.categories.filter((c) => c.slug === 'street-food')).toHaveLength(1);
+        const dishes = Object.fromEntries(a.dishes.map((d) => [d.id, d.category]));
+        expect(dishes).toEqual({ 'w-1': 'Snacks', 'w-2': 'Snacks', 'w-3': 'Street Food', 'w-4': 'Street Food', 'w-5': 'Thali', 'w-6': 'Main Course' });
+        const links = a.links.filter((l) => l.vendorId === 'w1').map((l) => a.categories.find((c) => c.id === l.categoryId).name);
+        expect(links).toEqual(['Rolls', 'Café (Veg)', 'Dal Rice', 'Momos']);
+        await run();
+        expect(await read()).toEqual(a);
+      },
+    );
+  });
+
+  test('volume: 10,000 dishes in 120 spellings of 60 categories and 400 restaurants are backfilled in a few seconds, and a second run changes nothing', async () => {
+    await withCopies(
+      async (q) => {
+        await q(`INSERT INTO bf_test."Vendor" ("id","name","category","bannerImage","address","updatedAt")
+                 SELECT 'v' || g, 'Vendor ' || g, 'Cuisine ' || (g % 60) || ' • Style ' || (g % 17) || ' • Cuisine ' || ((g + 7) % 60), 'b', 'a', now() FROM generate_series(1, 400) g`);
+        await q(`INSERT INTO bf_test."MenuItem" ("id","vendorId","name","price","vendorPrice","category","description","imageUrl")
+                 SELECT 'd' || g, 'v' || (1 + g % 400), 'Dish ' || g, 10, 10, CASE WHEN (g / 60) % 3 <> 0 THEN 'Category ' || (g % 60) ELSE lower('CATEGORY ' || (g % 60)) || ' ' END, 'd', 'i' FROM generate_series(1, 10000) g`);
+      },
+      async (run, read) => {
+        const started = Date.now();
+        await run();
+        const seconds = (Date.now() - started) / 1000;
+        expect(seconds).toBeLessThan(15);
+        const a = await read();
+        expect(a.dishes.every((d) => d.categoryId !== null && /^Category \d+$/.test(d.category))).toBe(true);
+        expect(a.categories.filter((c) => c.forDishes && c.showOnHome && /^Category \d+$/.test(c.name))).toHaveLength(60);
+        expect(a.links.length).toBeGreaterThan(400 * 2);
+        expect(new Set(a.links.map((l) => l.vendorId)).size).toBe(400);
+        await run();
+        expect(await read()).toEqual(a);
+      },
+    );
+  });
+
+  test('a run that fails halfway leaves nothing behind (one transaction): the column and the tables from the DDL part are gone again', async () => {
+    class Boom extends Error {}
+    let leftBehind = true;
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('CREATE SCHEMA bf_fail');
+        await tx.$executeRawUnsafe('CREATE TABLE bf_fail."MenuItem" (id text primary key)');
+        await tx.$executeRawUnsafe('ALTER TABLE bf_fail."MenuItem" ADD COLUMN IF NOT EXISTS "categoryId" TEXT');
+        await tx.$executeRawUnsafe('CREATE TABLE IF NOT EXISTS bf_fail."Category" (id text primary key)');
+        await tx.$executeRawUnsafe('SET LOCAL search_path TO bf_fail');
+        await tx.$executeRawUnsafe(BLOCK); // fails: bf_fail has no "Vendor" table
+      }, { timeout: 20_000 });
+    } catch (e) {
+      leftBehind = !(e instanceof Error);
+      expect(String((e as Error).message)).toMatch(/Vendor|relation|does not exist/i);
+    }
+    expect(leftBehind).toBe(false);
+    const rows = await prisma.$queryRawUnsafe<{ n: bigint }[]>(`SELECT count(*) AS n FROM information_schema.schemata WHERE schema_name = 'bf_fail'`);
+    expect(Number(rows[0].n)).toBe(0);
+    void Boom;
+  });
+
+  test('lock_timeout: while another transaction reads "MenuItem" the migration\'s ALTER gives up after the timeout instead of queueing (and nothing changes)', async () => {
+    let blockedMessage = '';
+    await prisma.$transaction(async (reader) => {
+      await reader.$executeRawUnsafe('LOCK TABLE "MenuItem" IN ACCESS SHARE MODE'); // what an open read transaction holds
+      try {
+        await prisma.$transaction(async (migration) => {
+          await migration.$executeRawUnsafe(`SET LOCAL lock_timeout = '300ms'`);
+          await migration.$executeRawUnsafe('ALTER TABLE "MenuItem" ADD COLUMN IF NOT EXISTS "categoryId" TEXT');
+        }, { timeout: 10_000 });
+      } catch (e) {
+        blockedMessage = String((e as Error).message);
+      }
+    }, { timeout: 20_000 });
+    expect(blockedMessage).toMatch(/lock timeout|55P03/i);
+    expect((await prisma.menuItem.count()) >= 0).toBe(true); // the table is usable right after
+  });
+});

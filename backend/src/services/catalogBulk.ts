@@ -7,7 +7,8 @@ import { priceProblem } from '../utils/catalog';
 import { errSummary } from '../utils/log';
 import { writeAudit } from './audit';
 import { approveDish, lockDish, notFound, priceFor, restoreDish, softDeleteDish, TX_OPTS, Actor } from './catalog';
-import { collapse, lockCategories, peekDishCategory, resolveDishCategory, slugOf } from './categories';
+import { lockCategories, peekDishCategory, resolveDishCategory, slugOf, MAX_DISH_CATEGORY_TEXT } from './categories';
+import { BAD_LABEL_CHARS, collapse, nameKey } from '../utils/labels';
 import { getSettings } from './settings';
 import { ruleFromColumns, toPaise } from './pricing';
 
@@ -66,6 +67,9 @@ export const bulkDishAction = async (b: Record<string, unknown>, actor: Actor) =
     if (ids.includes(v)) throw bad('ids', 'The same dish is listed twice.');
     ids.push(v);
   }
+  // Category text is capped and type-checked BEFORE any processing (a 95 KB string must be a cheap 400, not CPU work).
+  if (b.category !== undefined && (typeof b.category !== 'string' || b.category.length > MAX_DISH_CATEGORY_TEXT * 4)) throw bad('category', 'Pick a category from the list.', 'CATEGORY_UNKNOWN');
+  if (b.categoryId !== undefined && (typeof b.categoryId !== 'string' || !ID_RE.test(b.categoryId))) throw bad('categoryId', 'Pick a category from the list.', 'CATEGORY_UNKNOWN');
   if (typeof b.action !== 'string' || !(BULK_ACTIONS as readonly string[]).includes(b.action)) throw bad('action', `action must be one of: ${BULK_ACTIONS.join(', ')}.`);
   const action = b.action as BulkAction;
   const wantsCategory = b.category !== undefined || b.categoryId !== undefined;
@@ -106,7 +110,6 @@ export const MAX_IMPORT_ROWS = 200;
 export const MAX_IMPORT_PRICE = 5000;
 const IMPORT_KEYS = ['name', 'category', 'vendorPrice', 'isVeg', 'description', 'imageUrl', 'isAvailable'];
 export const DEFAULT_DISH_IMAGE = 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400';
-const LABEL_BAD = /[<>\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
 type RowError = { field: string; message: string };
 export type ImportAction = 'create' | 'update' | 'skip' | 'invalid';
@@ -134,12 +137,13 @@ const parseRow = (raw: unknown, cats: Map<string, Category>, suggest: (typed: st
   else {
     const n = collapse(r.name);
     if (n.length < 2 || n.length > 60) errors.push({ field: 'name', message: 'The dish name must be 2 to 60 characters.' });
-    else if (LABEL_BAD.test(n)) errors.push({ field: 'name', message: 'The dish name cannot contain symbols like < >.' });
+    else if (BAD_LABEL_CHARS.test(r.name.normalize('NFC')) || /[<>]/.test(n)) errors.push({ field: 'name', message: 'The dish name cannot contain symbols like < > or hidden, control or direction-changing characters.' });
     else name = n;
   }
 
   let category: Category | undefined;
   if (typeof r.category !== 'string' || !collapse(r.category)) errors.push({ field: 'category', message: 'The category is required.' });
+  else if (r.category.length > MAX_DISH_CATEGORY_TEXT * 4 || collapse(r.category).length > MAX_DISH_CATEGORY_TEXT) errors.push({ field: 'category', message: 'Pick a category from the list.' });
   else {
     category = cats.get(slugOf(r.category));
     if (!category) {
@@ -159,6 +163,7 @@ const parseRow = (raw: unknown, cats: Map<string, Category>, suggest: (typed: st
   let description: string | undefined;
   if (r.description !== undefined && r.description !== null) {
     if (typeof r.description !== 'string' || collapse(r.description).length > 300) errors.push({ field: 'description', message: 'The description can be at most 300 characters.' });
+    else if (BAD_LABEL_CHARS.test(r.description.normalize('NFC'))) errors.push({ field: 'description', message: 'The description cannot contain hidden, control or direction-changing characters.' });
     else description = collapse(r.description);
   }
   let imageUrl: string | undefined;
@@ -189,7 +194,7 @@ const planImport = (
   const cats = new Map(ctx.cats.map((c) => [c.slug, c] as const));
   const byName = new Map<string, Existing[]>();
   for (const e of ctx.existing) {
-    const key = collapse(e.name).toLowerCase();
+    const key = nameKey(e.name);
     byName.set(key, [...(byName.get(key) ?? []), e]);
   }
   const suggest = (typed: string) => {
@@ -211,7 +216,7 @@ const planImport = (
       return;
     }
     const row = parsed.row;
-    const key = collapse(row.name).toLowerCase();
+    const key = nameKey(row.name);
     if (seenInFile.has(key)) {
       report.push({ ...base, action: 'invalid', errors: [{ field: 'name', message: `This dish name is repeated in the file (first at row ${seenInFile.get(key)! + 1}).` }], computedPrice: null });
       planned.push({ kind: 'invalid' });

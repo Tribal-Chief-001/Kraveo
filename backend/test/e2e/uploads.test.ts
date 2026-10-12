@@ -11,7 +11,9 @@ import supertest from 'supertest';
 import { startTestServer, stopTestServer, TestServerInstance } from '../harness/app';
 import { prisma, seedTestDatabase, cleanTestOrders, cleanTestUsers } from '../harness/db';
 import { getStudentToken, getVendorToken, getDriverToken, getAdminToken, getAuthHeader } from '../harness/auth';
+import zlib from 'zlib';
 import { __resetRateLimits } from '../../src/middleware/rateLimit';
+import { __resetUploadUsage } from '../../src/routes/uploads';
 import { makePng, makeJpeg, makeWebp, SVG, GIF, HTML } from '../harness/images';
 
 jest.setTimeout(60_000);
@@ -56,6 +58,8 @@ describe('Image upload (Docs/23 section 3.6)', () => {
     __resetRateLimits();
     await prisma.adminAuditLog.deleteMany({ where: { action: 'IMAGE_UPLOADED' } });
     for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+    __resetUploadUsage();
+    delete process.env.UPLOAD_MAX_TOTAL_MB;
   });
 
   afterAll(async () => {
@@ -77,7 +81,7 @@ describe('Image upload (Docs/23 section 3.6)', () => {
       ['jpeg', 'image/jpeg', () => makeJpeg(1200, 800), 'jpg', 1200, 800],
       ['webp lossy', 'image/webp', () => makeWebp(500, 300, 'lossy'), 'webp', 500, 300],
       ['webp lossless', 'image/webp', () => makeWebp(401, 402, 'lossless'), 'webp', 401, 402],
-      ['webp extended', 'image/webp', () => makeWebp(4000, 3000, 'extended'), 'webp', 4000, 3000],
+      ['webp extended', 'image/webp', () => makeWebp(2400, 1800, 'extended'), 'webp', 2400, 1800],
     ])('%s: stored under a random name, answered with the exact shape, served with the exact headers', async (_n, type, make, ext, w, h) => {
       const file = (make as () => Buffer)();
       const r = await upload(file, type as string, 'banner');
@@ -110,17 +114,18 @@ describe('Image upload (Docs/23 section 3.6)', () => {
       expect(a.body.data.url).not.toBe(b.body.data.url);
     });
 
-    test('size and dimension limits: 200 px short side and 4000 px long side are inclusive; 1 MB is the body limit', async () => {
+    test('size and dimension limits: 200 px short side and 2400 px long side are inclusive; 1 MB is the body limit', async () => {
       expect((await upload(makePng(200, 200))).status).toBe(201);
-      expect((await upload(makePng(4000, 200))).status).toBe(201);
-      expect((await upload(makePng(200, 4000))).status).toBe(201);
+      expect((await upload(makePng(2400, 200))).status).toBe(201);
+      expect((await upload(makePng(200, 2400))).status).toBe(201);
+      expect((await upload(makePng(2400, 2400))).status).toBe(201);
       const small = await upload(makePng(199, 900));
       expect([small.status, small.body.code]).toEqual([400, 'IMAGE_TOO_SMALL']);
       const small2 = await upload(makePng(900, 150));
       expect([small2.status, small2.body.code]).toEqual([400, 'IMAGE_TOO_SMALL']);
-      const big = await upload(makePng(4001, 300));
+      const big = await upload(makePng(2401, 300));
       expect([big.status, big.body.code]).toEqual([400, 'IMAGE_DIMENSIONS_TOO_LARGE']);
-      const big2 = await upload(makeJpeg(300, 5000), 'image/jpeg');
+      const big2 = await upload(makeJpeg(300, 4000), 'image/jpeg');
       expect([big2.status, big2.body.code]).toEqual([400, 'IMAGE_DIMENSIONS_TOO_LARGE']);
       const nearLimit = makePng(300, 300, 1024 * 1024 - 200); // just under 1 MiB in total
       expect(nearLimit.length).toBeLessThanOrEqual(1024 * 1024);
@@ -250,6 +255,100 @@ describe('Image upload (Docs/23 section 3.6)', () => {
     test('a request for a file that was never uploaded (right shape) is a 404 too, without touching the API router', async () => {
       const r = await rawGet('/uploads/dish/2026/0123456789abcdef0123456789abcdef.jpg');
       expect([r.status, JSON.parse(r.body.toString()).code]).toEqual([404, 'NOT_FOUND']);
+    });
+  });
+
+  // =========================================================================================
+  describe('review fixes: real photos, hollow files, failed writes, quota, gzip, limiter', () => {
+    const FIX = path.join(__dirname, '../fixtures/images');
+    const real = (f: string) => fs.readFileSync(path.join(FIX, f));
+    const typeOf = (f: string) => (f.endsWith('.jpg') ? 'image/jpeg' : f.endsWith('.png') ? 'image/png' : 'image/webp');
+
+    test.each(fs.readdirSync(path.join(__dirname, '../fixtures/images')))('real photo %s (progressive / interlaced / CMYK / EXIF / alpha / animated ...) is accepted and served back byte for byte', async (f) => {
+      const r = await upload(real(f), typeOf(f));
+      expect([f, r.status]).toEqual([f, 201]);
+      expect((await rawGet(pathOf(r.body.data.url))).body.equals(real(f))).toBe(true);
+    });
+
+    test('hollow or damaged files are 400 IMAGE_CORRUPT: junk after a JPEG frame header, a PNG with no image data, a WebP header with no image, a real JPEG / PNG / WebP cut short', async () => {
+      const jpgHeader = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x03, 0xe8, 0x03, 0xe8, 0x01, 0x01, 0x11, 0x00]);
+      const junk = Buffer.concat([jpgHeader, Buffer.from('<?php echo 1; ?>'.repeat(40))]);
+      const png = real('photo.png');
+      const iend = png.length - 12;
+      const ihdrEnd = 8 + 25;
+      const noIdat = Buffer.concat([png.subarray(0, ihdrEnd), png.subarray(iend)]);
+      const vp8x = Buffer.alloc(30); vp8x.write('RIFF', 0, 'latin1'); vp8x.writeUInt32LE(22, 4); vp8x.write('WEBP', 8, 'latin1'); vp8x.write('VP8X', 12, 'latin1'); vp8x.writeUInt32LE(10, 16); vp8x.writeUIntLE(499, 24, 3); vp8x.writeUIntLE(499, 27, 3);
+      const cases: [string, Buffer, string][] = [
+        ['jpeg junk', junk, 'image/jpeg'], ['png without IDAT', noIdat, 'image/png'], ['webp VP8X only', vp8x, 'image/webp'],
+        ['jpeg cut', real('photo_baseline.jpg').subarray(0, 3000), 'image/jpeg'], ['png cut', png.subarray(0, 3000), 'image/png'], ['webp cut', real('photo_lossy.webp').subarray(0, 2000), 'image/webp'],
+        ['jpeg + trailing script', Buffer.concat([real('photo_baseline.jpg'), Buffer.from('<script>1</script>')]), 'image/jpeg'],
+      ];
+      for (const [label, body, type] of cases) {
+        const r = await upload(body, type);
+        expect([label, r.status, r.body.code]).toEqual([label, 400, 'IMAGE_CORRUPT']);
+      }
+      expect(fs.readdirSync(dir)).toEqual([]);
+    });
+
+    test('a failed write (disk full) answers 503 and leaves NO .tmp- file behind; a failed rename too', async () => {
+      const real_write = fs.promises.writeFile;
+      jest.spyOn(fs.promises, 'writeFile').mockImplementation(async (p: any, data: any, opts: any) => {
+        await real_write(p, (data as Buffer).subarray(0, 20), opts); // a partial file exists when the error comes
+        throw Object.assign(new Error('write failed'), { code: 'ENOSPC' });
+      });
+      const r = await upload(makePng(300, 300));
+      expect([r.status, r.body.code]).toEqual([503, 'UPLOAD_UNAVAILABLE']);
+      const left = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? left(path.join(d, e.name)) : [e.name]));
+      expect(left(dir)).toEqual([]);
+      jest.restoreAllMocks();
+      jest.spyOn(fs.promises, 'rename').mockRejectedValue(Object.assign(new Error('rename failed'), { code: 'EIO' }));
+      const r2 = await upload(makePng(300, 300));
+      expect([r2.status, r2.body.code]).toEqual([503, 'UPLOAD_UNAVAILABLE']);
+      expect(left(dir)).toEqual([]);
+      jest.restoreAllMocks();
+      expect((await upload(makePng(300, 300))).status).toBe(201); // and the next one works
+    });
+
+    test('total quota (UPLOAD_MAX_TOTAL_MB): the upload that would pass it is 507 UPLOAD_QUOTA_EXCEEDED with a plain message, nothing is stored; files that are already there count; room again after cleaning', async () => {
+      process.env.UPLOAD_MAX_TOTAL_MB = '0.002'; // about 2 KB
+      const a = await upload(makePng(300, 300, 1200));
+      expect(a.status).toBe(201);
+      const b = await upload(makePng(300, 300, 1200));
+      expect([b.status, b.body.code]).toEqual([507, 'UPLOAD_QUOTA_EXCEEDED']);
+      expect(b.body.message).toMatch(/storage is full/);
+      expect(JSON.stringify(b.body)).not.toMatch(/ENOSPC|\/tmp|at /);
+      const count = (d: string): number => fs.readdirSync(d, { withFileTypes: true }).reduce((n, e) => n + (e.isDirectory() ? count(path.join(d, e.name)) : 1), 0);
+      expect(count(dir)).toBe(1);
+      // free the space; the size is a cached scan (refreshed every 60 s), here the cache is dropped like a restart or the minute passing
+      for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+      __resetUploadUsage();
+      expect((await upload(makePng(300, 300, 1200))).status).toBe(201);
+      // a file that was put there by something else is counted by the scan
+      fs.writeFileSync(path.join(dir, 'other-bytes.bin'), Buffer.alloc(5000));
+      __resetUploadUsage();
+      expect((await upload(makePng(300, 300))).body.code).toBe('UPLOAD_QUOTA_EXCEEDED');
+      delete process.env.UPLOAD_MAX_TOTAL_MB;
+      __resetUploadUsage();
+      expect((await upload(makePng(300, 300))).status).toBe(201); // default is 1500 MB
+    });
+
+    test('Content-Encoding: gzip is inflated first and the 1 MB limit applies to the inflated size (a small gzip cannot hide a big file)', async () => {
+      const png = makePng(300, 300);
+      const ok = await request.post('/api/admin/uploads/image?purpose=dish').set(H(tAdmin)).set('Content-Type', 'image/png').set('Content-Encoding', 'gzip').send(zlib.gzipSync(png));
+      expect(ok.status).toBe(201);
+      const bomb = zlib.gzipSync(makePng(300, 300, 3 * 1024 * 1024));
+      expect(bomb.length).toBeLessThan(20_000);
+      const r = await request.post('/api/admin/uploads/image?purpose=dish').set(H(tAdmin)).set('Content-Type', 'image/png').set('Content-Encoding', 'gzip').send(bomb);
+      expect([r.status, r.body.code]).toEqual([413, 'PAYLOAD_TOO_LARGE']);
+    });
+
+    test('the limiter counts every request that reaches the route, also the ones whose file is refused', async () => {
+      process.env.RL_ADMIN_UPLOAD_MAX = '2';
+      expect((await upload(SVG, 'image/svg+xml')).status).toBe(415);
+      expect((await upload(GIF, 'image/png')).status).toBe(415);
+      const third = await upload(makePng(300, 300));
+      expect([third.status, third.body.code]).toEqual([429, 'RATE_LIMITED']);
+      expect(fs.readdirSync(dir)).toEqual([]);
     });
   });
 });

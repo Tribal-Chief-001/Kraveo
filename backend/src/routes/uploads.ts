@@ -22,7 +22,9 @@ import { writeAudit } from '../services/audit';
  */
 export const MAX_UPLOAD_BYTES = 1024 * 1024;
 export const MIN_SIDE_PX = 200;
-export const MAX_SIDE_PX = 4000;
+// 2400 px: the customer app decodes a photo at full size, 2400 x 2400 x 4 bytes is already 23 MB (a 4000 x 4000 photo would be 64 MB).
+export const MAX_SIDE_PX = 2400;
+export const DEFAULT_UPLOAD_QUOTA_MB = 1500;
 export const UPLOAD_PURPOSES = ['banner', 'dish'] as const;
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const FILE_PATH_RE = /^\/(banner|dish)\/\d{4}\/[0-9a-f]{32}\.(jpg|png|webp)$/;
@@ -30,6 +32,31 @@ const FILE_PATH_RE = /^\/(banner|dish)\/\d{4}\/[0-9a-f]{32}\.(jpg|png|webp)$/;
 /** Read on every call (tests and deployments set it at run time). */
 export const uploadDir = (): string => path.resolve(process.env.UPLOAD_DIR || '/home/ubuntu/kraveo-uploads');
 const publicBase = (): string => (process.env.PUBLIC_BASE_URL || 'https://api.kraveo.site').replace(/\/+$/, '');
+
+/** Total size of everything under UPLOAD_DIR may not pass UPLOAD_MAX_TOTAL_MB (default 1500). Counted by a cheap scan, cached for 60 s. */
+const uploadQuotaBytes = (): number => {
+  const mb = Number(process.env.UPLOAD_MAX_TOTAL_MB);
+  return (Number.isFinite(mb) && mb > 0 ? mb : DEFAULT_UPLOAD_QUOTA_MB) * 1024 * 1024;
+};
+const scanBytes = async (dir: string): Promise<number> => {
+  let total = 0;
+  let entries: fs.Dirent[];
+  try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return 0; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) total += await scanBytes(full);
+    else if (e.isFile()) { try { total += (await fs.promises.stat(full)).size; } catch { /* vanished meanwhile */ } }
+  }
+  return total;
+};
+let usage: { dir: string; bytes: number; at: number } | null = null;
+const USAGE_REFRESH_MS = 60_000;
+export const __resetUploadUsage = () => { usage = null; };
+const currentUsage = async (): Promise<{ dir: string; bytes: number; at: number }> => {
+  const dir = uploadDir();
+  if (!usage || usage.dir !== dir || Date.now() - usage.at > USAGE_REFRESH_MS) usage = { dir, bytes: await scanBytes(dir), at: Date.now() };
+  return usage;
+};
 
 export const uploadRouter = Router();
 
@@ -65,17 +92,25 @@ uploadRouter.post(
         throw new AppError(400, 'IMAGE_DIMENSIONS_TOO_LARGE', `The photo is too big (${info.width}x${info.height}). The longer side can be at most ${MAX_SIDE_PX} pixels.`);
       }
 
+      const used = await currentUsage();
+      if (used.bytes + file.length > uploadQuotaBytes()) {
+        throw new AppError(507, 'UPLOAD_QUOTA_EXCEEDED', 'The photo storage is full. Paste an image link instead, or ask the developer to free up space.');
+      }
+
       const year = String(new Date().getUTCFullYear());
       const name = `${randomBytes(16).toString('hex')}.${info.ext}`;
       const relative = `${purpose}/${year}/${name}`;
       const dir = path.join(uploadDir(), purpose, year);
+      let tmp: string | null = null;
       try {
         await fs.promises.mkdir(dir, { recursive: true, mode: 0o755 });
         // Written under a dot-name first and renamed: a half-written file is never served (dotfiles are ignored by the static handler).
-        const tmp = path.join(dir, `.tmp-${randomBytes(8).toString('hex')}`);
+        tmp = path.join(dir, `.tmp-${randomBytes(8).toString('hex')}`);
         await fs.promises.writeFile(tmp, file, { flag: 'wx', mode: 0o644 });
         await fs.promises.rename(tmp, path.join(dir, name));
+        used.bytes += file.length;
       } catch (e) {
+        if (tmp) await fs.promises.unlink(tmp).catch(() => undefined); // a failed write (disk full ...) leaves nothing behind
         console.error('image upload could not be stored:', (e as NodeJS.ErrnoException)?.code ?? 'error');
         throw new AppError(503, 'UPLOAD_UNAVAILABLE', 'Image storage is not available right now. Try again, or paste a link instead.');
       }

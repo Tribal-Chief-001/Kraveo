@@ -11,6 +11,7 @@ import {
 } from '../services/catalog';
 import { getSettingGroup, getSettings, updateSettingGroup } from '../services/settings';
 import { bulkDishAction, importMenu } from '../services/catalogBulk';
+import { menuImportJson } from '../middleware/bodyLimits';
 import { isSettingGroup, SETTING_GROUPS } from '../services/pricing';
 
 /**
@@ -104,7 +105,8 @@ catalogRouter.post('/admin/catalog/bulk', ...adminOnly, async (req: Authenticate
 });
 
 // Whole-menu import. dryRun defaults to TRUE (nothing is written); dryRun:false applies every row in ONE transaction or none at all.
-catalogRouter.post('/admin/vendors/:id/menu-import', ...adminOnly, validParams('id'), async (req: AuthenticatedRequest, res: Response) => {
+// Authentication and the ADMIN check run BEFORE the 400 KB body parser (middleware/bodyLimits.ts): an anonymous caller never makes the server read it.
+catalogRouter.post('/admin/vendors/:id/menu-import', ...adminOnly, validParams('id'), menuImportJson, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const out = await importMenu(req.params.id, body(req), actorOf(req));
     const s = out.summary;

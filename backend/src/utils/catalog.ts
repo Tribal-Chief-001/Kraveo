@@ -1,3 +1,5 @@
+import { BAD_LABEL_CHARS, BAD_LABEL_MESSAGE, badLabel, collapse } from './labels';
+
 /** Public (customer app) views of vendors and menu items, and validation of what restaurants may write to the menu. */
 
 export const MAX_MENU_PRICE = 10_000;
@@ -112,7 +114,9 @@ export const priceProblem = (price: unknown): string | null => {
 export const text = (raw: unknown, max: number): string | null | false => {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== 'string') return false;
-  const s = raw.trim().replace(/\s+/g, ' ');
+  if (raw.length > max * 4 + 64) return false; // cheap guard before any normalisation work
+  if (BAD_LABEL_CHARS.test(raw.normalize('NFC'))) return false;
+  const s = collapse(raw); // NFC + trim + collapse (labels.ts); control, zero-width and direction-changing characters were refused above (Docs/23 review #9)
   return s.length <= max ? s : false;
 };
 
@@ -121,6 +125,9 @@ export type FieldProblem = { field: string; message: string };
 
 /** Validates the body of POST /vendors/:id/items. */
 export const validateMenuItemFields = (b: any): { ok: true; data: MenuItemInput } | { ok: false; error: FieldProblem } => {
+  for (const field of ['name', 'category', 'description'] as const) {
+    if (badLabel(b?.[field])) return { ok: false, error: { field, message: `The ${field} ${BAD_LABEL_MESSAGE}.` } };
+  }
   const name = text(b?.name, 80);
   if (!name) return { ok: false, error: { field: 'name', message: 'Item name is required (up to 80 characters).' } };
   const price = priceProblem(b?.price);

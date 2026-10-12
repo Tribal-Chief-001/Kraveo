@@ -125,6 +125,10 @@ const RULES: Rule[] = [
   { name: 'ADMIN_CATALOG_BULK', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/catalog/bulk', message: 'Too many bulk changes. Please wait a few minutes.' },
   { name: 'ADMIN_MENU_IMPORT', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && /^\/admin\/vendors\/[^/]+\/menu-import$/.test(p), message: 'Too many menu imports. Please wait a few minutes.' },
   { name: 'ADMIN_UPLOAD', scope: 'user', max: 60, windowMs: 60 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/uploads/image', message: 'Too many image uploads. Please try again in an hour.' },
+  // Docs/23: a pending or rejected restaurant re-sending its application may create restaurant categories from its text: a few times an hour.
+  { name: 'PARTNER_APPLICATION_WRITE', scope: 'user', max: 10, windowMs: 60 * MIN, applies: (r, p) => r.method === 'PUT' && p === '/partner/application', message: 'You changed the application too many times. Please try again in an hour.' },
+  // Docs/23: the public category list is cached on the server; this only stops a loop (a campus NAT is one address, so the number is generous).
+  { name: 'CATEGORIES_PUBLIC', scope: 'ip', max: 600, windowMs: MIN, applies: (r, p) => r.method === 'GET' && p === '/categories', message: 'Too many requests from this network. Please try again in a minute.' },
   { name: 'ADMIN_RECALCULATE', scope: 'user', max: 20, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/catalog/recalculate', message: 'Too many price recalculations. Please wait a few minutes.' },
   { name: 'ADMIN_SETTINGS_WRITE', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => r.method === 'PUT' && /^\/admin\/settings\/[^/]+$/.test(p), message: 'Too many settings changes. Please wait a few minutes.' },
   // Docs/21 phase 2: payout details, settlement actions and the rider ledger. Money endpoints: tight enough that a stuck loop or a

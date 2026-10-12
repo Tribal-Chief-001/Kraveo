@@ -6,7 +6,8 @@ import { getSettings } from './settings';
 import { checkCommissionRule, CommissionRule, DishPrice, priceDish, ruleFromColumns, toPaise } from './pricing';
 import { dishStatus, DishStatus, priceProblem, text } from '../utils/catalog';
 import { SettingsMap } from './pricing';
-import { resolveDishCategory } from './categories';
+import { resolveDishCategory, resolveDishCategoryForEdit } from './categories';
+import { BAD_LABEL_MESSAGE, badLabel } from '../utils/labels';
 
 /**
  * Catalog rules (Docs/21 sections 2-4): who may create / change / approve a dish and what the customer price becomes.
@@ -432,12 +433,14 @@ export const rejectDish = async (itemId: string, reasonRaw: unknown, actor: Acto
 // Admin: edit / create / delete / restore
 // ---------------------------------------------------------------------------------------------------------------------
 const requireNonEmptyText = (raw: unknown, max: number, field: string, label: string): string => {
+  if (badLabel(raw)) throw new AppError(400, 'BAD_REQUEST', `${label} ${BAD_LABEL_MESSAGE}.`, field);
   const t = text(raw, max);
   if (!t) throw new AppError(400, 'BAD_REQUEST', `${label} is required (up to ${max} characters).`, field);
   return t;
 };
 const optionalText = (raw: unknown, max: number, field: string, label: string): string | undefined => {
   if (raw === undefined) return undefined;
+  if (badLabel(raw)) throw new AppError(400, 'BAD_REQUEST', `${label} ${BAD_LABEL_MESSAGE}.`, field);
   const t = text(raw, max);
   if (t === false) throw new AppError(400, 'BAD_REQUEST', `${label} can be at most ${max} characters.`, field);
   return t ?? '';
@@ -481,7 +484,7 @@ export const adminEditDish = async (itemId: string, b: Record<string, unknown>, 
     if (categoryTouched) {
       const current = await tx.menuItem.findUnique({ where: { id: itemId }, select: { categoryId: true, category: true } });
       if (!current) throw notFound();
-      resolved = await resolveDishCategory(tx, { name: category ?? undefined, id: b.categoryId }, { admin: true, current });
+      resolved = (await resolveDishCategoryForEdit(tx, { name: category ?? undefined, id: b.categoryId }, { admin: true, current })) ?? undefined;
     }
     const item = await lockDish(tx, itemId);
     if (!item) throw notFound();

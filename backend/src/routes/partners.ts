@@ -15,6 +15,9 @@ import { disableUserTokens } from '../services/push/deviceTokens';
 import { checkVendorLocation } from '../config/campus';
 import { vendorLocationView, checkAccuracy, devicePinData, describePin } from '../services/vendorLocation';
 import { CUISINES_INCLUDE, cuisineFields } from '../utils/catalog';
+import { applyOwnerCategoryText } from '../services/categories';
+import { badLabel } from '../utils/labels';
+import { retryStaleRead } from '../utils/prismaRetry';
 
 /**
  * Partner (restaurant / rider) applications and the admin tools around them.
@@ -113,6 +116,7 @@ type Fail = { field: string; message: string };
 const vendorFields = (b: any): { ok: true; data: { name: string; category: string; address: string; fssaiNumber: string | null } } | { ok: false; error: Fail } => {
   const name = clean(b?.restaurantName ?? b?.vendorName, 60);
   if (name.length < 2) return { ok: false, error: { field: 'restaurantName', message: 'Enter the restaurant name.' } };
+  if (badLabel(name) || badLabel(clean(b?.address, 140))) return { ok: false, error: { field: badLabel(name) ? 'restaurantName' : 'address', message: 'Remove the hidden or control characters from the text.' } };
   const category = clean(b?.category, 60) || 'Campus kitchen';
   const address = clean(b?.address, 140);
   if (address.length < 3) return { ok: false, error: { field: 'address', message: 'Tell us where the kitchen is.' } };
@@ -272,7 +276,7 @@ partnerRouter.post('/auth/partner-signup', async (req: Request, res: Response) =
 
 const loadOwnProfile = async (userId: string, role: Role) => {
   if (role === Role.VENDOR) {
-    const vendors = await prisma.vendor.findMany({ where: { userId }, orderBy: { createdAt: 'asc' }, include: CUISINES_INCLUDE });
+    const vendors = await retryStaleRead(() => prisma.vendor.findMany({ where: { userId }, orderBy: { createdAt: 'asc' }, include: CUISINES_INCLUDE }));
     // Prefer an APPROVED restaurant, otherwise whatever was applied for.
     const vendor = vendors.find((v) => v.approvalStatus === 'APPROVED') ?? vendors[0] ?? null;
     return { vendor, driver: null as any, status: (vendor?.approvalStatus ?? 'APPROVED') as ApprovalStatus, reason: vendor?.rejectionReason ?? null };
@@ -373,7 +377,17 @@ partnerRouter.put('/partner/application', requireAuth, requireRole('VENDOR', 'DR
       if (!p.vendor) return res.status(404).json({ success: false, message: 'No restaurant is linked to this account.' });
       const v = vendorFields({ restaurantName: p.vendor.name, category: p.vendor.category, address: p.vendor.address, fssaiNumber: p.vendor.fssaiNumber, ...b });
       if (!v.ok) return bad(v.error);
-      await prisma.vendor.update({ where: { id: p.vendor.id }, data: { ...v.data, approvalStatus: 'PENDING', rejectionReason: null, appliedAt: now, reviewedAt: null } });
+      // Docs/23: Vendor.category is DERIVED from the cuisine links, so it is never written from this form directly. The text counts only when the
+      // owner really changed it (an old app echoes the string it was shown, which can be longer than the 60 characters the form cuts it to);
+      // then it goes through the same token parser as restaurant creation and the links follow.
+      const { category: _formCategory, ...vendorData } = v.data;
+      const typed = typeof b.category === 'string' ? clean(b.category, 60) : '';
+      const shown = String(p.vendor.category ?? '');
+      const categoryChanged = !!typed && typed !== clean(shown, 60) && typed !== clean(shown, 10_000);
+      await prisma.$transaction(async (tx) => {
+        if (categoryChanged) await applyOwnerCategoryText(tx, p.vendor.id, typed);
+        await tx.vendor.update({ where: { id: p.vendor.id }, data: { ...vendorData, approvalStatus: 'PENDING', rejectionReason: null, appliedAt: now, reviewedAt: null } });
+      });
     } else {
       if (!p.driver) return res.status(404).json({ success: false, message: 'No rider profile is linked to this account.' });
       const d = driverFields({ vehicleType: p.driver.vehicleType, vehicleRegNo: p.driver.vehicleRegNo, emergencyPhone: p.driver.emergencyPhone, upiId: p.driver.upiId, ...b }, user.phone ?? '');
@@ -424,7 +438,7 @@ partnerRouter.get('/admin/applications', requireAuth, requireRole('ADMIN'), asyn
     const kindFilter = String(req.query.kind ?? '').toUpperCase();
     const statusWhere = wanted === 'ALL' ? {} : (['PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED'].includes(wanted) ? { approvalStatus: wanted as ApprovalStatus } : { approvalStatus: 'PENDING' as ApprovalStatus });
     const [vendors, drivers, vc, dc] = await Promise.all([
-      kindFilter === 'DRIVER' ? [] : prisma.vendor.findMany({ where: { ...statusWhere, userId: { not: null } }, include: { user: { select: { id: true, name: true, phone: true } }, ...CUISINES_INCLUDE }, orderBy: { createdAt: 'desc' }, take: 200 }),
+      kindFilter === 'DRIVER' ? [] : retryStaleRead(() => prisma.vendor.findMany({ where: { ...statusWhere, userId: { not: null } }, include: { user: { select: { id: true, name: true, phone: true } }, ...CUISINES_INCLUDE }, orderBy: { createdAt: 'desc' }, take: 200 })),
       kindFilter === 'VENDOR' ? [] : prisma.driverPartner.findMany({ where: statusWhere, include: { user: { select: { id: true, name: true, phone: true } } }, orderBy: { createdAt: 'desc' }, take: 200 }),
       prisma.vendor.groupBy({ by: ['approvalStatus'], _count: true, where: { userId: { not: null } } }),
       prisma.driverPartner.groupBy({ by: ['approvalStatus'], _count: true }),
@@ -451,7 +465,7 @@ partnerRouter.post('/admin/partners/:kind/:id/status', requireAuth, requireRole(
     if ((next === 'REJECTED' || next === 'SUSPENDED') && reason.length < 3) return res.status(400).json({ success: false, field: 'reason', message: 'Please give a short reason (the partner will see it).' });
 
     const row: any = kind === 'VENDOR'
-      ? await prisma.vendor.findUnique({ where: { id: req.params.id }, include: { user: true, ...CUISINES_INCLUDE } })
+      ? await retryStaleRead(() => prisma.vendor.findUnique({ where: { id: req.params.id }, include: { user: true, ...CUISINES_INCLUDE } }))
       : await prisma.driverPartner.findUnique({ where: { id: req.params.id }, include: { user: true } });
     if (!row) return res.status(404).json({ success: false, message: 'Partner not found.' });
 
@@ -466,7 +480,7 @@ partnerRouter.post('/admin/partners/:kind/:id/status', requireAuth, requireRole(
       else data.dutyStatus = 'OFFLINE';
     }
     const updated: any = kind === 'VENDOR'
-      ? await prisma.vendor.update({ where: { id: row.id }, data, include: { user: { select: { id: true, name: true, phone: true } }, ...CUISINES_INCLUDE } })
+      ? await prisma.vendor.update({ where: { id: row.id }, data, include: { user: { select: { id: true, name: true, phone: true } }, ...CUISINES_INCLUDE } }).catch(async (e) => { if (!/Inconsistent query result/i.test(String(e?.message))) throw e; return retryStaleRead(() => prisma.vendor.findUniqueOrThrow({ where: { id: row.id }, include: { user: { select: { id: true, name: true, phone: true } }, ...CUISINES_INCLUDE } })); })
       : await prisma.driverPartner.update({ where: { id: row.id }, data, include: { user: { select: { id: true, name: true, phone: true } } } });
 
     const label = `${kind.toLowerCase()} ${row.name} (${row.user?.phone ?? 'no phone'})`;
