@@ -33,6 +33,13 @@ import {
   parseReveal, parseRiderPayoutPage, parseRiderPayoutResult, parseRiders, parseRunResult, parseSettlementAction, parseSettlementDetail, parseSettlementPage,
 } from '../lib/financeParse';
 import type { AdjustmentInput, MarkPaidInput, PayoutAccountInput, RiderPayoutInput } from '../lib/financeInput';
+import {
+  Category, MergePreview, parseCategoryList, parseCategoryResult, parseMergeResult,
+} from '../lib/categoryParse';
+import {
+  BulkAction, BulkResult, ImportReport, UploadResult, parseBulkResult, parseImportReport, parseUploadResult,
+} from '../lib/catalogBulkParse';
+import type { ImportRowInput } from '../lib/menuCsv';
 import type { CommissionType } from '../lib/pricing';
 import type { DropPointInfo } from '../lib/campus';
 import type { SavedPin } from '../lib/vendorLocation';
@@ -41,8 +48,11 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.en
 export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (import.meta.env.PROD ? 'https://api.kraveo.site' : 'http://localhost:5000');
 
 export class ApiError extends Error {
-  /** `code` / `field` come from the server's `{ success:false, message, code?, field? }` error body (contract 2). */
-  constructor(public status: number, message: string, public code?: string, public field?: string) {
+  /**
+   * `code` / `field` come from the server's `{ success:false, message, code?, field? }` error body (contract 2).
+   * `extra` is that whole body, for the codes that carry more (CATEGORY_EXISTS `existing`, CATEGORY_IN_USE counts, CATEGORY_UNKNOWN `suggestions`, IMPORT_INVALID `data`).
+   */
+  constructor(public status: number, message: string, public code?: string, public field?: string, public extra?: Record<string, any>) {
     super(message);
     this.name = 'ApiError';
   }
@@ -71,7 +81,13 @@ async function send(path: string, init: RequestInit): Promise<{ response: Respon
   }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new ApiError(response.status, body?.message || `Request failed (${response.status}).`, typeof body?.code === 'string' ? body.code : undefined, typeof body?.field === 'string' ? body.field : undefined);
+    throw new ApiError(
+      response.status,
+      body?.message || `Request failed (${response.status}).`,
+      typeof body?.code === 'string' ? body.code : undefined,
+      typeof body?.field === 'string' ? body.field : undefined,
+      body && typeof body === 'object' && !Array.isArray(body) ? body : undefined,
+    );
   }
   return { response, body };
 }
@@ -162,12 +178,47 @@ export interface DishWrite {
   description?: string;
   category?: string;
   imageUrl?: string | null;
+  /** Docs/23: the managed category's id. Sending the name (`category`) still works; the server accepts either. */
+  categoryId?: string;
   isVeg?: boolean;
   isAvailable?: boolean;
   vendorPrice?: number;
   /** `null` clears the dish's own commission so it inherits the restaurant / global default. */
   commissionType?: CommissionType | null;
   commissionValue?: number | null;
+}
+
+/** Fields of a category the admin can set (Docs/23 3.2). */
+export interface CategoryInput {
+  name?: string;
+  nameHi?: string | null;
+  icon?: string;
+  forRestaurants?: boolean;
+  forDishes?: boolean;
+  showOnHome?: boolean;
+  isActive?: boolean;
+  sortOrder?: number;
+}
+
+/** What `PATCH /api/admin/vendors/:id/profile` takes: only the keys that changed (Docs/23 3.3). */
+export interface VendorProfileChanges {
+  name?: string;
+  /** Ordered category ids, first = main. `[]` clears them. */
+  cuisineIds?: string[];
+  address?: string;
+  /** `null` = back to the default banner. */
+  bannerImage?: string | null;
+  /** 14 digits, or `null` to remove. */
+  fssaiNumber?: string | null;
+  eta?: string;
+}
+
+/** The import endpoint answered 400 IMPORT_INVALID: nothing was written, and `report` says why (null if the answer had no report). */
+export class ImportInvalidError extends ApiError {
+  constructor(message: string, public report: ImportReport | null, extra?: Record<string, any>) {
+    super(400, message, 'IMPORT_INVALID', 'rows', extra);
+    this.name = 'ImportInvalidError';
+  }
 }
 
 export type SettingsGroup = 'fees' | 'commission' | 'rounding' | 'settlement';
@@ -280,6 +331,79 @@ export const apiService = {
       method: 'PATCH',
       body: JSON.stringify({ isAcceptingOrders }),
     }));
+  },
+
+  /** Edits a restaurant's profile (admin only). `changed: false` = the server found nothing to change. The vendor is the fresh admin view. */
+  async updateVendorProfile(vendorId: string, changes: VendorProfileChanges): Promise<{ vendor: Vendor; changed: boolean; message: string }> {
+    const body = await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/profile`, { method: 'PATCH', body: json(changes) });
+    if (!body || typeof body.data !== 'object' || body.data === null || !body.data.id) throw unexpected('restaurant');
+    return { vendor: normalizeVendor(body.data), changed: body.changed !== false, message: typeof body.message === 'string' ? body.message : '' };
+  },
+
+  // ── Managed categories (Docs/23 3.2). Response parsing lives in lib/categoryParse.ts ──
+  /** Every category with its counts. Without `includeInactive` hidden ones are left out (what the pickers want). */
+  async fetchCategories(opts: { includeInactive?: boolean } = {}): Promise<Category[]> {
+    const parsed = parseCategoryList(await requestFull<any>(`/api/admin/categories${opts.includeInactive ? '?includeInactive=1' : ''}`));
+    if (!parsed) throw unexpected('category list');
+    return parsed;
+  },
+
+  async createCategory(input: CategoryInput): Promise<Category> {
+    const { category } = parseCategoryResult(await requestFull<any>('/api/admin/categories', { method: 'POST', body: json(input) }));
+    if (!category) throw unexpected('category');
+    return category;
+  },
+
+  async updateCategory(id: string, changes: CategoryInput): Promise<{ category: Category; changed: boolean; message: string }> {
+    const result = parseCategoryResult(await requestFull<any>(`/api/admin/categories/${encodeURIComponent(id)}`, { method: 'PATCH', body: json(changes) }));
+    if (!result.category) throw unexpected('category');
+    return { category: result.category, changed: result.changed, message: result.message };
+  },
+
+  /** Saves the order: the listed ids become 1..n. The answer is the full list in the new order. */
+  async reorderCategories(ids: string[]): Promise<Category[]> {
+    const parsed = parseCategoryList(await requestFull<any>('/api/admin/categories/reorder', { method: 'POST', body: json({ ids }) }));
+    if (!parsed) throw unexpected('category order');
+    return parsed;
+  },
+
+  /** `dryRun: true` only counts what would move; `false` merges. Always sent explicitly. */
+  async mergeCategory(id: string, intoId: string, dryRun: boolean): Promise<MergePreview> {
+    const parsed = parseMergeResult(await requestFull<any>(`/api/admin/categories/${encodeURIComponent(id)}/merge`, { method: 'POST', body: json({ intoId, dryRun }) }));
+    if (!parsed) throw unexpected('category merge');
+    return parsed;
+  },
+
+  async deleteCategory(id: string): Promise<void> {
+    await requestFull<any>(`/api/admin/categories/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
+  /** Sends the (already compressed) picture as the raw body. The token travels in the header only. */
+  async uploadImage(file: Blob, purpose: 'banner' | 'dish'): Promise<UploadResult> {
+    const parsed = parseUploadResult(await requestFull<any>(`/api/admin/uploads/image?purpose=${purpose}`, { method: 'POST', body: file, headers: { 'Content-Type': file.type || 'application/octet-stream' } }));
+    if (!parsed) throw unexpected('uploaded picture');
+    return parsed;
+  },
+
+  // ── Bulk dish actions and menu import (Docs/23 3.5) ──
+  async bulkCatalog(ids: string[], action: BulkAction, extra: { category?: string; categoryId?: string } = {}): Promise<BulkResult> {
+    const parsed = parseBulkResult(await requestFull<any>('/api/admin/catalog/bulk', { method: 'POST', body: json({ ids, action, ...extra }) }));
+    if (!parsed) throw unexpected('bulk result');
+    return parsed;
+  },
+
+  /** `dryRun` defaults to true on the server; it is always sent explicitly. A file with invalid rows that is applied throws ImportInvalidError. */
+  async importMenu(vendorId: string, rows: ImportRowInput[], opts: { dryRun: boolean; onDuplicate: 'SKIP' | 'UPDATE' }): Promise<ImportReport> {
+    try {
+      const parsed = parseImportReport(await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/menu-import`, {
+        method: 'POST', body: json({ rows, dryRun: opts.dryRun, onDuplicate: opts.onDuplicate }),
+      }));
+      if (!parsed) throw unexpected('import report');
+      return parsed;
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'IMPORT_INVALID') throw new ImportInvalidError(error.message, parseImportReport(error.extra), error.extra);
+      throw error;
+    }
   },
 
   async createVendor(vendor: Pick<Vendor, 'name' | 'category' | 'address' | 'lat' | 'lng'>): Promise<Vendor> {

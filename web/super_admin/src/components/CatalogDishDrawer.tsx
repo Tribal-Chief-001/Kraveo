@@ -1,7 +1,10 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { ImageOff, Loader2, UtensilsCrossed } from 'lucide-react';
+import { Copy, Loader2, Plus, UtensilsCrossed } from 'lucide-react';
 import { Vendor } from '../types';
 import { ApiError, apiService, DishWrite } from '../services/api';
+import { Category, dishChoices, slugOf } from '../lib/categoryParse';
+import type { CategoriesState } from '../lib/useCategories';
+import type { ImageEnv } from '../lib/imageCompress';
 import { CatalogDish } from '../lib/catalogParse';
 import { CommissionType, MAX_DISH_PRICE, amountText, commissionLabel, isHttpUrl, parseCommissionValue, parseVendorPrice, rupees, toPaise } from '../lib/pricing';
 import { PreviewState, usePricePreview } from '../lib/usePricePreview';
@@ -11,6 +14,8 @@ import { Switch } from './ui/Switch';
 import { useToast } from './ui/Toast';
 import { useConfirm } from './ui/ConfirmDialog';
 import { StateBadge } from './CatalogStateBadge';
+import { CategoryForm } from './CategoryForm';
+import { ImageUploadField } from './ImageUploadField';
 
 const SOURCE_LABEL = { DISH: 'this dish', VENDOR: 'this restaurant', GLOBAL: 'default' } as const;
 
@@ -22,7 +27,16 @@ interface Props {
   /** The dish to edit, or null to add a dish for a restaurant. */
   item: CatalogDish | null;
   vendors: Vendor[];
+  /** Category names seen in the loaded list: the suggestions for the free-text field used when the managed list is not available. */
   categories: string[];
+  /** The managed category list (Docs/23). Missing or failed = the old free-text field with `categories` as suggestions. */
+  categoryState?: CategoriesState;
+  /** "Duplicate": open Add dish prefilled from this dish (name + " (copy)", photo kept). Only with item = null. */
+  prefill?: CatalogDish | null;
+  /** The admin pressed Duplicate on this dish. */
+  onDuplicate?: (item: CatalogDish) => void;
+  /** Tests inject a fake canvas. */
+  imageEnv?: ImageEnv;
   onClose: () => void;
   /** Called after the server accepted a change: the list reloads and the sidebar badge refreshes. */
   onChanged: () => void;
@@ -60,6 +74,12 @@ const plain = (error: unknown): string => {
   return 'Something went wrong. Please try again.';
 };
 
+/** " Did you mean Biryani?" when the server suggests names for an unknown category. */
+const suggestionText = (error: unknown): string => {
+  const list = error instanceof ApiError && Array.isArray(error.extra?.suggestions) ? error.extra!.suggestions.filter((n: unknown): n is string => typeof n === 'string' && n !== '') : [];
+  return list.length > 0 ? ` Did you mean ${list.slice(0, 3).join(' or ')}?` : '';
+};
+
 const PreviewCard: React.FC<{ state: PreviewState; vendorPrice: number | null; title: string }> = ({ state, vendorPrice, title }) => {
   const shown = state.status === 'ready' ? state.preview : state.status === 'loading' ? state.last : null;
   return (
@@ -82,23 +102,34 @@ const PreviewCard: React.FC<{ state: PreviewState; vendorPrice: number | null; t
   );
 };
 
-export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, categories, onClose, onChanged, onAuthError }) => {
+const COPY_SUFFIX = ' (copy)';
+/** The copy's name: "<name> (copy)", cut short enough to stay inside the 80 letter limit. */
+export const copyName = (name: string): string => `${name.length + COPY_SUFFIX.length > 80 ? name.slice(0, 80 - COPY_SUFFIX.length).trimEnd() : name}${COPY_SUFFIX}`;
+
+export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, categories, categoryState, prefill = null, onDuplicate, imageEnv, onClose, onChanged, onAuthError }) => {
   // The panel gives this component a new `key` per dish, so the form always starts from the dish being opened.
   const toast = useToast();
   const { confirm, dialog } = useConfirm();
   const creating = item === null;
-  const [form, setForm] = useState<FormState>(() => formFrom(item));
+  const [form, setForm] = useState<FormState>(() => (item === null && prefill ? { ...formFrom(prefill), name: copyName(prefill.name) } : formFrom(item)));
   const [busy, setBusy] = useState<Busy>(null);
   const busyRef = useRef(false);
   const [error, setError] = useState('');
   const [touched, setTouched] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
-  const [imageFailed, setImageFailed] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [creatingCategory, setCreatingCategory] = useState(false);
 
   const deleted = item?.state === 'DELETED';
   const baseline = useMemo(() => formFrom(item), [item]);
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => { setForm((current) => ({ ...current, [key]: value })); setError(''); };
+
+  // Managed categories (Docs/23): a select of the active dish categories. Without the list (older server, request failed) the old free-text field stays.
+  const managed = categoryState !== undefined && !categoryState.error;
+  const dishList: Category[] = managed ? dishChoices(categoryState!.categories) : [];
+  const matched = dishList.find((c) => slugOf(c.name) === slugOf(form.category)) ?? null;
+  const currentIsExtra = managed && form.category.trim() !== '' && !matched;
 
   // ── validation ──
   const price = parseVendorPrice(form.vendorPrice);
@@ -106,7 +137,9 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
   const errors = {
     vendorId: creating && !form.vendorId ? 'Choose the restaurant this dish belongs to.' : '',
     name: form.name.trim().length < 2 ? 'Enter the dish name (at least 2 letters).' : form.name.trim().length > 80 ? 'Keep the name under 80 letters.' : '',
-    category: form.category.trim().length < 2 ? 'Enter a category, for example Rolls or Biryani.' : form.category.trim().length > 40 ? 'Keep the category under 40 letters.' : '',
+    category: managed
+      ? (form.category.trim() === '' ? 'Choose a category from the list, or create a new one.' : '')
+      : form.category.trim().length < 2 ? 'Enter a category, for example Rolls or Biryani.' : form.category.trim().length > 40 ? 'Keep the category under 40 letters.' : '',
     imageUrl: form.imageUrl.trim() && !isHttpUrl(form.imageUrl) ? 'Enter a full web address starting with https://'
       : !creating && !form.imageUrl.trim() && baseline.imageUrl.trim() ? 'A dish needs a photo. Enter a new address instead of leaving it empty.' : '',
     description: form.description.length > 300 ? 'Keep the description under 300 letters.' : '',
@@ -142,7 +175,9 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
       onClose();
     } catch (failure) {
       onAuthError(failure);
-      setError(plain(failure));
+      setError(plain(failure) + suggestionText(failure));
+      // The category was hidden or deleted meanwhile: refresh the list so the select matches the server.
+      if (failure instanceof ApiError && failure.code === 'CATEGORY_UNKNOWN') categoryState?.reload();
     } finally {
       busyRef.current = false;
       setBusy(null);
@@ -155,7 +190,7 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
     const changes: DishWrite = {};
     if (dirty.includes('name')) changes.name = form.name.trim();
     if (dirty.includes('description')) changes.description = form.description.trim();
-    if (dirty.includes('category')) changes.category = form.category.trim();
+    if (dirty.includes('category')) { if (matched) changes.categoryId = matched.id; else changes.category = form.category.trim(); }
     if (dirty.includes('imageUrl') && form.imageUrl.trim()) changes.imageUrl = form.imageUrl.trim();
     if (dirty.includes('isVeg')) changes.isVeg = form.isVeg;
     if (dirty.includes('isAvailable')) changes.isAvailable = form.isAvailable;
@@ -189,7 +224,7 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
   const onCreate = () => {
     if (submitBlocked() || !price.ok) return;
     const body: DishWrite & { vendorId: string; name: string; vendorPrice: number } = {
-      vendorId: form.vendorId, name: form.name.trim(), category: form.category.trim(), isVeg: form.isVeg, isAvailable: form.isAvailable, vendorPrice: price.value,
+      vendorId: form.vendorId, name: form.name.trim(), ...(matched ? { categoryId: matched.id } : { category: form.category.trim() }), isVeg: form.isVeg, isAvailable: form.isAvailable, vendorPrice: price.value,
       ...(form.description.trim() ? { description: form.description.trim() } : {}),
       ...(form.imageUrl.trim() ? { imageUrl: form.imageUrl.trim() } : {}),
       ...commissionBody(),
@@ -238,9 +273,8 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
   // A live dish with a requested price change is declined with a reason (reject); a plain live dish cannot be rejected.
   const declining = item?.state === 'CHANGE_PENDING';
   const canApprove = item !== null && (item.state === 'PENDING' || item.state === 'REJECTED');
-  const disabledAll = busy !== null;
+  const disabledAll = busy !== null || uploading;
   const readOnly = deleted || disabledAll;
-  const showImage = form.imageUrl.trim() !== '' && isHttpUrl(form.imageUrl) && !imageFailed;
   const spin = (kind: Busy) => (busy === kind ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null);
 
   const footer = (
@@ -252,6 +286,7 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
         {!creating && !deleted && canApprove && <button type="button" className="k-btn-primary flex-1" onClick={onApprove} disabled={disabledAll} aria-busy={busy === 'approve'}>{spin('approve')}Approve{priceDirty || commissionDirty ? ' with these numbers' : ''}</button>}
         {!creating && !deleted && !rejecting && canApprove && item?.state === 'PENDING' && <button type="button" className="k-btn-danger" onClick={() => setRejecting(true)} disabled={disabledAll}>Reject…</button>}
         {!creating && !deleted && <button type="button" className={canApprove ? 'k-btn-ghost' : 'k-btn-primary flex-1'} onClick={onSave} disabled={disabledAll || dirty.length === 0} aria-busy={busy === 'save'}>{spin('save')}Save changes</button>}
+        {!creating && onDuplicate && <button type="button" className="k-btn-ghost" onClick={() => onDuplicate(item)} disabled={disabledAll}><Copy className="h-4 w-4" aria-hidden="true" />Duplicate</button>}
         {!creating && !deleted && <button type="button" className="k-btn-danger" onClick={onDelete} disabled={disabledAll} aria-busy={busy === 'delete'}>{spin('delete')}Delete</button>}
         <button type="button" className="k-btn-ghost" onClick={onClose}>Close</button>
       </div>
@@ -260,7 +295,7 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
 
   return (
     <>
-      <Drawer open={open} onClose={onClose} title={creating ? 'Add a dish' : item.name} subtitle={creating ? 'Goes live at once for the restaurant you choose' : item.vendorName} icon={UtensilsCrossed} wide footer={footer} focusFirstField={creating}>
+      <Drawer open={open} onClose={onClose} title={creating ? (prefill ? 'Duplicate dish' : 'Add a dish') : item.name} subtitle={creating ? (prefill ? `Copied from ${prefill.name}. Goes live at once.` : 'Goes live at once for the restaurant you choose') : item.vendorName} icon={UtensilsCrossed} wide footer={footer} focusFirstField={creating}>
         <div className="space-y-5">
           {item && <div className="flex flex-wrap items-center gap-2"><StateBadge state={item.state} /><span className="text-xs text-kraveo-ink3">{item.createdBy === 'ADMIN' ? 'Added by an admin' : 'Added by the restaurant'}</span></div>}
           {item?.state === 'REJECTED' && item.rejectionReason && <p className="break-words rounded-k-sm border border-kraveo-danger/30 bg-kraveo-danger/10 px-3 py-2 text-sm text-kraveo-ink"><b>Rejected:</b> {item.rejectionReason}</p>}
@@ -292,25 +327,60 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
             <input id="dish-name" className="k-input" value={form.name} maxLength={80} onChange={(event) => set('name', event.target.value)} aria-invalid={Boolean(show(errors.name))} aria-describedby={show(errors.name) ? 'dish-name-msg' : undefined} disabled={readOnly} autoComplete="off" />
           </Field>
 
-          <Field label="Category" htmlFor="dish-category" required error={show(errors.category)}>
-            <input id="dish-category" className="k-input" list="dish-categories" value={form.category} maxLength={40} onChange={(event) => set('category', event.target.value)} aria-invalid={Boolean(show(errors.category))} aria-describedby={show(errors.category) ? 'dish-category-msg' : undefined} disabled={readOnly} autoComplete="off" />
-            <datalist id="dish-categories">{categories.map((name) => <option key={name} value={name} />)}</datalist>
-          </Field>
+          {managed ? (
+            <div className="space-y-2">
+              <Field label="Category" htmlFor="dish-category" required error={show(errors.category)} hint="The customer app groups dishes by this.">
+                <select id="dish-category" className="k-select" value={matched ? matched.name : form.category} onChange={(event) => set('category', event.target.value)} aria-invalid={Boolean(show(errors.category))} aria-describedby={`dish-category-msg`} disabled={readOnly}>
+                  {form.category.trim() === '' && <option value="">{categoryState!.loading && dishList.length === 0 ? 'Loading categories…' : 'Choose a category…'}</option>}
+                  {currentIsExtra && <option value={form.category}>{form.category} (not in the active list)</option>}
+                  {dishList.map((c) => <option key={c.id} value={c.name}>{c.name}{c.nameHi ? ` · ${c.nameHi}` : ''}</option>)}
+                </select>
+              </Field>
+              {!readOnly && (
+                <button type="button" className="k-btn-ghost !min-h-[36px] text-xs" onClick={() => setCreatingCategory((open) => !open)} aria-expanded={creatingCategory}><Plus className="h-3.5 w-3.5" aria-hidden="true" />Create new category</button>
+              )}
+              {creatingCategory && (
+                <div className="k-inset space-y-3 p-4" role="group" aria-label="Create a new category">
+                  <p className="text-sm font-bold text-kraveo-ink">New category for dishes</p>
+                  <CategoryForm
+                    category={null}
+                    mode="quick"
+                    preset={{ forRestaurants: false, forDishes: true, showOnHome: false }}
+                    canUseExisting={(existing) => existing.isActive && existing.forDishes}
+                    onUseExisting={(existing) => { categoryState!.add(existing); set('category', existing.name); setCreatingCategory(false); }}
+                    onSaved={(created) => { categoryState!.add(created); set('category', created.name); setCreatingCategory(false); toast.success('Category added', `“${created.name}” was created and chosen for this dish.`); }}
+                    onCancel={() => setCreatingCategory(false)}
+                    onAuthError={onAuthError}
+                  />
+                </div>
+              )}
+            </div>
+          ) : (
+            <Field label="Category" htmlFor="dish-category" required error={show(errors.category)}>
+              <input id="dish-category" className="k-input" list="dish-categories" value={form.category} maxLength={40} onChange={(event) => set('category', event.target.value)} aria-invalid={Boolean(show(errors.category))} aria-describedby={show(errors.category) ? 'dish-category-msg' : undefined} disabled={readOnly} autoComplete="off" />
+              <datalist id="dish-categories">{categories.map((name) => <option key={name} value={name} />)}</datalist>
+            </Field>
+          )}
 
           <Field label="Description (optional)" htmlFor="dish-description" error={show(errors.description)}>
             <textarea id="dish-description" className="k-input min-h-[72px] py-2" value={form.description} onChange={(event) => set('description', event.target.value)} aria-invalid={Boolean(show(errors.description))} aria-describedby={show(errors.description) ? 'dish-description-msg' : undefined} disabled={readOnly} />
           </Field>
 
-          <Field label="Photo web address (optional)" htmlFor="dish-image" error={show(errors.imageUrl)} hint="A direct link to the picture, starting with https://">
-            <input id="dish-image" className="k-input" inputMode="url" value={form.imageUrl} onChange={(event) => { set('imageUrl', event.target.value); setImageFailed(false); }} aria-invalid={Boolean(show(errors.imageUrl))} aria-describedby="dish-image-msg" disabled={readOnly} autoComplete="off" />
-          </Field>
-          {form.imageUrl.trim() !== '' && isHttpUrl(form.imageUrl) && (
-            <div className="k-inset flex h-32 items-center justify-center overflow-hidden">
-              {showImage
-                ? <img src={form.imageUrl.trim()} alt={`Photo of ${form.name || 'the dish'}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" onError={() => setImageFailed(true)} />
-                : <p className="flex items-center gap-2 text-sm text-kraveo-ink3"><ImageOff className="h-4 w-4" aria-hidden="true" />This picture could not be loaded.</p>}
-            </div>
-          )}
+          <ImageUploadField
+            id="dish-image"
+            label="Photo web address (optional)"
+            purpose="dish"
+            value={form.imageUrl}
+            onChange={(url) => set('imageUrl', url)}
+            disabled={readOnly}
+            error={show(errors.imageUrl)}
+            hint="Paste a direct link starting with https://, or upload a photo."
+            previewAlt={`Photo of ${form.name || 'the dish'}`}
+            hideRemove={!creating && baseline.imageUrl.trim() !== ''}
+            onBusyChange={setUploading}
+            onAuthError={onAuthError}
+            env={imageEnv}
+          />
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="k-inset flex items-center justify-between gap-3 px-4 py-3">

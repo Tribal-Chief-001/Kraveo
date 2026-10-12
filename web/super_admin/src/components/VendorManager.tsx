@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, Landmark, MapPin, Plus, SearchX, Star, Store } from 'lucide-react';
+import { ChevronDown, ChevronUp, Landmark, MapPin, Pencil, Plus, SearchX, Star, Store } from 'lucide-react';
 import { Order, Vendor } from '../types';
 import { activeOrderCountByVendor } from '../lib/dashboardStats';
 import type { SavedPin } from '../lib/vendorLocation';
@@ -7,6 +7,7 @@ import { VendorLocationEditor } from './VendorLocationEditor';
 import { CommissionEditor } from './CommissionEditor';
 import type { VendorCommission } from '../lib/catalogParse';
 import { AddPartnerDrawer } from './AddPartnerDrawer';
+import { EditRestaurantDrawer } from './EditRestaurantDrawer';
 import { PayoutAccountPanel } from './PayoutAccountPanel';
 import { ApprovalPill } from './ui/ApprovalPill';
 import { Avatar } from './ui/Avatar';
@@ -27,6 +28,8 @@ interface VendorManagerProps {
   onLocationSaved?: (vendorId: string, saved: SavedPin) => void;
   /** Called after an admin saved a restaurant's commission, so the list uses it at once. */
   onCommissionSaved?: (vendorId: string, commission: VendorCommission) => void;
+  /** Called after an admin saved the restaurant's profile (name, categories, address, banner, FSSAI, ETA); `vendor` is the fresh admin view. */
+  onProfileSaved?: (vendor: Vendor) => void;
   /** Session errors from the commission save (logs out on 401/403). */
   onAuthError?: (error: unknown) => void;
   loading?: boolean;
@@ -53,9 +56,10 @@ const VendorPayout: React.FC<{ vendor: Vendor; onAuthError?: (error: unknown) =>
 const NO_ORDERS: Order[] = [];
 const NOT_BUSY: ReadonlySet<string> = new Set();
 
-export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, orders = NO_ORDERS, busyVendorIds = NOT_BUSY, onToggleVendor, onCreated, onLocationSaved, onCommissionSaved, onAuthError, loading = false, query = '', onClearQuery }) => {
+export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, orders = NO_ORDERS, busyVendorIds = NOT_BUSY, onToggleVendor, onCreated, onLocationSaved, onCommissionSaved, onProfileSaved, onAuthError, loading = false, query = '', onClearQuery }) => {
   const [showDrawer, setShowDrawer] = useState(false);
   const [filter, setFilter] = useState<VendorFilter>('ALL');
+  const [editing, setEditing] = useState<Vendor | null>(null);
 
   const counts = useMemo(() => ({
     ALL: vendors.length,
@@ -68,7 +72,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, orders = 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return vendors.filter((v) => {
-      const matches = !q || [v.name, v.category, v.address].some((value) => value.toLowerCase().includes(q));
+      const matches = !q || [v.name, v.category, v.address, ...(v.cuisines ?? []).map((c) => c.name)].some((value) => value.toLowerCase().includes(q));
       const status = filter === 'ALL' || (filter === 'OPEN' ? v.isAcceptingOrders : !v.isAcceptingOrders);
       return matches && status;
     });
@@ -114,6 +118,9 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, orders = 
               <div className="min-w-0 flex-1">
                 <h3 className="truncate font-display text-lg font-bold leading-tight text-kraveo-ink" title={v.name}>{v.name}</h3>
                 <p className="truncate text-xs font-semibold text-kraveo-g300">{v.category}</p>
+                {v.cuisines && v.cuisines.length === 0 && (
+                  <button type="button" className="mt-1 text-[11px] font-bold text-kraveo-status-placed underline-offset-2 hover:underline" onClick={() => setEditing(v)} aria-label={`${v.name} has no categories yet. Add categories`}>No categories yet. Add some</button>
+                )}
                 <ApprovalPill status={v.approvalStatus} className="mt-1.5" />
                 <p className="mt-1.5 flex items-center gap-1 text-xs text-kraveo-ink3"><MapPin className="h-3 w-3 shrink-0" aria-hidden="true" /><span className="truncate">{v.address}</span></p>
               </div>
@@ -134,6 +141,10 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, orders = 
               </div>
             </div>
 
+            <button type="button" className="k-btn-ghost mt-3 w-full" onClick={() => setEditing(v)} aria-label={`Edit restaurant ${v.name}`}>
+              <Pencil className="h-4 w-4" aria-hidden="true" />Edit restaurant
+            </button>
+
             <VendorLocationEditor id={v.id} name={v.name} pin={v} onSaved={onLocationSaved} />
             {onCommissionSaved && <CommissionEditor id={v.id} name={v.name} commissionType={v.commissionType} commissionValue={v.commissionValue} onSaved={onCommissionSaved} onAuthError={onAuthError} />}
             {v.approvalStatus === 'APPROVED' && <VendorPayout vendor={v} onAuthError={onAuthError} />}
@@ -152,6 +163,7 @@ export const VendorManager: React.FC<VendorManagerProps> = ({ vendors, orders = 
         ))}
       </div>
 
+      {editing && <EditRestaurantDrawer key={editing.id} vendor={editing} onClose={() => setEditing(null)} onSaved={(saved) => onProfileSaved?.(saved)} onAuthError={onAuthError} />}
       <AddPartnerDrawer open={showDrawer} kind="VENDOR" onClose={() => setShowDrawer(false)} onCreated={() => onCreated?.()} />
     </div>
   );

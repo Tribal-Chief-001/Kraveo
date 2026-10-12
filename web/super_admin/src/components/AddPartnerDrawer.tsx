@@ -4,6 +4,9 @@ import { NewPartnerInput, PartnerKind } from '../types';
 import { apiService } from '../services/api';
 import { copyText, generatePassword } from '../lib/credentials';
 import { parseLocationInput } from '../lib/campus';
+import { MAX_RESTAURANT_CATEGORIES, restaurantChoices } from '../lib/categoryParse';
+import { useCategories } from '../lib/useCategories';
+import { CategoryMultiSelect } from './CategoryMultiSelect';
 import { Drawer } from './ui/Drawer';
 import { Field } from './ui/Field';
 import { useToast } from './ui/Toast';
@@ -18,6 +21,7 @@ interface Props {
 
 const VEHICLES = ['Bike', 'Scooter', 'Cycle', 'On foot'];
 const NO_PLATE = new Set(['Cycle', 'On foot']);
+/** Only used when the managed category list cannot be loaded (older server, no network): the old free-text field with these suggestions. */
 const CATEGORIES = ['North Indian', 'South Indian', 'Chinese', 'Rolls & Wraps', 'Tea & Snacks', 'Biryani', 'Fast food', 'Desserts'];
 
 type Form = Record<'name' | 'phone' | 'password' | 'restaurantName' | 'category' | 'address' | 'location' | 'fssaiNumber' | 'vehicleType' | 'vehicleRegNo' | 'emergencyPhone' | 'upiId', string>;
@@ -56,10 +60,13 @@ export const AddPartnerDrawer: React.FC<Props> = ({ open, kind, onClose, onCreat
   const [error, setError] = useState('');
   const [created, setCreated] = useState<{ phone: string; password: string; name: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [cuisineIds, setCuisineIds] = useState<string[]>([]);
+  const cats = useCategories(open && kind === 'VENDOR');
 
   useEffect(() => {
     if (open) {
       setForm({ ...EMPTY, password: generatePassword() });
+      setCuisineIds([]);
       setTouched(false); setError(''); setCreated(null); setCopied(false);
     }
   }, [open, kind]);
@@ -74,13 +81,15 @@ export const AddPartnerDrawer: React.FC<Props> = ({ open, kind, onClose, onCreat
     setTouched(true);
     if (Object.keys(errors).length > 0) return;
     setSaving(true); setError('');
+    // With the managed list: send the chosen ids (Docs/23). Without it (the list failed to load): the old free-text category, as before.
+    const categoryPart = !cats.error && cuisineIds.length > 0 ? { cuisineIds } : { category: (cats.error ? form.category.trim() : '') || 'Campus kitchen' };
     const input: NewPartnerInput = {
       role: kind,
       name: form.name.trim(),
       phone: digits(form.phone),
       password: form.password,
       ...(isVendor
-        ? { restaurantName: form.restaurantName.trim(), category: form.category.trim() || 'Campus kitchen', address: form.address.trim(), fssaiNumber: form.fssaiNumber.replace(/\s/g, ''), ...pinFrom(form.location) }
+        ? { restaurantName: form.restaurantName.trim(), ...categoryPart, address: form.address.trim(), fssaiNumber: form.fssaiNumber.replace(/\s/g, ''), ...pinFrom(form.location) }
         : { vehicleType: form.vehicleType, vehicleRegNo: form.vehicleRegNo.trim(), emergencyPhone: digits(form.emergencyPhone) || '', upiId: form.upiId.trim() }),
     };
     try {
@@ -136,10 +145,23 @@ export const AddPartnerDrawer: React.FC<Props> = ({ open, kind, onClose, onCreat
               <Field label="Restaurant name" htmlFor="ap-restaurant" required error={show('restaurantName')}>
                 <input id="ap-restaurant" className="k-input" value={form.restaurantName} onChange={set('restaurantName')} placeholder="Name as students know it" aria-invalid={Boolean(show('restaurantName'))} />
               </Field>
-              <Field label="Cuisine or category" htmlFor="ap-category">
-                <input id="ap-category" className="k-input" list="ap-categories" value={form.category} onChange={set('category')} placeholder="For example: North Indian" />
-                <datalist id="ap-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
-              </Field>
+              {cats.error ? (
+                <Field label="Cuisine or category" htmlFor="ap-category" hint="The category list could not be loaded, so type it for now. You can pick from the list later with Edit restaurant.">
+                  <input id="ap-category" className="k-input" list="ap-categories" value={form.category} onChange={set('category')} placeholder="For example: North Indian" />
+                  <datalist id="ap-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
+                </Field>
+              ) : (
+                <CategoryMultiSelect
+                  id="ap-cuisines"
+                  label="Categories"
+                  hint={`Optional. Pick up to ${MAX_RESTAURANT_CATEGORIES}; the first is the main one.`}
+                  value={cuisineIds}
+                  onChange={setCuisineIds}
+                  choices={restaurantChoices(cats.categories)}
+                  disabled={saving}
+                  onCreated={cats.add}
+                />
+              )}
               <Field label="Where is the kitchen?" htmlFor="ap-address" required error={show('address')}>
                 <input id="ap-address" className="k-input" value={form.address} onChange={set('address')} placeholder="Area or landmark near campus" aria-invalid={Boolean(show('address'))} />
               </Field>

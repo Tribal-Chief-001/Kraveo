@@ -1,10 +1,18 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, ImageOff, Plus, RefreshCw, SearchX, UtensilsCrossed } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileUp, ImageOff, Plus, RefreshCw, SearchX, UtensilsCrossed } from 'lucide-react';
 import { Vendor } from '../types';
 import { apiService } from '../services/api';
 import { CatalogDish, CatalogPage, PendingCounts } from '../lib/catalogParse';
 import { commissionLabel, rupees } from '../lib/pricing';
 import { CatalogDishDrawer } from './CatalogDishDrawer';
+import { BulkResultPanel, BulkSummary, CatalogBulkBar } from './CatalogBulkBar';
+import { ImportMenuWizard } from './ImportMenuWizard';
+import { ApiError } from '../services/api';
+import { BULK_ACTION_LABEL, BulkAction, bulkFailures } from '../lib/catalogBulkParse';
+import { dishChoices } from '../lib/categoryParse';
+import { useCategories } from '../lib/useCategories';
+import { errorText } from '../lib/errors';
+import { useConfirm } from './ui/ConfirmDialog';
 import { StateBadge } from './CatalogStateBadge';
 import { EmptyState } from './ui/EmptyState';
 import { SkeletonCard } from './ui/Skeleton';
@@ -73,9 +81,15 @@ const CustomerPrice: React.FC<{ dish: CatalogDish }> = ({ dish }) => (
 interface RowProps {
   dish: CatalogDish;
   busy: boolean;
+  selected: boolean;
+  onSelect: (id: string, checked: boolean) => void;
   onOpen: (dish: CatalogDish) => void;
   onToggle: (dish: CatalogDish) => void;
 }
+
+const SelectBox: React.FC<{ dish: CatalogDish; selected: boolean; onSelect: (id: string, checked: boolean) => void }> = ({ dish, selected, onSelect }) => (
+  <input type="checkbox" className="h-5 w-5 cursor-pointer accent-kraveo-g400" checked={selected} aria-label={`Select ${dish.name}`} onChange={(event) => onSelect(dish.id, event.target.checked)} />
+);
 
 const PriceCell: React.FC<{ dish: CatalogDish }> = ({ dish }) => (
   <>
@@ -84,9 +98,12 @@ const PriceCell: React.FC<{ dish: CatalogDish }> = ({ dish }) => (
   </>
 );
 
-const DishRow = memo<RowProps>(({ dish, busy, onOpen, onToggle }) => (
+const DishRow = memo<RowProps>(({ dish, busy, selected, onSelect, onOpen, onToggle }) => (
   <tr tabIndex={0} onClick={() => onOpen(dish)} onKeyDown={(event) => { if (event.key === 'Enter' && event.target === event.currentTarget) onOpen(dish); }}
-    className="cursor-pointer outline-none transition-colors hover:bg-kraveo-surface2/60 focus-visible:bg-kraveo-surface2/60" aria-label={`Open ${dish.name}`}>
+    className={`cursor-pointer outline-none transition-colors hover:bg-kraveo-surface2/60 focus-visible:bg-kraveo-surface2/60 ${selected ? 'bg-kraveo-g400/5' : ''}`} aria-label={`Open ${dish.name}`} aria-selected={selected}>
+    <td className="border-b border-kraveo-line/60 py-3 pl-4 pr-1" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+      <SelectBox dish={dish} selected={selected} onSelect={onSelect} />
+    </td>
     <td className="border-b border-kraveo-line/60 px-4 py-3">
       <div className="flex min-w-0 items-center gap-3">
         <Thumb url={dish.imageUrl} name={dish.name} />
@@ -109,8 +126,9 @@ const DishRow = memo<RowProps>(({ dish, busy, onOpen, onToggle }) => (
 ));
 DishRow.displayName = 'DishRow';
 
-const DishCard = memo<RowProps & { index: number }>(({ dish, busy, onOpen, onToggle, index }) => (
-  <div className="k-card k-reveal p-4" style={{ ['--i' as string]: Math.min(index, 10) }}>
+const DishCard = memo<RowProps & { index: number }>(({ dish, busy, selected, onSelect, onOpen, onToggle, index }) => (
+  <div className={`k-card k-reveal p-4 ${selected ? 'border-kraveo-g400/60' : ''}`} style={{ ['--i' as string]: Math.min(index, 10) }}>
+    <label className="mb-2 flex w-fit cursor-pointer items-center gap-2 text-xs font-semibold text-kraveo-ink3"><SelectBox dish={dish} selected={selected} onSelect={onSelect} />Select</label>
     <button type="button" className="flex w-full items-start gap-3 text-left" onClick={() => onOpen(dish)} aria-label={`Open ${dish.name}`}>
       <Thumb url={dish.imageUrl} name={dish.name} size="h-14 w-14" />
       <span className="min-w-0 flex-1">
@@ -145,8 +163,18 @@ const CatalogPanelBase: React.FC<Props> = ({ vendors, query, onClearQuery, onAut
   const [reloadKey, setReloadKey] = useState(0);
   const [togglingIds, setTogglingIds] = useState<ReadonlySet<string>>(() => new Set());
   const togglingRef = useRef<Set<string>>(new Set());
-  const [drawer, setDrawer] = useState<{ kind: 'edit'; dish: CatalogDish } | { kind: 'create' } | null>(null);
+  const [drawer, setDrawer] = useState<{ kind: 'edit'; dish: CatalogDish } | { kind: 'create' } | { kind: 'duplicate'; dish: CatalogDish } | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState('');
+  const [bulkResult, setBulkResult] = useState<BulkSummary | null>(null);
+  const bulkRef = useRef(false);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const seq = useRef(0);
+
+  // The managed category list is only fetched when something needs it (the dish drawer, or dishes being ticked for a bulk change).
+  const cats = useCategories(drawer !== null || selected.size > 0);
 
   const status = FILTERS.find((entry) => entry.id === filter)?.status ?? '';
   const filterKey = `${filter}|${vendorId}|${query.trim()}`;
@@ -173,6 +201,17 @@ const CatalogPanelBase: React.FC<Props> = ({ vendors, query, onClearQuery, onAut
     return () => window.clearTimeout(timer);
   }, [status, vendorId, query, page, reloadKey, onAuthError]);
 
+  // A different list is a different selection; after a reload only dishes still shown stay ticked.
+  useEffect(() => { setSelected((current) => (current.size === 0 ? current : new Set())); setBulkResult(null); setBulkError(''); }, [status, vendorId, query, page]);
+  useEffect(() => {
+    setSelected((current) => {
+      if (current.size === 0) return current;
+      const present = new Set(items.map((dish) => dish.id));
+      const next = new Set(Array.from(current).filter((id) => present.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [items]);
+
   const reload = useCallback(() => setReloadKey((key) => key + 1), []);
   const handleChanged = useCallback(() => { reload(); onPendingChanged(); }, [reload, onPendingChanged]);
   const closeDrawer = useCallback(() => setDrawer(null), []);
@@ -197,6 +236,54 @@ const CatalogPanelBase: React.FC<Props> = ({ vendors, query, onClearQuery, onAut
       setTogglingIds(new Set(togglingRef.current));
     }
   }, [onAuthError, toast]);
+
+  const onSelect = useCallback((id: string, checked: boolean) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  }, []);
+  const allOnPage = items.length > 0 && items.every((dish) => selected.has(dish.id));
+  const someOnPage = items.some((dish) => selected.has(dish.id));
+  const selectPage = (checked: boolean) => setSelected(checked ? new Set(items.map((dish) => dish.id)) : new Set());
+
+  const runBulk = useCallback(async (action: BulkAction, extra?: { categoryId: string }) => {
+    if (bulkRef.current) return;
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    const count = ids.length;
+    const noun = `${count} ${count === 1 ? 'dish' : 'dishes'}`;
+    if (action === 'DELETE') {
+      const ok = await confirm({ title: `Delete ${noun}?`, message: 'Customers will no longer see them. Old orders keep their copy, and you can restore them later.', confirmLabel: 'Delete', danger: true });
+      if (!ok) return;
+    } else if (action === 'APPROVE') {
+      const ok = await confirm({ title: `Approve ${noun}?`, message: 'They go live for customers at once. Any dish that cannot be approved is listed afterwards.', confirmLabel: 'Approve' });
+      if (!ok) return;
+    }
+    if (bulkRef.current) return;
+    bulkRef.current = true;
+    setBulkBusy(true); setBulkError(''); setBulkResult(null);
+    const names = new Map(items.map((dish) => [dish.id, dish.name]));
+    try {
+      const result = await apiService.bulkCatalog(ids, action, extra);
+      const failures = bulkFailures(result, (id) => names.get(id) ?? 'A dish');
+      const label = BULK_ACTION_LABEL[action];
+      setBulkResult({ action: label, message: result.message, ok: result.ok, failed: result.failed, failures });
+      // Failed dishes stay ticked so they can be fixed and retried; the rest are done.
+      setSelected(new Set(failures.map((f) => f.id)));
+      if (result.failed === 0) toast.success(label, `${result.ok} ${result.ok === 1 ? 'dish' : 'dishes'} done.`);
+      handleChanged();
+    } catch (failure) {
+      onAuthError(failure);
+      const suggestions = failure instanceof ApiError && Array.isArray(failure.extra?.suggestions) ? failure.extra!.suggestions.filter((n: unknown): n is string => typeof n === 'string').slice(0, 3) : [];
+      setBulkError(`${errorText(failure)}${suggestions.length ? ` Did you mean ${suggestions.join(' or ')}?` : ''} Nothing was changed.`);
+      if (failure instanceof ApiError && failure.code === 'CATEGORY_UNKNOWN') cats.reload();
+    } finally {
+      bulkRef.current = false;
+      setBulkBusy(false);
+    }
+  }, [selected, items, confirm, toast, handleChanged, onAuthError, cats]);
 
   const sortedVendors = useMemo(() => [...vendors].sort((a, b) => a.name.localeCompare(b.name)), [vendors]);
   const categories = useMemo(() => Array.from(new Set(items.map((dish) => dish.category).filter(Boolean))).sort(), [items]);
@@ -231,6 +318,7 @@ const CatalogPanelBase: React.FC<Props> = ({ vendors, query, onClearQuery, onAut
             {sortedVendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
           </select>
           <button type="button" className="k-icon-btn" aria-label="Reload dishes" title="Reload dishes" onClick={reload} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" /></button>
+          <button type="button" className="k-btn-ghost" onClick={() => setImportOpen(true)} disabled={vendors.length === 0} title={vendors.length === 0 ? 'No restaurants loaded yet' : 'Add many dishes from a CSV file'}><FileUp className="h-4 w-4" aria-hidden="true" />Import menu</button>
           <button type="button" className="k-btn-accent" onClick={() => setDrawer({ kind: 'create' })} disabled={vendors.length === 0} title={vendors.length === 0 ? 'No restaurants loaded yet' : undefined}><Plus className="h-4 w-4" aria-hidden="true" />Add dish</button>
         </div>
       </div>
@@ -255,23 +343,49 @@ const CatalogPanelBase: React.FC<Props> = ({ vendors, query, onClearQuery, onAut
         </div>
       )}
 
+      {bulkResult && <BulkResultPanel summary={bulkResult} onDismiss={() => setBulkResult(null)} />}
+
+      {items.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-kraveo-ink2">
+            <input type="checkbox" className="h-5 w-5 cursor-pointer accent-kraveo-g400" checked={allOnPage} ref={(el) => { if (el) el.indeterminate = someOnPage && !allOnPage; }} onChange={(event) => selectPage(event.target.checked)} />
+            Select all dishes on this page
+          </label>
+          {selected.size > 0 && <button type="button" className="k-btn-ghost !min-h-[36px] !px-3 text-xs" onClick={() => setSelected(new Set())}>Clear selection</button>}
+        </div>
+      )}
+
+      {selected.size > 0 && (
+        <CatalogBulkBar
+          count={selected.size}
+          busy={bulkBusy}
+          categories={dishChoices(cats.categories)}
+          categoriesLoading={cats.loading}
+          categoriesFailed={cats.error !== ''}
+          error={bulkError}
+          onRun={(action, extra) => void runBulk(action, extra)}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
+
       {items.length > 0 && (
         <div className={loading ? 'opacity-60 transition-opacity' : 'transition-opacity'} aria-busy={loading}>
           <div className="k-card hidden max-h-[calc(100vh-24rem)] overflow-auto xl:block">
-            <table className="w-full min-w-[980px] border-separate border-spacing-0 text-left text-sm">
+            <table className="w-full min-w-[1020px] border-separate border-spacing-0 text-left text-sm">
               <caption className="sr-only">Dishes</caption>
               <thead>
                 <tr className="sticky top-0 z-10 bg-kraveo-surface text-[11px] uppercase tracking-wide text-kraveo-ink3">
+                  <th scope="col" className="border-b border-kraveo-line py-3 pl-4 pr-1 font-bold"><span className="sr-only">Select</span></th>
                   {['Dish', 'Restaurant', 'Restaurant price', 'Commission', 'Customer price', 'Status', 'Available', ''].map((heading) => <th key={heading || 'open'} scope="col" className="border-b border-kraveo-line px-4 py-3 font-bold">{heading}{heading === '' && <span className="sr-only">Open</span>}</th>)}
                 </tr>
               </thead>
               <tbody>
-                {items.map((dish) => <DishRow key={dish.id} dish={dish} busy={togglingIds.has(dish.id)} onOpen={openDish} onToggle={toggleAvailability} />)}
+                {items.map((dish) => <DishRow key={dish.id} dish={dish} busy={togglingIds.has(dish.id)} selected={selected.has(dish.id)} onSelect={onSelect} onOpen={openDish} onToggle={toggleAvailability} />)}
               </tbody>
             </table>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:hidden">
-            {items.map((dish, index) => <DishCard key={dish.id} dish={dish} index={index} busy={togglingIds.has(dish.id)} onOpen={openDish} onToggle={toggleAvailability} />)}
+            {items.map((dish, index) => <DishCard key={dish.id} dish={dish} index={index} busy={togglingIds.has(dish.id)} selected={selected.has(dish.id)} onSelect={onSelect} onOpen={openDish} onToggle={toggleAvailability} />)}
           </div>
         </div>
       )}
@@ -287,16 +401,21 @@ const CatalogPanelBase: React.FC<Props> = ({ vendors, query, onClearQuery, onAut
 
       {drawer && (
         <CatalogDishDrawer
-          key={drawer.kind === 'edit' ? drawer.dish.id : 'new'}
+          key={drawer.kind === 'edit' ? drawer.dish.id : drawer.kind === 'duplicate' ? `copy-${drawer.dish.id}` : 'new'}
           open
           item={drawer.kind === 'edit' ? drawer.dish : null}
+          prefill={drawer.kind === 'duplicate' ? drawer.dish : null}
           vendors={sortedVendors}
           categories={categories}
+          categoryState={cats}
+          onDuplicate={(dish) => setDrawer({ kind: 'duplicate', dish })}
           onClose={closeDrawer}
           onChanged={handleChanged}
           onAuthError={onAuthError}
         />
       )}
+      {importOpen && <ImportMenuWizard vendors={sortedVendors} initialVendorId={vendorId} onClose={() => setImportOpen(false)} onImported={handleChanged} onAuthError={onAuthError} />}
+      {confirmDialog}
     </div>
   );
 };

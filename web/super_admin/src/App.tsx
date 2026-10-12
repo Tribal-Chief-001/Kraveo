@@ -10,6 +10,7 @@ import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { ApplicationsPanel } from './components/ApplicationsPanel';
 import { CustomersPanel } from './components/CustomersPanel';
 import { CatalogPanel } from './components/CatalogPanel';
+import { CategoriesPanel } from './components/CategoriesPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { FinancePanel } from './components/FinancePanel';
 import type { PendingCounts, VendorCommission } from './lib/catalogParse';
@@ -561,6 +562,14 @@ export const App: React.FC = () => {
     setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, lat: saved.lat, lng: saved.lng, hasLocation: saved.hasLocation, locationSource: saved.locationSource, locationSetAt: saved.locationSetAt, locationAccuracyM: saved.locationAccuracyM } : vendor));
   }, []);
 
+  // Docs/23: a restaurant's profile was saved. Show the fresh admin view at once (keeping the numbers the profile answer does not carry), then reload the list.
+  const handleVendorProfileSaved = useCallback((saved: Vendor) => {
+    setVendors((current) => current.map((vendor) => (vendor.id === saved.id
+      ? { ...vendor, ...saved, activeOrdersCount: vendor.activeOrdersCount, menuItems: saved.menuItems ?? vendor.menuItems, isAcceptingOrders: vendor.isAcceptingOrders }
+      : vendor)));
+    void fetchBackendData();
+  }, [fetchBackendData]);
+
   const handleVendorCommissionSaved = useCallback((vendorId: string, commission: VendorCommission) => {
     setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, commissionType: commission.type, commissionValue: commission.value } : vendor));
   }, []);
@@ -675,9 +684,10 @@ export const App: React.FC = () => {
               />
             )}
             {activeTab === 'applications' && <ApplicationsPanel refreshKey={applicationsKey} query={searchQuery} onChanged={fetchBackendData} onAuthError={handleSessionError} onLocationSaved={handleVendorLocationSaved} />}
-            {activeTab === 'vendors' && <VendorManager vendors={vendors} orders={orders} busyVendorIds={busyVendorIds} onToggleVendor={handleToggleVendor} onLocationSaved={handleVendorLocationSaved} onCommissionSaved={handleVendorCommissionSaved} onAuthError={handleSessionError} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'vendors' && <VendorManager vendors={vendors} orders={orders} busyVendorIds={busyVendorIds} onToggleVendor={handleToggleVendor} onLocationSaved={handleVendorLocationSaved} onCommissionSaved={handleVendorCommissionSaved} onProfileSaved={handleVendorProfileSaved} onAuthError={handleSessionError} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'drivers' && <DriverManager drivers={driverPartners} orders={orders} now={now} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'customers' && <CustomersPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} />}
+            {activeTab === 'categories' && <CategoriesPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} onChanged={fetchBackendData} />}
             {activeTab === 'catalog' && <CatalogPanel vendors={vendors} query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} pendingCounts={pendingDishes} onPendingChanged={refreshPendingDishes} />}
             {activeTab === 'finance' && <FinancePanel vendors={vendors} driverPartners={driverPartners} pendingSettlements={pendingSettlements} onSettlementsChanged={refreshPendingSettlements} onAuthError={handleSessionError} />}
             {activeTab === 'settings' && <SettingsPanel onAuthError={handleSessionError} />}

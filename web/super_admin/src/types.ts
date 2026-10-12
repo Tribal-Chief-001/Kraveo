@@ -1,7 +1,7 @@
 import { readPin } from './lib/vendorLocation';
 import { OrderGroupInfo, parseGroupInfo } from './lib/orderGroups';
 
-export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'drivers' | 'customers' | 'analytics' | 'catalog' | 'finance' | 'settings';
+export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'categories' | 'drivers' | 'customers' | 'analytics' | 'catalog' | 'finance' | 'settings';
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED';
 export type PartnerKind = 'VENDOR' | 'DRIVER';
@@ -126,6 +126,12 @@ export interface Vendor {
   activeOrdersCount: number;
   menuItems?: MenuItem[];
   approvalStatus?: ApprovalStatus;
+  /** Profile fields the admin can edit (Docs/23). `undefined` = an older server did not send them. */
+  bannerImage?: string;
+  eta?: string;
+  fssaiNumber?: string | null;
+  /** The restaurant's categories in order, first = main. `[]` = none yet (e.g. self sign-up); `undefined` = older server. */
+  cuisines?: VendorCuisine[];
   /**
    * The restaurant's own commission (Docs/21). `undefined` = the server did not send the field (unknown),
    * `null` = the restaurant inherits the global default.
@@ -133,6 +139,8 @@ export interface Vendor {
   commissionType?: 'PERCENT' | 'FLAT' | null;
   commissionValue?: number | null;
 }
+
+export interface VendorCuisine { id: string; name: string; icon: string }
 
 export interface MenuItem {
   id: string;
@@ -395,6 +403,10 @@ export interface AttentionEntry {
   groupId?: string | null;
 }
 
+const normalizeCuisine = (raw: any): VendorCuisine | null => (raw && typeof raw === 'object' && (typeof raw.id === 'string' || typeof raw.id === 'number')
+  ? { id: String(raw.id), name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : 'Category', icon: typeof raw.icon === 'string' && raw.icon ? raw.icon : 'restaurant' }
+  : null);
+
 export const normalizeVendor = (raw: any): Vendor => ({
   id: String(raw?.id || ''),
   userId: raw?.userId,
@@ -410,6 +422,10 @@ export const normalizeVendor = (raw: any): Vendor => ({
   activeOrdersCount: asNumber(raw?.activeOrdersCount ?? raw?._count?.orders),
   menuItems: Array.isArray(raw?.menuItems) ? raw.menuItems : undefined,
   approvalStatus: raw?.approvalStatus,
+  ...(typeof raw?.bannerImage === 'string' && raw.bannerImage ? { bannerImage: raw.bannerImage } : {}),
+  ...(typeof raw?.eta === 'string' && raw.eta ? { eta: raw.eta } : {}),
+  ...(raw && typeof raw === 'object' && 'fssaiNumber' in raw ? { fssaiNumber: typeof raw.fssaiNumber === 'string' && raw.fssaiNumber.trim() ? raw.fssaiNumber.trim() : null } : {}),
+  ...(Array.isArray(raw?.cuisines) ? { cuisines: raw.cuisines.map(normalizeCuisine).filter((c: VendorCuisine | null): c is VendorCuisine => c !== null) } : {}),
   ...(raw && typeof raw === 'object' && 'commissionType' in raw
     ? {
       commissionType: raw.commissionType === 'PERCENT' || raw.commissionType === 'FLAT' ? raw.commissionType : null,
@@ -519,6 +535,8 @@ export interface NewPartnerInput {
   category?: string;
   address?: string;
   fssaiNumber?: string;
+  /** Vendor only: ordered ids of managed categories (0..6). Replaces the free-text `category` when sent. */
+  cuisineIds?: string[];
   vehicleType?: string;
   vehicleRegNo?: string;
   emergencyPhone?: string;

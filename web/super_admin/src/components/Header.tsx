@@ -22,6 +22,7 @@ const TITLES: Record<TabType, { title: string; subtitle: string; searchHint: str
   attention: { title: 'Needs attention', subtitle: 'Orders and payments a human has to fix', searchHint: 'Search by order, restaurant, student or problem' },
   applications: { title: 'Applications', subtitle: 'Restaurants and riders waiting for your approval', searchHint: 'Search by name, phone, location or plate' },
   vendors: { title: 'Vendors', subtitle: 'Dhaba network and availability', searchHint: 'Search vendors by name, category or address' },
+  categories: { title: 'Categories', subtitle: 'One list for restaurant cuisines and dish categories', searchHint: 'Search categories by name' },
   drivers: { title: 'Drivers', subtitle: 'Runner partners on campus', searchHint: 'Search runners by name, reg no or code' },
   customers: { title: 'Customers', subtitle: 'Everyone who signed in, with their order history', searchHint: 'Search name, email, phone or hostel' },
   catalog: { title: 'Catalog', subtitle: 'Approve dishes and set what customers pay', searchHint: 'Search dishes by name, category or restaurant' },
