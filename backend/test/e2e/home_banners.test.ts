@@ -13,7 +13,9 @@ import { prisma, seedTestDatabase, cleanTestOrders, cleanTestUsers } from '../ha
 import { getStudentToken, getVendorToken, getDriverToken, getAdminToken, getAuthHeader } from '../harness/auth';
 import { __resetRateLimits } from '../../src/middleware/rateLimit';
 import { __resetUploadUsage } from '../../src/routes/uploads';
-import { __setBannerClock, invalidatePublicBanners, MAX_BANNERS } from '../../src/services/banners';
+import {
+  __setBannerClock, invalidatePublicBanners, MAX_BANNERS, flushBannerEvents, shutdownBannerEvents, recordBannerEvents, MAX_PENDING_VIEWS, MAX_PENDING_CLICKS,
+} from '../../src/services/banners';
 import { makePng } from '../harness/images';
 
 jest.setTimeout(120_000);
@@ -47,7 +49,7 @@ describe('Home banners', () => {
   const adminList = async () => (await request.get('/api/admin/banners').set(H(tAdmin))).body.data as any[];
   const audits = (action: string, targetId?: string) => prisma.adminAuditLog.findMany({ where: { action, ...(targetId ? { targetId } : {}) } });
   const events = (body: unknown) => request.post('/api/banners/events').send(body as any);
-  const counts = async (id: string) => prisma.homeBanner.findUniqueOrThrow({ where: { id }, select: { viewCount: true, clickCount: true } });
+  const counts = async (id: string) => { await flushBannerEvents(); return prisma.homeBanner.findUniqueOrThrow({ where: { id }, select: { viewCount: true, clickCount: true } }); };
   const keep = (name: string, body: unknown) => { samples[name] = body; };
 
   beforeAll(async () => {
@@ -63,7 +65,8 @@ describe('Home banners', () => {
 
   beforeEach(async () => {
     for (const k of Object.keys(process.env)) if (k.startsWith('RL_')) delete process.env[k];
-    delete process.env.BANNERS_CACHE_TTL_MS;
+    for (const k of ['BANNERS_CACHE_TTL_MS', 'BANNERS_ENABLED', 'BANNER_LINK_HOSTS', 'BANNER_IMAGE_HOSTS', 'BANNER_EVENTS_FLUSH_MS']) delete process.env[k];
+    await shutdownBannerEvents();
     __resetRateLimits();
     __resetUploadUsage();
     __setBannerClock(null);
@@ -74,7 +77,8 @@ describe('Home banners', () => {
 
   afterAll(async () => {
     for (const k of Object.keys(process.env)) if (k.startsWith('RL_')) delete process.env[k];
-    delete process.env.BANNERS_CACHE_TTL_MS;
+    for (const k of ['BANNERS_CACHE_TTL_MS', 'BANNERS_ENABLED', 'BANNER_LINK_HOSTS', 'BANNER_IMAGE_HOSTS', 'BANNER_EVENTS_FLUSH_MS']) delete process.env[k];
+    await shutdownBannerEvents();
     delete process.env.UPLOAD_DIR;
     delete process.env.PUBLIC_BASE_URL;
     __setBannerClock(null);
@@ -237,6 +241,7 @@ describe('Home banners', () => {
       const rows = [];
       for (let i = 0; i < 12; i += 1) rows.push(await raw({ title: `R${i}`, sortOrder: i }));
       await events({ views: rows.map((r) => r.id), clicks: rows.map((r) => r.id) });
+      await flushBannerEvents();
       const after = await prisma.homeBanner.findMany({ where: { id: { in: rows.map((r) => r.id) } }, orderBy: { sortOrder: 'asc' } });
       expect(after.filter((r) => r.viewCount === 1)).toHaveLength(10);
       expect(after.filter((r) => r.clickCount === 1)).toHaveLength(5);
@@ -273,12 +278,78 @@ describe('Home banners', () => {
       expect(codes).toEqual([200, 200, 200, 429, 429]);
     });
 
-    test('a database failure is swallowed: the client still gets success', async () => {
-      jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    test('the request never waits for the counter write: it answers while the database write hangs, and the counts land at the next flush', async () => {
       const a = await mk();
-      jest.spyOn(prisma, '$executeRaw').mockRejectedValue(new Error('db down'));
-      const r = await events({ views: [a.id] });
+      await events({ views: [a.id] }); // warm start: the id check has run
+      const spy = jest.spyOn(prisma, '$executeRaw').mockImplementation((() => new Promise(() => undefined)) as any); // a write that never finishes
+      const r = await events({ views: [a.id], clicks: [a.id] });
       expect([r.status, r.body]).toEqual([200, { success: true }]);
+      expect(spy).not.toHaveBeenCalled(); // nothing is written in the request path
+      spy.mockRestore();
+      expect(await counts(a.id)).toEqual({ viewCount: 2, clickCount: 1 });
+    });
+
+    test('a timer flushes by itself every BANNER_EVENTS_FLUSH_MS (approximate counters)', async () => {
+      process.env.BANNER_EVENTS_FLUSH_MS = '100';
+      await shutdownBannerEvents(); // drop a timer started earlier so the new interval is read
+      const a = await mk();
+      await events({ views: [a.id] });
+      expect((await prisma.homeBanner.findUniqueOrThrow({ where: { id: a.id } })).viewCount).toBe(0);
+      await new Promise((r) => setTimeout(r, 450));
+      expect((await prisma.homeBanner.findUniqueOrThrow({ where: { id: a.id } })).viewCount).toBe(1);
+    });
+
+    test('shutdown flush writes the pending counts and stops the timer', async () => {
+      const a = await mk();
+      await events({ views: [a.id, a.id], clicks: [a.id] });
+      await events({ views: [a.id] });
+      expect((await prisma.homeBanner.findUniqueOrThrow({ where: { id: a.id } })).viewCount).toBe(0); // still in memory
+      await shutdownBannerEvents();
+      expect(await prisma.homeBanner.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ viewCount: 2, clickCount: 1 });
+    });
+
+    test('per-banner caps per flush interval: at most 2000 views and 500 clicks are accepted, the rest is dropped', async () => {
+      const a = await mk();
+      const bumpForTest = recordBannerEvents;
+      for (let i = 0; i < 5; i += 1) await Promise.all(Array.from({ length: 450 }, () => bumpForTest({ views: [a.id], clicks: [a.id] })));
+      const c = await counts(a.id);
+      expect(c).toEqual({ viewCount: MAX_PENDING_VIEWS, clickCount: MAX_PENDING_CLICKS });
+      await bumpForTest({ views: [a.id], clicks: [a.id] }); // a new interval starts after the flush
+      expect(await counts(a.id)).toEqual({ viewCount: MAX_PENDING_VIEWS + 1, clickCount: MAX_PENDING_CLICKS + 1 });
+    });
+
+    test('a failed flush keeps the counts and retries; it never throws, never crashes, and nothing is counted twice', async () => {
+      const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      const a = await mk();
+      const b = await mk({ title: 'Second banner' });
+      await events({ views: [a.id, b.id], clicks: [a.id] });
+      const spy = jest.spyOn(prisma, '$executeRaw').mockRejectedValue(new Error('db down'));
+      await expect(flushBannerEvents()).resolves.toBeUndefined();
+      await expect(flushBannerEvents()).resolves.toBeUndefined();
+      expect(err).toHaveBeenCalled();
+      spy.mockRestore();
+      await events({ views: [a.id] }); // new counts arrive while the old ones wait
+      expect(await counts(a.id)).toEqual({ viewCount: 2, clickCount: 1 });
+      expect(await counts(b.id)).toEqual({ viewCount: 1, clickCount: 0 });
+      await flushBannerEvents();
+      expect(await counts(a.id)).toEqual({ viewCount: 2, clickCount: 1 });
+    });
+
+    test('a failure in the middle of a flush writes the banners before it once and keeps only the rest', async () => {
+      jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      const a = await mk({ title: 'First banner' });
+      const b = await mk({ title: 'Second banner' });
+      const [lo, hi] = [a.id, b.id].sort();
+      await events({ views: [a.id, b.id] });
+      const real = prisma.$executeRaw.bind(prisma);
+      let n = 0;
+      jest.spyOn(prisma, '$executeRaw').mockImplementation(((...args: any[]) => (++n === 2 ? Promise.reject(new Error('boom')) : (real as any)(...args))) as any);
+      await flushBannerEvents();
+      jest.restoreAllMocks();
+      expect((await prisma.homeBanner.findUniqueOrThrow({ where: { id: lo } })).viewCount).toBe(1);
+      expect((await prisma.homeBanner.findUniqueOrThrow({ where: { id: hi } })).viewCount).toBe(0);
+      await flushBannerEvents();
+      expect([(await counts(lo)).viewCount, (await counts(hi)).viewCount]).toEqual([1, 1]);
     });
   });
 
@@ -506,8 +577,8 @@ describe('Home banners', () => {
       const r = await post('/api/admin/banners', valid());
       expect(r.status).toBe(201);
       expect(Object.keys(r.body).sort()).toEqual(['data', 'message', 'success']);
-      expect(Object.keys(r.body.data).sort()).toEqual(['clickCount', 'createdAt', 'createdByUserId', 'ctaLabel', 'ctr', 'endsAt', 'id', 'imageUrl', 'isActive', 'linkUrl', 'placement', 'sortOrder', 'startsAt', 'status', 'subtitle', 'theme', 'title', 'updatedAt', 'viewCount']);
-      expect(r.body.data).toMatchObject({ title: 'Diwali Dhamaka', subtitle: null, linkUrl: null, ctaLabel: null, theme: 'DARK', placement: 'HOME', isActive: true, startsAt: null, endsAt: null, sortOrder: 10, viewCount: 0, clickCount: 0, ctr: null, status: 'LIVE', createdByUserId: 'usr-5' });
+      expect(Object.keys(r.body.data).sort()).toEqual(['clickCount', 'createdAt', 'createdByUserId', 'ctaLabel', 'ctr', 'endsAt', 'id', 'imageUrl', 'isActive', 'linkUrl', 'placement', 'rank', 'shown', 'sortOrder', 'startsAt', 'status', 'subtitle', 'theme', 'title', 'updatedAt', 'viewCount']);
+      expect(r.body.data).toMatchObject({ title: 'Diwali Dhamaka', subtitle: null, linkUrl: null, ctaLabel: null, theme: 'DARK', placement: 'HOME', isActive: true, startsAt: null, endsAt: null, sortOrder: 10, viewCount: 0, clickCount: 0, ctr: null, status: 'LIVE', rank: 1, shown: true, createdByUserId: 'usr-5' });
       expect((await mk()).sortOrder).toBe(20);
       keep('create_response', r.body);
     });
@@ -683,7 +754,7 @@ describe('Home banners', () => {
 
   // =========================================================================================
   describe('audit, rate limits, roles', () => {
-    test('every admin write leaves one audit row with a readable summary (no links or secrets in it)', async () => {
+    test('every admin write leaves one audit row: WHO first, then the new link and image (and the old link on an edit); prose last; <= 300 characters', async () => {
       const a = await mk({ title: 'Audited', linkUrl: 'https://example.com/?token=secret123' });
       await patch(`/api/admin/banners/${a.id}`, { title: 'Audited 2', linkUrl: 'https://example.com/?token=secret456', isActive: false });
       const b = (await post(`/api/admin/banners/${a.id}/duplicate`)).body.data;
@@ -692,10 +763,42 @@ describe('Home banners', () => {
       const rows = await prisma.adminAuditLog.findMany({ where: { action: { startsWith: 'BANNER_' } }, orderBy: { createdAt: 'asc' } });
       expect(rows.map((r) => r.action)).toEqual(['BANNER_CREATED', 'BANNER_EDITED', 'BANNER_DUPLICATED', 'BANNER_REORDERED', 'BANNER_DELETED']);
       expect(rows.every((r) => r.targetType === 'BANNER')).toBe(true);
-      expect(rows.map((r) => r.summary).join('\n')).not.toMatch(/secret/);
+      expect(rows.every((r) => r.summary.includes('admin usr-5 '))).toBe(true);
+      expect(rows[0].summary).toContain('link https://example.com/?token=secret123');
+      expect(rows[0].summary).toContain(`image ${IMG}`);
+      expect(rows[1].summary).toContain('link https://example.com/?token=secret456');
+      expect(rows[1].summary).toContain('was https://example.com/?token=secret123');
+      expect(rows[1].summary).toContain(`image ${IMG}`);
       expect(rows[1].summary).toContain('"Audited" -> "Audited 2"');
       expect(rows[1].summary).toContain('isActive true -> false');
+      expect(rows[2].summary).toContain('link https://example.com/?token=secret456');
+      expect(rows[4].summary).toContain('link https://example.com/?token=secret456');
       expect(rows.every((r) => r.summary.length <= 300)).toBe(true);
+    });
+
+    test('audit with 500-character addresses and a real uuid actor: still <= 300, the actor and the START of every address survive, prose is what gets cut', async () => {
+      const long = (host: string) => `https://${host}/${'p'.repeat(470)}`;
+      const uuid = '11111111-2222-4333-8444-555555555555';
+      await prisma.user.upsert({ where: { id: uuid }, update: {}, create: { id: uuid, name: 'Long Admin', phone: '+91 9999870001', role: 'ADMIN' } });
+      const t = getAdminToken(uuid, '+91 9999870001');
+      try {
+        const r = await post('/api/admin/banners', { title: 'Long', imageUrl: long('img.example.com'), linkUrl: long('link.example.com') }, t);
+        expect(r.status).toBe(201);
+        const e = await patch(`/api/admin/banners/${r.body.data.id}`, { linkUrl: long('link2.example.com'), title: 'Long 2' }, t);
+        expect(e.status).toBe(200);
+        const rows = await prisma.adminAuditLog.findMany({ where: { action: { in: ['BANNER_CREATED', 'BANNER_EDITED'] } }, orderBy: { createdAt: 'asc' } });
+        for (const row of rows) {
+          expect(row.summary.length).toBeLessThanOrEqual(300);
+          expect(row.summary).toContain(`admin ${uuid} `);
+          expect(row.summary).toContain('https://img.example.com/pppp');
+        }
+        expect(rows[0].summary).toContain('https://link.example.com/pppp');
+        expect(rows[1].summary).toContain('link https://link2.example.com/pppp');
+        expect(rows[1].summary).toContain('was https://link.example.com/pppp');
+        expect(rows[1].summary).toContain('...');
+      } finally {
+        await prisma.user.delete({ where: { id: uuid } }).catch(() => undefined);
+      }
     });
 
     test('admin writes are rate limited per admin; reads are not', async () => {
@@ -725,6 +828,98 @@ describe('Home banners', () => {
       const row = await prisma.homeBanner.findUniqueOrThrow({ where: { id: a.id } });
       expect(row.title).toBe('Diwali Dhamaka');
       expect(await prisma.homeBanner.count()).toBe(1);
+    });
+  });
+
+  // =========================================================================================
+  describe('operator switches (env) and live rank', () => {
+    test('BANNER_LINK_HOSTS: unset = any https host; set = exact host or subdomain only, message names the hosts; edits that do not touch the link are never blocked', async () => {
+      expect((await post('/api/admin/banners', valid({ linkUrl: 'https://anything.example.org/x' }))).status).toBe(201);
+      process.env.BANNER_LINK_HOSTS = 'play.google.com, forms.gle,docs.google.com,kraveo.site';
+      for (const ok of ['https://play.google.com/store/apps/details?id=x', 'https://forms.gle/abc', 'https://docs.google.com/forms/d/e/1/viewform', 'https://kraveo.site/', 'https://www.kraveo.site/offers', 'https://FORMS.GLE/x']) {
+        expect([ok, (await post('/api/admin/banners', valid({ linkUrl: ok }))).status]).toEqual([ok, 201]);
+      }
+      for (const no of ['https://evil.example.com/', 'https://notkraveo.site/', 'https://kraveo.site.evil.com/', 'https://evilplay.google.com.evil.io/', 'https://google.com/']) {
+        const r = await post('/api/admin/banners', valid({ linkUrl: no }));
+        expect([no, r.status, r.body.code, r.body.field]).toEqual([no, 400, 'BANNER_LINK_INVALID', 'linkUrl']);
+        expect(r.body.message).toContain('play.google.com, forms.gle, docs.google.com, kraveo.site');
+        const p = await patch(`/api/admin/banners/${(await adminList())[0].id}`, { linkUrl: no });
+        expect([no, p.status, p.body.code]).toEqual([no, 400, 'BANNER_LINK_INVALID']);
+      }
+      // the first banner keeps its (now disallowed) host; fixing its title is fine, clearing the link is fine
+      const first = (await adminList())[0];
+      expect(first.linkUrl).toBe('https://anything.example.org/x');
+      expect((await patch(`/api/admin/banners/${first.id}`, { title: 'Still editable', linkUrl: 'https://anything.example.org/x' })).status).toBe(200);
+      expect((await patch(`/api/admin/banners/${first.id}`, { linkUrl: null })).status).toBe(200);
+      // no link at all is not a host violation
+      expect((await post('/api/admin/banners', valid())).status).toBe(201);
+      // other bad schemes keep their own message
+      expect((await post('/api/admin/banners', valid({ linkUrl: 'http://forms.gle/x' }))).body.code).toBe('BANNER_LINK_INVALID');
+    });
+
+    test('BANNER_IMAGE_HOSTS: same rule for imageUrl (code BANNER_IMAGE_INVALID); our own uploads host can be listed', async () => {
+      process.env.BANNER_IMAGE_HOSTS = 'api.kraveo.site,.cdn.example.com';
+      expect((await post('/api/admin/banners', valid())).status).toBe(201); // IMG is on api.kraveo.site
+      expect((await post('/api/admin/banners', valid({ imageUrl: 'https://img.cdn.example.com/a.jpg' }))).status).toBe(201);
+      for (const no of ['https://tracker.evil.com/pixel.png', 'https://api.kraveo.site.evil.com/a.jpg', 'https://cdn.example.com.evil.io/a.jpg']) {
+        const r = await post('/api/admin/banners', valid({ imageUrl: no }));
+        expect([no, r.status, r.body.code, r.body.field]).toEqual([no, 400, 'BANNER_IMAGE_INVALID', 'imageUrl']);
+        expect(r.body.message).toContain('api.kraveo.site, cdn.example.com');
+      }
+      const a = (await adminList())[0];
+      const p = await patch(`/api/admin/banners/${a.id}`, { imageUrl: 'https://tracker.evil.com/pixel.png' });
+      expect([p.status, p.body.code]).toEqual([400, 'BANNER_IMAGE_INVALID']);
+      expect((await patch(`/api/admin/banners/${a.id}`, { title: 'Fine title' })).status).toBe(200);
+      delete process.env.BANNER_IMAGE_HOSTS;
+      expect((await post('/api/admin/banners', valid({ imageUrl: 'https://tracker.evil.com/pixel.png' }))).status).toBe(201);
+    });
+
+    test('BANNERS_ENABLED=false hides everything at once (also with a warm cache); true / unset / other values show it again; the admin list is unaffected', async () => {
+      process.env.BANNERS_CACHE_TTL_MS = '30000';
+      invalidatePublicBanners();
+      await mk({ title: 'Visible' });
+      expect(await pub()).toHaveLength(1);
+      for (const off of ['false', 'FALSE', ' 0 ', 'no', 'off']) {
+        process.env.BANNERS_ENABLED = off;
+        const r = await request.get('/api/banners');
+        expect([off, r.status, r.body]).toEqual([off, 200, { success: true, data: [] }]);
+        expect(r.headers['cache-control']).toBe('public, max-age=30');
+      }
+      expect((await adminList())).toHaveLength(1);
+      process.env.BANNERS_ENABLED = 'false';
+      await mk({ title: 'Created while off' }); // writes still work
+      expect(await pub()).toEqual([]);
+      for (const on of ['true', '1', '', 'yes', 'whatever']) {
+        process.env.BANNERS_ENABLED = on;
+        expect([on, (await pub()).length]).toEqual([on, 2]);
+      }
+      delete process.env.BANNERS_ENABLED;
+      expect(await pub()).toHaveLength(2);
+    });
+
+    test('rank / shown: position among the LIVE banners, shown = rank <= 10; off, scheduled and expired rows have rank null and shown false', async () => {
+      __setBannerClock(() => NOW);
+      for (let i = 1; i <= 12; i += 1) await mk({ title: `Live ${String(i).padStart(2, '0')}` });
+      const off = await mk({ title: 'Off one', isActive: false });
+      const sched = await mk({ title: 'Scheduled one', startsAt: at(5) });
+      const rows = await adminList();
+      const live = rows.filter((r) => r.status === 'LIVE');
+      expect(live.map((r) => r.rank)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(live.map((r) => r.shown)).toEqual([...Array(10).fill(true), false, false]);
+      for (const id of [off.id, sched.id]) expect(rows.find((r) => r.id === id)).toMatchObject({ rank: null, shown: false });
+      expect((await pub())).toHaveLength(10); // the public list agrees
+      expect((await pub()).map((x) => x.title)).toEqual(live.slice(0, 10).map((r) => r.title));
+      // a single-row answer is ranked against the others too
+      const p = await patch(`/api/admin/banners/${rows.find((r) => r.title === 'Live 11')!.id}`, { title: 'Eleventh' });
+      expect(p.body.data).toMatchObject({ rank: 11, shown: false, status: 'LIVE' });
+      const on = await patch(`/api/admin/banners/${off.id}`, { isActive: true });
+      expect(on.body.data).toMatchObject({ rank: 13, shown: false });
+      // reorder moves the cut line
+      const ids = (await adminList()).map((r) => r.id);
+      const r = await post('/api/admin/banners/reorder', { ids: [ids[11], ...ids.slice(0, 11)] });
+      expect(r.body.data[0]).toMatchObject({ title: 'Live 12', rank: 1, shown: true });
+      expect(r.body.data.find((x: any) => x.title === 'Eleventh')).toMatchObject({ rank: 12, shown: false });
+      keep('admin_list_ranked', r.body.data.slice(10, 12));
     });
   });
 

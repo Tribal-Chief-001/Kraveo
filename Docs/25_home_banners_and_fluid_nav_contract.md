@@ -59,7 +59,9 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
 - **Expired rule**: an ACTIVE banner may not end in the past when this request turns it on (`isActive:true`) or sets `endsAt`; so an OFF banner with a past end needs a new `endsAt` (or `null`) in the same patch to be switched on. A request that touches neither (for example fixing a title of a banner that expired by itself) is allowed. Create follows the same rule.
 - **`ctr`** is a percentage with one decimal (`12.5` = 12.5 %), `null` while `viewCount` is 0; it can pass 100 (clicks are counted without a matching view).
 - **status**: `OFF` (switch off, whatever the dates) > `EXPIRED` (`endsAt <= now`) > `SCHEDULED` (`startsAt > now`) > `LIVE`. Start is inclusive, end exclusive. The public list uses the same clock on every request, even when its 30 s cache is warm.
-- **Events**: ids that are listed twice count once; at most 10 views and 5 clicks per call (extra ids are ignored); rows are updated in ascending id order (no deadlocks); only `isActive` banners count (a scheduled or expired but switched-on banner still counts). Garbage in the body, wrong types and unknown ids all answer `200 {"success":true}`; a database error is logged and also answers 200. Only transport problems answer an error: 413 (> 2 KB, refused before reading), 400 (broken JSON), 415 (compressed body), 429.
+- **Events (counters are approximate)**: the request only adds to an in-memory table and answers at once (no database write, no row lock in the request). The table is written every 5 s (`BANNER_EVENTS_FLUSH_MS`, default 5000), on SIGTERM / SIGINT and by tests (`flushBannerEvents()`), with ONE `UPDATE` per banner using the summed numbers, rows in ascending id order. So `viewCount` / `clickCount` / `ctr` lag by up to ~5 s and a hard crash can lose one interval of counts; a failed write is logged, kept and retried at the next interval (never lost, never counted twice, never crashes the process). Per banner and interval at most 2000 views and 500 clicks are accepted (more are dropped); per IP the existing 300 calls/min limit applies (each call counts at most 10 views + 5 clicks). Ids listed twice in one call count once; at most 10 views and 5 clicks per call; only ids of switched-on banners are counted (checked against a 30 s in-memory id set, dropped by every banner write). Garbage in the body, wrong types and unknown ids all answer `200 {"success":true}`. Only transport problems answer an error: 413 (> 2 KB, refused before reading), 400 (broken JSON), 415 (compressed body), 429.
+- **Audit** (`AdminAuditLog.summary`, table unchanged, <= 300 chars): `admin <userId> created|edited|deleted|duplicated banner | link <new url> | [was <old link> (edits that change the link)] | image <url> | <title and changes>`; reorder: `admin <userId> reordered the banners: n of m changed position`. Addresses are shown up to 120 characters each; when several do not fit together the long ones share the space (the prose at the end is what gets cut). `none` = no link.
+- **Operator switches (environment, all optional, read on every request; unset = behaviour unchanged)**: `BANNER_LINK_HOSTS` and `BANNER_IMAGE_HOSTS` (comma separated, exact host or any subdomain, e.g. `play.google.com,forms.gle,docs.google.com,kraveo.site`) restrict `linkUrl` / `imageUrl` on create and patch with `BANNER_LINK_INVALID` / `BANNER_IMAGE_INVALID` and a message naming the allowed hosts; a value that an edit does not change is never re-checked, so old rows stay editable. `BANNERS_ENABLED=false` (also `0`, `no`, `off`) makes `GET /api/banners` answer an empty list at once (admin pages and writes keep working); the HTTP cache header stays `max-age=30`, and an app that is already open keeps what it has until its next refresh.
 - **Delete is idempotent**: second delete answers 200 with `deleted:false`. **Duplicate** is not idempotent (each call makes a copy, at the end of the list, OFF, counters 0, same schedule and link; title cut so that "(copy)" fits 60 chars). **Reorder** with unknown ids -> 400 `BANNER_UNKNOWN` and nothing changes; repeated identical reorder -> `changed:false`. Reorder renumbers EVERY row 10, 20, 30 ...; a new banner gets max + 10.
 - **Rate limits** (429 `RATE_LIMITED`): public list 600/min/IP, events 300/min/IP, admin banner writes 120 per 10 min per admin (reads unlimited), uploads keep their 60/hour rule.
 - Only the ADMIN role can use `/api/admin/banners*` (customer / owner / driver 403, no token 401).
@@ -71,7 +73,7 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
   "success": true,
   "data": [
     {
-      "id": "3a6fef14-70ff-47de-b0c2-1d328e4b597e",
+      "id": "a4fc9df8-56a0-4a19-a2eb-27f0e946b1bf",
       "title": "Second",
       "subtitle": null,
       "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
@@ -80,7 +82,7 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
       "theme": "DARK"
     },
     {
-      "id": "dc939b34-9465-4318-a3cf-7b40dd25a208",
+      "id": "c1835951-ff19-44a0-9791-91fa28dcf07c",
       "title": "First",
       "subtitle": "Sub",
       "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
@@ -96,10 +98,10 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
 ```json
 {
   "views": [
-    "f08d08b3-ae9b-42c9-94a2-f6844f4a9e41"
+    "6f654473-0a98-4907-a206-3972f78473cd"
   ],
   "clicks": [
-    "f08d08b3-ae9b-42c9-94a2-f6844f4a9e41"
+    "6f654473-0a98-4907-a206-3972f78473cd"
   ]
 }
 ```
@@ -109,14 +111,65 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
 }
 ```
 
-**Admin list** `GET /api/admin/banners` (all rows incl. OFF / expired, ordered by `sortOrder`, `createdAt`; second row omitted here; this sample ran with a fake clock before the schedule, hence `SCHEDULED`):
+**Admin list** `GET /api/admin/banners` (all rows incl. OFF / expired, ordered by `sortOrder`, `createdAt`; second row omitted here; this sample ran with a fake clock before the schedule, hence `SCHEDULED`). Every admin row (list, create, patch, duplicate, reorder) carries `rank` = position among the LIVE rows (1 = first card; `null` when the row is not live) and `shown` = `rank !== null && rank <= 10`: the app shows only the first 10 live rows, so the dashboard can say "Live (not shown: limit 10)" when `status` is `LIVE` and `shown` is `false`. Real rows around the cut line (12 live banners):
+```json
+[
+  {
+    "id": "38a354ff-335c-461f-a0af-efc7d6be85f2",
+    "title": "Live 10",
+    "subtitle": null,
+    "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
+    "linkUrl": null,
+    "ctaLabel": null,
+    "theme": "DARK",
+    "placement": "HOME",
+    "isActive": true,
+    "startsAt": null,
+    "endsAt": null,
+    "sortOrder": 110,
+    "viewCount": 0,
+    "clickCount": 0,
+    "ctr": null,
+    "status": "LIVE",
+    "rank": 11,
+    "shown": false,
+    "createdByUserId": "usr-5",
+    "createdAt": "2026-10-28T18:14:19.083Z",
+    "updatedAt": "2026-10-28T18:14:19.208Z"
+  },
+  {
+    "id": "76dbcfc8-cd54-4a27-88c8-94d34beef669",
+    "title": "Eleventh",
+    "subtitle": null,
+    "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
+    "linkUrl": null,
+    "ctaLabel": null,
+    "theme": "DARK",
+    "placement": "HOME",
+    "isActive": true,
+    "startsAt": null,
+    "endsAt": null,
+    "sortOrder": 120,
+    "viewCount": 0,
+    "clickCount": 0,
+    "ctr": null,
+    "status": "LIVE",
+    "rank": 12,
+    "shown": false,
+    "createdByUserId": "usr-5",
+    "createdAt": "2026-10-28T18:14:19.093Z",
+    "updatedAt": "2026-10-28T18:14:19.208Z"
+  }
+]
+```
+Full sample:
 ```json
 {
   "success": true,
   "count": 2,
   "data": [
     {
-      "id": "dd002330-7627-4565-8199-a55a758f1411",
+      "id": "beed8fb2-8fb4-4583-8399-14513f34cd58",
       "title": "One",
       "subtitle": null,
       "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
@@ -132,9 +185,11 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
       "clickCount": 5,
       "ctr": 12.5,
       "status": "SCHEDULED",
+      "rank": null,
+      "shown": false,
       "createdByUserId": "usr-5",
-      "createdAt": "2026-10-28T17:30:38.940Z",
-      "updatedAt": "2026-10-28T17:30:38.954Z"
+      "createdAt": "2026-10-28T18:14:16.774Z",
+      "updatedAt": "2026-10-28T18:14:16.798Z"
     }
   ]
 }
@@ -146,7 +201,7 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
   "success": true,
   "message": "Banner created.",
   "data": {
-    "id": "33341894-b6d3-4f67-91fa-a908eca24823",
+    "id": "c4391319-9cbb-47b2-bdd4-7df731d2d1f8",
     "title": "Diwali Dhamaka",
     "subtitle": null,
     "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
@@ -162,9 +217,11 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
     "clickCount": 0,
     "ctr": null,
     "status": "LIVE",
+    "rank": 1,
+    "shown": true,
     "createdByUserId": "usr-5",
-    "createdAt": "2026-10-28T17:30:38.920Z",
-    "updatedAt": "2026-10-28T17:30:38.920Z"
+    "createdAt": "2026-10-28T18:14:16.746Z",
+    "updatedAt": "2026-10-28T18:14:16.746Z"
   }
 }
 ```
@@ -176,7 +233,7 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
   "changed": true,
   "message": "Banner saved.",
   "data": {
-    "id": "95e9a4f1-b283-4903-b816-b39618a306de",
+    "id": "3c5c101f-c9e8-4c56-81d4-220e6c35c586",
     "title": "Renamed",
     "subtitle": "Sub",
     "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
@@ -192,9 +249,11 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
     "clickCount": 0,
     "ctr": null,
     "status": "LIVE",
+    "rank": 1,
+    "shown": true,
     "createdByUserId": "usr-5",
-    "createdAt": "2026-10-28T17:30:38.975Z",
-    "updatedAt": "2026-10-28T17:30:38.984Z"
+    "createdAt": "2026-10-28T18:14:16.816Z",
+    "updatedAt": "2026-10-28T18:14:16.827Z"
   }
 }
 ```
@@ -203,8 +262,8 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
 ```json
 {
   "ids": [
-    "6d7f3ff8-7bb0-4add-94e9-4f8aabe6639e",
-    "2d86dabf-8289-48de-b75e-0fe4affd5760"
+    "99d0764b-4cb5-41b0-9c6d-f3d848080671",
+    "21827f46-7e10-4146-8222-5f55f1427c41"
   ]
 }
 ```
@@ -215,7 +274,7 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
   "message": "Order saved.",
   "data": [
     {
-      "id": "6d7f3ff8-7bb0-4add-94e9-4f8aabe6639e",
+      "id": "99d0764b-4cb5-41b0-9c6d-f3d848080671",
       "title": "Gamma",
       "subtitle": null,
       "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
@@ -231,9 +290,11 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
       "clickCount": 0,
       "ctr": null,
       "status": "LIVE",
+      "rank": 1,
+      "shown": true,
       "createdByUserId": "usr-5",
-      "createdAt": "2026-10-28T17:30:39.921Z",
-      "updatedAt": "2026-10-28T17:30:39.938Z"
+      "createdAt": "2026-10-28T18:14:17.964Z",
+      "updatedAt": "2026-10-28T18:14:17.979Z"
     }
   ]
 }
@@ -245,7 +306,7 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
   "success": true,
   "message": "Banner duplicated. The copy is switched off.",
   "data": {
-    "id": "f380a834-5b4e-4fa1-b906-45b2dc91f99f",
+    "id": "a3f3b20a-80e4-44d4-9adb-4b39a13bb3dd",
     "title": "Launch (copy)",
     "subtitle": "Sub",
     "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
@@ -261,9 +322,11 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
     "clickCount": 0,
     "ctr": null,
     "status": "OFF",
+    "rank": null,
+    "shown": false,
     "createdByUserId": "usr-5",
-    "createdAt": "2026-10-28T17:30:40.103Z",
-    "updatedAt": "2026-10-28T17:30:40.103Z"
+    "createdAt": "2026-10-28T18:14:18.112Z",
+    "updatedAt": "2026-10-28T18:14:18.112Z"
   }
 }
 ```
@@ -274,7 +337,7 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
   "success": true,
   "message": "Banner deleted.",
   "data": {
-    "id": "ad014502-4efe-4931-8e69-a4cce3fb969f",
+    "id": "3495db23-d4f2-41c3-84f1-db8e45dd8986",
     "title": "Doomed",
     "deleted": true
   }
@@ -286,7 +349,7 @@ Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one ne
 {
   "success": true,
   "data": {
-    "url": "https://api.test.kraveo/uploads/promo/2026/e04403271c142510261d74e738ff1852.png",
+    "url": "https://api.test.kraveo/uploads/promo/2026/898f18c0f11e17dacd99e575638be7da.png",
     "width": 1200,
     "height": 600,
     "bytes": 68

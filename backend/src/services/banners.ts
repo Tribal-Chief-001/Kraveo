@@ -45,7 +45,8 @@ export const __setBannerClock = (fn: (() => Date) | null) => { clock = fn ?? (()
 // ---------------------------------------------------------------------------------------------------------------------
 let cache: { at: number; rows: HomeBanner[] } | null = null;
 let generation = 0;
-export const invalidatePublicBanners = () => { cache = null; generation += 1; };
+let idsCache: { at: number; ids: Set<string> } | null = null;
+export const invalidatePublicBanners = () => { cache = null; idsCache = null; generation += 1; };
 const cacheTtlMs = (): number => {
   const raw = process.env.BANNERS_CACHE_TTL_MS;
   if (raw !== undefined && raw.trim() !== '') { const n = Number(raw); return Number.isFinite(n) && n >= 0 ? n : 0; }
@@ -106,6 +107,21 @@ export const checkHttpsUrl = (raw: unknown, field: string, code: string, label: 
   if (out.length > MAX_URL_LEN) throw fail(`can be at most ${MAX_URL_LEN} characters.`);
   return out;
 };
+/** Optional comma separated host allow-list from the environment, read on every call (empty / unset = any host). */
+const hostList = (envName: string): string[] =>
+  (process.env[envName] ?? '').split(',').map((h) => h.trim().toLowerCase().replace(/^\*?\./, '')).filter(Boolean);
+/** Exact host or any subdomain of a listed host. Only used when the env list is set. */
+const checkHostAllowed = (url: string, envName: string, field: string, code: string, label: string) => {
+  const allowed = hostList(envName);
+  if (allowed.length === 0) return;
+  const host = new URL(url).hostname.replace(/\.$/, '');
+  if (!allowed.some((h) => host === h || host.endsWith(`.${h}`))) throw bad(field, `${label} must be on one of these sites: ${allowed.join(', ')}.`, code);
+};
+const LINK_HOSTS = 'BANNER_LINK_HOSTS';
+const IMAGE_HOSTS = 'BANNER_IMAGE_HOSTS';
+const checkLinkHost = (url: string | null) => { if (url) checkHostAllowed(url, LINK_HOSTS, 'linkUrl', 'BANNER_LINK_INVALID', 'The link'); };
+const checkImageHost = (url: string) => checkHostAllowed(url, IMAGE_HOSTS, 'imageUrl', 'BANNER_IMAGE_INVALID', 'The image address');
+
 const checkLink = (raw: unknown): string | null => {
   if (raw === null || raw === undefined || (typeof raw === 'string' && raw.trim() === '')) return null;
   return checkHttpsUrl(raw, 'linkUrl', 'BANNER_LINK_INVALID', 'The link');
@@ -177,7 +193,7 @@ export const statusOf = (b: Pick<HomeBanner, 'isActive' | 'startsAt' | 'endsAt'>
 /** Click-through rate in percent with one decimal (12.5 = 12.5 %), null while there are no views. */
 export const ctrOf = (views: number, clicks: number): number | null => (views > 0 ? Math.round((clicks / views) * 1000) / 10 : null);
 
-export const adminBannerView = (b: HomeBanner, now: Date) => ({
+export const adminBannerView = (b: HomeBanner, now: Date, rank: number | null = null) => ({
   id: b.id,
   title: b.title,
   subtitle: b.subtitle,
@@ -194,6 +210,9 @@ export const adminBannerView = (b: HomeBanner, now: Date) => ({
   clickCount: b.clickCount,
   ctr: ctrOf(b.viewCount, b.clickCount),
   status: statusOf(b, now),
+  /** Position among the LIVE banners (1 = first card), null when not live. The app shows only the first 10. */
+  rank,
+  shown: rank !== null && rank <= MAX_LIVE_BANNERS,
   createdByUserId: b.createdByUserId,
   createdAt: b.createdAt.toISOString(),
   updatedAt: b.updatedAt.toISOString(),
@@ -204,7 +223,11 @@ const ORDER = [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] as con
 // ---------------------------------------------------------------------------------------------------------------------
 // Public reads and events
 // ---------------------------------------------------------------------------------------------------------------------
+/** BANNERS_ENABLED=false (also 0 / no / off) hides the whole slideshow at once. Read on every request; the cache keeps rows, so no restart or wait is needed. */
+export const bannersEnabled = (): boolean => !['false', '0', 'no', 'off'].includes((process.env.BANNERS_ENABLED ?? '').trim().toLowerCase());
+
 export const listPublicBanners = async () => {
+  if (!bannersEnabled()) return [];
   const ttl = cacheTtlMs();
   let rows: HomeBanner[];
   if (ttl > 0 && cache && Date.now() - cache.at < ttl) rows = cache.rows;
@@ -215,6 +238,27 @@ export const listPublicBanners = async () => {
   }
   const now = clock();
   return rows.filter((b) => isLive(b, now)).slice(0, MAX_LIVE_BANNERS).map(publicBannerView);
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Events: counted in memory, written every few seconds
+// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * POST /banners/events never touches the database in the request path and never locks a row: the increments are added to `pending`
+ * (bounded: only ids of switched-on banners are accepted, so at most 30 entries, each capped per flush interval) and `flushBannerEvents()`
+ * writes them every BANNER_EVENTS_FLUSH_MS (5 s), on shutdown and in tests. One UPDATE per banner, rows in ascending id order (no deadlocks).
+ * The counters are therefore APPROXIMATE: they lag by up to ~5 s, and a hard crash loses at most one interval of counts.
+ * A failed write puts its counts back and retries at the next interval; it never throws and never crashes the process.
+ */
+export const MAX_PENDING_VIEWS = 2000;
+export const MAX_PENDING_CLICKS = 500;
+const pending = new Map<string, { v: number; c: number }>();
+let flushTimer: NodeJS.Timeout | null = null;
+let flushing: Promise<void> | null = null;
+
+const flushIntervalMs = (): number => {
+  const n = Number(process.env.BANNER_EVENTS_FLUSH_MS);
+  return Number.isFinite(n) && n >= 50 ? n : 5000;
 };
 
 const idList = (raw: unknown, max: number): string[] => {
@@ -228,22 +272,100 @@ const idList = (raw: unknown, max: number): string[] => {
 };
 
 /**
- * POST /banners/events. Never throws: anything unusable is ignored, a database problem is logged and swallowed (the app fires and forgets).
- * One atomic statement per counter (rows locked in ascending id order, so two calls that list the same banners can never deadlock): `x = x + 1` for every listed, switched-on banner (an id listed twice counts once), capped at INT_MAX.
+ * Ids of switched-on banners. Served from memory (30 s, dropped by every banner write); a stale set is used while a refresh runs in the
+ * background, so only the very first call after a start / write (or every call when the cache is off, as under tests) waits for the database.
  */
+let idsRefresh: Promise<Set<string>> | null = null;
+const refreshIds = (): Promise<Set<string>> => {
+  if (!idsRefresh) {
+    const gen = generation;
+    idsRefresh = prisma.homeBanner.findMany({ where: { isActive: true }, select: { id: true }, take: MAX_BANNERS * 2 })
+      .then((rows) => {
+        const ids = new Set(rows.map((r) => r.id));
+        if (gen === generation) idsCache = { at: Date.now(), ids };
+        return ids;
+      })
+      .finally(() => { idsRefresh = null; });
+  }
+  return idsRefresh;
+};
+const knownIds = async (): Promise<Set<string>> => {
+  const ttl = cacheTtlMs();
+  if (ttl > 0 && idsCache) {
+    if (Date.now() - idsCache.at >= ttl) refreshIds().catch(() => undefined);
+    return idsCache.ids;
+  }
+  return refreshIds();
+};
+
+const bump = (id: string, field: 'v' | 'c', by: number, cap: number) => {
+  const e = pending.get(id) ?? { v: 0, c: 0 };
+  e[field] = Math.min(cap, e[field] + by);
+  pending.set(id, e);
+};
+
 export const recordBannerEvents = async (body: unknown): Promise<void> => {
   try {
     const b = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
     const views = idList(b.views, MAX_VIEWS_PER_EVENT);
     const clicks = idList(b.clicks, MAX_CLICKS_PER_EVENT);
-    if (views.length) {
-      await prisma.$executeRaw`UPDATE "HomeBanner" SET "viewCount" = LEAST("viewCount" + 1, ${INT_MAX}) WHERE "id" IN (SELECT "id" FROM "HomeBanner" WHERE "id" = ANY(${views}::text[]) AND "isActive" = true ORDER BY "id" FOR UPDATE)`;
-    }
-    if (clicks.length) {
-      await prisma.$executeRaw`UPDATE "HomeBanner" SET "clickCount" = LEAST("clickCount" + 1, ${INT_MAX}) WHERE "id" IN (SELECT "id" FROM "HomeBanner" WHERE "id" = ANY(${clicks}::text[]) AND "isActive" = true ORDER BY "id" FOR UPDATE)`;
+    if (views.length === 0 && clicks.length === 0) return;
+    const known = await knownIds();
+    for (const id of views) if (known.has(id)) bump(id, 'v', 1, MAX_PENDING_VIEWS);
+    for (const id of clicks) if (known.has(id)) bump(id, 'c', 1, MAX_PENDING_CLICKS);
+    if (!flushTimer && pending.size > 0) {
+      flushTimer = setInterval(() => { void flushBannerEvents(); }, flushIntervalMs());
+      flushTimer.unref();
     }
   } catch (e) {
     console.error('banner events failed:', errSummary(e));
+  }
+};
+
+/** Writes everything counted so far. Never throws. Calls overlap safely (a second call waits for the running one, then writes what arrived meanwhile). */
+export const flushBannerEvents = async (): Promise<void> => {
+  while (flushing) await flushing;
+  if (pending.size === 0) return;
+  const run = (async () => {
+    const batch = [...pending.entries()].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
+    pending.clear();
+    let i = 0;
+    try {
+      for (; i < batch.length; i += 1) {
+        const [id, { v, c }] = batch[i];
+        await prisma.$executeRaw`
+          UPDATE "HomeBanner" SET "viewCount" = LEAST("viewCount" + ${v}, ${INT_MAX}), "clickCount" = LEAST("clickCount" + ${c}, ${INT_MAX})
+          WHERE "id" = ${id} AND "isActive" = true`;
+      }
+    } catch (e) {
+      console.error('banner events flush failed (will retry):', errSummary(e));
+      // Put back everything not written yet (the failed row included), bounded to ten intervals' worth.
+      for (const [id, { v, c }] of batch.slice(i)) {
+        const e2 = pending.get(id) ?? { v: 0, c: 0 };
+        pending.set(id, { v: Math.min(MAX_PENDING_VIEWS * 10, e2.v + v), c: Math.min(MAX_PENDING_CLICKS * 10, e2.c + c) });
+      }
+    }
+  })();
+  flushing = run.finally(() => { flushing = null; });
+  await flushing;
+};
+
+/** Stops the timer and writes the last counts. Called by the SIGTERM / SIGINT handler (installBannerShutdownFlush) and by tests. */
+export const shutdownBannerEvents = async (): Promise<void> => {
+  if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
+  await flushBannerEvents();
+};
+
+/** src/index.ts only: on SIGTERM / SIGINT (PM2 restart) write the pending counts, then exit (at most 3 s later whatever happens). */
+export const installBannerShutdownFlush = () => {
+  let stopping = false;
+  for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(sig, () => {
+      if (stopping) return;
+      stopping = true;
+      setTimeout(() => process.exit(0), 3000).unref();
+      shutdownBannerEvents().finally(() => process.exit(0));
+    });
   }
 };
 
@@ -254,11 +376,39 @@ const lockOrder = (tx: Tx) => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashte
 const lockRow = async (tx: Tx, id: string): Promise<boolean> =>
   (await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "HomeBanner" WHERE "id" = ${id} FOR UPDATE`).length > 0;
 
+/** Every banner as an admin row, with `rank` among the live ones (same order and filter as the public list). */
 export const listAdminBanners = async () => {
   const now = clock();
-  return (await prisma.homeBanner.findMany({ orderBy: [...ORDER], take: MAX_BANNERS * 2 })).map((b) => adminBannerView(b, now));
+  const rows = await prisma.homeBanner.findMany({ orderBy: [...ORDER], take: MAX_BANNERS * 2 });
+  let rank = 0;
+  return rows.map((b) => adminBannerView(b, now, isLive(b, now) ? (rank += 1) : null));
 };
+/** One banner as an admin row (create / patch / duplicate answers), ranked against the others. */
+const adminRowOf = async (b: HomeBanner) => (await listAdminBanners()).find((r) => r.id === b.id) ?? adminBannerView(b, clock());
 
+/**
+ * Audit text: WHO first, then the addresses (what an investigation of a stolen session needs), prose last, because writeAudit cuts at 300
+ * characters. Every address is shown up to 120 characters; when several do not fit together the long ones share what is left.
+ */
+const urlsFit = (values: (string | null)[], budget: number): string[] => {
+  const items = values.map((v) => v ?? 'none');
+  const lim = items.map(() => 0);
+  let left = Math.max(0, budget);
+  let open = items.map((_, i) => i);
+  while (open.length) {
+    const share = Math.min(120, Math.floor(left / open.length));
+    const fits = open.filter((i) => items[i].length <= share);
+    if (fits.length === 0) { open.forEach((i) => { lim[i] = share; }); break; }
+    fits.forEach((i) => { lim[i] = items[i].length; left -= items[i].length; });
+    open = open.filter((i) => !fits.includes(i));
+  }
+  return items.map((v, i) => (v.length <= lim[i] ? v : `${v.slice(0, Math.max(1, lim[i] - 3))}...`));
+};
+const auditText = (head: string, urls: [string, string | null][], tail: string): string => {
+  const overhead = head.length + urls.reduce((n, [label]) => n + label.length + 4, 0);
+  const fitted = urlsFit(urls.map(([, v]) => v), 300 - overhead - 30);
+  return `${head}${urls.map(([label], i) => ` | ${label} ${fitted[i]}`).join('')} | ${tail}`;
+};
 const q = (s: string) => JSON.stringify(s.length > 60 ? `${s.slice(0, 57)}...` : s);
 
 export const createBanner = async (b: Record<string, unknown>, actor: Actor) => {
@@ -267,6 +417,8 @@ export const createBanner = async (b: Record<string, unknown>, actor: Actor) => 
   const subtitle = optionalText(b.subtitle, 'subtitle', 120, 'The subtitle');
   const imageUrl = checkImage(b.imageUrl);
   const linkUrl = checkLink(b.linkUrl);
+  checkLinkHost(linkUrl);
+  checkImageHost(imageUrl);
   const ctaLabel = optionalText(b.ctaLabel, 'ctaLabel', 20, 'The button text');
   const theme = b.theme === undefined ? 'DARK' : checkTheme(b.theme);
   if (b.placement !== undefined) checkPlacement(b.placement);
@@ -284,8 +436,8 @@ export const createBanner = async (b: Record<string, unknown>, actor: Actor) => 
     });
   }, TX_OPTS);
   invalidatePublicBanners();
-  await writeAudit('BANNER_CREATED', 'BANNER', created.id, `Admin created banner ${q(title)} (${isActive ? 'on' : 'off'}, ${theme}${linkUrl ? ', with link' : ', no link'}${startsAt || endsAt ? ', scheduled' : ''})`);
-  return adminBannerView(created, clock());
+  await writeAudit('BANNER_CREATED', 'BANNER', created.id, auditText(`admin ${actor.id} created banner`, [['link', linkUrl], ['image', imageUrl]], `${q(title)} (${isActive ? 'on' : 'off'}, ${theme}${startsAt || endsAt ? ', scheduled' : ''})`));
+  return adminRowOf(created);
 };
 
 type Plan = Partial<Pick<HomeBanner, 'title' | 'subtitle' | 'imageUrl' | 'linkUrl' | 'ctaLabel' | 'theme' | 'isActive' | 'startsAt' | 'endsAt'>>;
@@ -314,6 +466,9 @@ export const patchBanner = async (id: string, b: Record<string, unknown>, actor:
       const same = v instanceof Date || old instanceof Date ? sameInstant(v instanceof Date ? v : null, old instanceof Date ? old : null) : v === old;
       if (!same) (diff as Record<string, unknown>)[k] = v;
     }
+    // Allow-lists apply to values this request CHANGES: a stored link on a host that was allowed earlier never blocks an unrelated edit.
+    if (diff.linkUrl !== undefined) checkLinkHost(diff.linkUrl);
+    if (diff.imageUrl !== undefined) checkImageHost(diff.imageUrl);
     const startsAt = diff.startsAt !== undefined ? diff.startsAt : before.startsAt;
     const endsAt = diff.endsAt !== undefined ? diff.endsAt : before.endsAt;
     const isActive = diff.isActive ?? before.isActive;
@@ -325,15 +480,18 @@ export const patchBanner = async (id: string, b: Record<string, unknown>, actor:
 
   if (out.changed) {
     invalidatePublicBanners();
-    const parts = Object.keys(out.diff).map((k) => {
+    const parts = Object.keys(out.diff).filter((k) => k !== 'linkUrl' && k !== 'imageUrl').map((k) => {
       const key = k as keyof Plan;
       if (key === 'title') return `title ${q(out.before.title)} -> ${q(out.row.title)}`;
       if (key === 'isActive' || key === 'theme') return `${key} ${String(out.before[key])} -> ${String(out.row[key])}`;
       return `${key} changed`;
     });
-    await writeAudit('BANNER_EDITED', 'BANNER', id, `Admin edited banner ${q(out.before.title)}: ${parts.join('; ')}`);
+    const urls: [string, string | null][] = [['link', out.row.linkUrl]];
+    if (out.diff.linkUrl !== undefined) urls.push(['was', out.before.linkUrl]);
+    urls.push(['image', out.row.imageUrl]);
+    await writeAudit('BANNER_EDITED', 'BANNER', id, auditText(`admin ${actor.id} edited banner`, urls, `${q(out.before.title)}${parts.length ? `: ${parts.join('; ')}` : ''}`));
   }
-  return { changed: out.changed, data: adminBannerView(out.row, clock()) };
+  return { changed: out.changed, data: await adminRowOf(out.row) };
 };
 
 /** DELETE is idempotent: a banner that is already gone answers 200 with `deleted:false` (two tabs, a double click). */
@@ -345,7 +503,7 @@ export const deleteBanner = async (id: string, actor: Actor) => {
   }, TX_OPTS);
   if (!gone) return { id, deleted: false as const };
   invalidatePublicBanners();
-  await writeAudit('BANNER_DELETED', 'BANNER', id, `Admin deleted banner ${q(gone.title)} (${gone.viewCount} views, ${gone.clickCount} clicks)`);
+  await writeAudit('BANNER_DELETED', 'BANNER', id, auditText(`admin ${actor.id} deleted banner`, [['link', gone.linkUrl], ['image', gone.imageUrl]], `${q(gone.title)} (${gone.viewCount} views, ${gone.clickCount} clicks)`));
   return { id, title: gone.title, deleted: true as const };
 };
 
@@ -381,7 +539,7 @@ export const reorderBanners = async (rawIds: unknown, actor: Actor) => {
   }, { maxWait: 10_000, timeout: 30_000 });
   if (out.moved > 0) {
     invalidatePublicBanners();
-    await writeAudit('BANNER_REORDERED', 'BANNER', 'all', `Admin reordered the banners: ${out.moved} of ${out.total} changed position`);
+    await writeAudit('BANNER_REORDERED', 'BANNER', 'all', `admin ${actor.id} reordered the banners: ${out.moved} of ${out.total} changed position`);
   }
   return { changed: out.moved > 0, moved: out.moved, data: await listAdminBanners() };
 };
@@ -408,6 +566,6 @@ export const duplicateBanner = async (id: string, actor: Actor) => {
     };
   }, TX_OPTS);
   invalidatePublicBanners();
-  await writeAudit('BANNER_DUPLICATED', 'BANNER', created.row.id, `Admin duplicated banner ${q(created.src.title)} (copy is off)`);
-  return adminBannerView(created.row, clock());
+  await writeAudit('BANNER_DUPLICATED', 'BANNER', created.row.id, auditText(`admin ${actor.id} duplicated banner`, [['link', created.row.linkUrl], ['image', created.row.imageUrl]], `${q(created.src.title)} (copy is off)`));
+  return adminRowOf(created.row);
 };

@@ -28,7 +28,7 @@ bannersRouter.get('/banners', async (_req: Request, res: Response) => {
 
 // The global json parser skips this path (middleware/bodyLimits.ts): a body over 2 KB is refused here with 413 before it is read.
 bannersRouter.post('/banners/events', express.json({ limit: EVENTS_JSON_LIMIT, inflate: false }), async (req: Request, res: Response) => {
-  await recordBannerEvents(req.body); // never throws, ignores everything unusable
+  await recordBannerEvents(req.body); // memory only (no database write here), never throws, ignores everything unusable
   return res.json({ success: true });
 });
 

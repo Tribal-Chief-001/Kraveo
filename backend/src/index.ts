@@ -10,6 +10,7 @@ import { securityHeaders } from './middleware/securityHeaders';
 import { globalErrorHandler } from './middleware/errorHandler';
 import { assertRuntimeConfig } from './config/runtimeConfig';
 import { installProcessGuards } from './processGuards';
+import { installBannerShutdownFlush } from './services/banners';
 import { initPushProvider, getPushProvider } from './services/push/provider';
 import { mountUploads } from './routes/uploads';
 import { jsonUnlessMenuImport } from './middleware/bodyLimits';
@@ -115,6 +116,9 @@ attachRealtime(io);
 // A failed listen (EADDRINUSE: a second instance, a restart before the old process freed the port) must not leave a
 // half-dead process that still runs the maintenance job: log and exit non-zero so PM2 retries.
 server.on('error', guards.onListenError);
+
+// Docs/25: banner view / click counts are kept in memory for a few seconds; write the last ones when PM2 stops the process.
+installBannerShutdownFlush();
 
 server.listen(PORT, () => {
   console.log(`🚀 Kraveo Backend Engine running on http://localhost:${PORT}`);
