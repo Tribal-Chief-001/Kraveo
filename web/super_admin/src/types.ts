@@ -1,7 +1,7 @@
 import { readPin } from './lib/vendorLocation';
 import { OrderGroupInfo, parseGroupInfo } from './lib/orderGroups';
 
-export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'categories' | 'drivers' | 'customers' | 'analytics' | 'catalog' | 'finance' | 'settings';
+export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'categories' | 'banners' | 'drivers' | 'customers' | 'analytics' | 'catalog' | 'finance' | 'settings';
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED';
 export type PartnerKind = 'VENDOR' | 'DRIVER';

@@ -11,6 +11,7 @@ import { ApplicationsPanel } from './components/ApplicationsPanel';
 import { CustomersPanel } from './components/CustomersPanel';
 import { CatalogPanel } from './components/CatalogPanel';
 import { CategoriesPanel } from './components/CategoriesPanel';
+import { BannersPanel } from './components/BannersPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { FinancePanel } from './components/FinancePanel';
 import type { PendingCounts, VendorCommission } from './lib/catalogParse';
@@ -688,6 +689,7 @@ export const App: React.FC = () => {
             {activeTab === 'drivers' && <DriverManager drivers={driverPartners} orders={orders} now={now} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
             {activeTab === 'customers' && <CustomersPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} />}
             {activeTab === 'categories' && <CategoriesPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} onChanged={fetchBackendData} />}
+            {activeTab === 'banners' && <BannersPanel onAuthError={handleSessionError} />}
             {activeTab === 'catalog' && <CatalogPanel vendors={vendors} query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} pendingCounts={pendingDishes} onPendingChanged={refreshPendingDishes} />}
             {activeTab === 'finance' && <FinancePanel vendors={vendors} driverPartners={driverPartners} pendingSettlements={pendingSettlements} onSettlementsChanged={refreshPendingSettlements} onAuthError={handleSessionError} />}
             {activeTab === 'settings' && <SettingsPanel onAuthError={handleSessionError} />}

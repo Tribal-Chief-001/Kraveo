@@ -23,6 +23,7 @@ const TITLES: Record<TabType, { title: string; subtitle: string; searchHint: str
   applications: { title: 'Applications', subtitle: 'Restaurants and riders waiting for your approval', searchHint: 'Search by name, phone, location or plate' },
   vendors: { title: 'Vendors', subtitle: 'Dhaba network and availability', searchHint: 'Search vendors by name, category or address' },
   categories: { title: 'Categories', subtitle: 'One list for restaurant cuisines and dish categories', searchHint: 'Search categories by name' },
+  banners: { title: 'Banners', subtitle: 'Promo pictures at the top of the customer app Home', searchHint: '' },
   drivers: { title: 'Drivers', subtitle: 'Runner partners on campus', searchHint: 'Search runners by name, reg no or code' },
   customers: { title: 'Customers', subtitle: 'Everyone who signed in, with their order history', searchHint: 'Search name, email, phone or hostel' },
   catalog: { title: 'Catalog', subtitle: 'Approve dishes and set what customers pay', searchHint: 'Search dishes by name, category or restaurant' },
@@ -42,7 +43,7 @@ const useNow = (intervalMs: number): number => {
 
 export const Header: React.FC<HeaderProps> = ({ activeTab, isLiveConnected, isLoading, adminProfile, onRefresh, onLogout, onOpenMenu, query, onQueryChange }) => {
   const meta = TITLES[activeTab];
-  const searchEnabled = activeTab !== 'analytics' && activeTab !== 'settings' && activeTab !== 'finance';
+  const searchEnabled = activeTab !== 'analytics' && activeTab !== 'settings' && activeTab !== 'finance' && activeTab !== 'banners';
   const now = useNow(10_000);
   const [lastSynced, setLastSynced] = useState<number | null>(null);
   const wasLoading = useRef(false);

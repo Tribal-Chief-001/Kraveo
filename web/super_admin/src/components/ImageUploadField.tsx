@@ -10,7 +10,7 @@ interface Props {
   /** Prefix for element ids (the URL input gets `${id}`). */
   id: string;
   label: string;
-  purpose: 'banner' | 'dish';
+  purpose: 'banner' | 'dish' | 'promo';
   /** The picture's web address ('' = none). Uploading fills it with the new address. */
   value: string;
   onChange: (url: string) => void;
@@ -29,6 +29,8 @@ interface Props {
   /** True while a picture is being prepared or uploaded: the parent should keep Save off. */
   onBusyChange?: (busy: boolean) => void;
   onAuthError?: (error: unknown) => void;
+  /** The parent draws its own preview (the banner phone preview), so the small one is left out. */
+  hidePreview?: boolean;
   /** Tests inject a fake canvas. */
   env?: ImageEnv;
 }
@@ -41,7 +43,7 @@ const kb = (bytes: number | null): string => (bytes === null ? '' : bytes >= 102
  * A web address field with an Upload button next to it. The chosen picture is shrunk in the browser first (lib/imageCompress),
  * sent to the server, and the returned address is put in the field. Replace and remove are always available.
  */
-export const ImageUploadField: React.FC<Props> = ({ id, label, purpose, value, onChange, disabled = false, error, hint, previewAlt, removeLabel = 'Remove photo', onRemove, hideRemove = false, emptyNote, onBusyChange, onAuthError, env }) => {
+export const ImageUploadField: React.FC<Props> = ({ id, label, purpose, value, onChange, disabled = false, error, hint, previewAlt, removeLabel = 'Remove photo', onRemove, hideRemove = false, emptyNote, onBusyChange, onAuthError, hidePreview = false, env }) => {
   const fileInput = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
   const busyRef = useRef(false);
@@ -111,13 +113,13 @@ export const ImageUploadField: React.FC<Props> = ({ id, label, purpose, value, o
       </div>
       <p id={statusId} className="text-xs text-kraveo-ink3" role="status" aria-live="polite">{working ? (phase === 'preparing' ? 'Making the photo smaller…' : 'Sending the photo…') : done}</p>
 
-      {hasUrl ? (
+      {hasUrl && !hidePreview ? (
         <div className="k-inset flex h-36 items-center justify-center overflow-hidden">
           {!previewFailed
             ? <img src={value.trim()} alt={previewAlt} className="h-full w-full object-cover" referrerPolicy="no-referrer" onError={() => setPreviewFailed(true)} />
             : <p className="flex items-center gap-2 px-3 text-center text-sm text-kraveo-ink3"><ImageOff className="h-4 w-4 shrink-0" aria-hidden="true" />The preview could not be loaded here. The link may still work in the app.</p>}
         </div>
-      ) : emptyNote ? <p className="k-inset px-3 py-3 text-sm text-kraveo-ink3">{emptyNote}</p> : null}
+      ) : emptyNote && !hasUrl ? <p className="k-inset px-3 py-3 text-sm text-kraveo-ink3">{emptyNote}</p> : null}
     </div>
   );
 };

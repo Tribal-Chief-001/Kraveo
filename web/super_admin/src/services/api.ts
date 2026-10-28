@@ -39,6 +39,7 @@ import {
 import {
   BulkAction, BulkResult, ImportReport, UploadResult, parseBulkResult, parseImportReport, parseUploadResult,
 } from '../lib/catalogBulkParse';
+import { Banner, BannerWrite, parseBannerList, parseBannerResult } from '../lib/bannerParse';
 import type { ImportRowInput } from '../lib/menuCsv';
 import type { CommissionType } from '../lib/pricing';
 import type { DropPointInfo } from '../lib/campus';
@@ -379,10 +380,49 @@ export const apiService = {
   },
 
   /** Sends the (already compressed) picture as the raw body. The token travels in the header only. */
-  async uploadImage(file: Blob, purpose: 'banner' | 'dish'): Promise<UploadResult> {
+  async uploadImage(file: Blob, purpose: 'banner' | 'dish' | 'promo'): Promise<UploadResult> {
     const parsed = parseUploadResult(await requestFull<any>(`/api/admin/uploads/image?purpose=${purpose}`, { method: 'POST', body: file, headers: { 'Content-Type': file.type || 'application/octet-stream' } }));
     if (!parsed) throw unexpected('uploaded picture');
     return parsed;
+  },
+
+  // ── Home banners (Docs/25). Response parsing lives in lib/bannerParse.ts ──
+  /** Every banner (also off and expired ones) with views, clicks, CTR and status, in the saved order. */
+  async fetchBanners(): Promise<Banner[]> {
+    const parsed = parseBannerList(await requestFull<any>('/api/admin/banners'));
+    if (!parsed) throw unexpected('banner list');
+    return parsed;
+  },
+
+  async createBanner(input: BannerWrite): Promise<Banner> {
+    const { banner } = parseBannerResult(await requestFull<any>('/api/admin/banners', { method: 'POST', body: json(input) }));
+    if (!banner) throw unexpected('banner');
+    return banner;
+  },
+
+  /** Only the fields that changed are sent. `changed:false` = the server found nothing to change. */
+  async updateBanner(id: string, changes: BannerWrite): Promise<{ banner: Banner; changed: boolean; message: string }> {
+    const result = parseBannerResult(await requestFull<any>(`/api/admin/banners/${encodeURIComponent(id)}`, { method: 'PATCH', body: json(changes) }));
+    if (!result.banner) throw unexpected('banner');
+    return { banner: result.banner, changed: result.changed, message: result.message };
+  },
+
+  /** Saves the order. The answer is the full list in the new order. */
+  async reorderBanners(ids: string[]): Promise<Banner[]> {
+    const parsed = parseBannerList(await requestFull<any>('/api/admin/banners/reorder', { method: 'POST', body: json({ ids }) }));
+    if (!parsed) throw unexpected('banner order');
+    return parsed;
+  },
+
+  /** The copy is switched off and goes to the end of the list. */
+  async duplicateBanner(id: string): Promise<Banner> {
+    const { banner } = parseBannerResult(await requestFull<any>(`/api/admin/banners/${encodeURIComponent(id)}/duplicate`, { method: 'POST' }));
+    if (!banner) throw unexpected('banner copy');
+    return banner;
+  },
+
+  async deleteBanner(id: string): Promise<void> {
+    await requestFull<any>(`/api/admin/banners/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
   // ── Bulk dish actions and menu import (Docs/23 3.5) ──
