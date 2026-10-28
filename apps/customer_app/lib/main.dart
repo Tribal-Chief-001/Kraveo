@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
+import 'providers/banner_provider.dart';
 import 'providers/dhaba_provider.dart';
 import 'providers/cart_provider.dart';
 import 'providers/order_provider.dart';
@@ -47,6 +48,7 @@ class KraveoCustomerApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => SessionProvider(googleAuth: googleAuth)),
         ChangeNotifierProvider(create: (_) => DhabaProvider()),
+        ChangeNotifierProvider(create: (_) => BannerProvider()),
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => createOrders?.call() ?? OrderProvider()),
         if (push != null) ChangeNotifierProvider<PushService>.value(value: push!),

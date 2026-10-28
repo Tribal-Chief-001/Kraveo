@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
 import '../models/auth_results.dart';
 import '../models/food_category.dart';
+import '../models/home_banner.dart';
 
 class CustomerApiService {
   static const String _tokenPrefKey = 'kraveo_customer_jwt_token';
@@ -233,6 +234,36 @@ class CustomerApiService {
     final body = jsonDecode(response.body);
     if (body is! Map || body['success'] == false || body['data'] is! List) throw Exception('Categories answer not understood.');
     return FoodCategory.parseList(body['data']);
+  }
+
+  /// Home promo banners (`GET /banners`, public, no login). Returns the usable rows in the server's
+  /// order; an empty list means "the server has none". Throws when the call does not work out
+  /// (offline, timeout, 404 on an old server, non-JSON, `data` not a list, or rows were sent but none
+  /// is usable): the caller then keeps what it has.
+  static Future<List<HomeBanner>> fetchBanners() async {
+    final response = await _get(Uri.parse('${ApiConfig.baseUrl}/banners'), timeout: const Duration(seconds: 10));
+    if (response.statusCode != 200) throw Exception('Banners unavailable (${response.statusCode}).');
+    final body = jsonDecode(response.body);
+    if (body is! Map || body['success'] == false || body['data'] is! List) throw Exception('Banners answer not understood.');
+    final parsed = HomeBanner.parseList(body['data']);
+    if (parsed.isEmpty && (body['data'] as List).isNotEmpty) throw Exception('No usable banner in the answer.');
+    return parsed;
+  }
+
+  /// Fire-and-forget view / click counters (`POST /banners/events`, public). Never throws and never
+  /// needs an answer: a failure only loses a statistic. At most 10 views and 5 clicks per call.
+  static Future<void> sendBannerEvents({List<String> views = const [], List<String> clicks = const []}) async {
+    if (views.isEmpty && clicks.isEmpty) return;
+    try {
+      await _post(
+        Uri.parse('${ApiConfig.baseUrl}/banners/events'),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({if (views.isNotEmpty) 'views': views, if (clicks.isNotEmpty) 'clicks': clicks}),
+        timeout: const Duration(seconds: 5),
+      );
+    } catch (e) {
+      debugPrint('[Banners] events not sent (ignored): ${e.runtimeType}');
+    }
   }
 
   /// Builds authenticated request headers dynamically

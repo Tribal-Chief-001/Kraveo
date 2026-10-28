@@ -4,10 +4,12 @@ import 'package:flutter/services.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
+import '../providers/banner_provider.dart';
 import '../providers/dhaba_provider.dart';
 import '../providers/order_provider.dart';
 import '../providers/session_provider.dart';
 import '../widgets/dhaba_card.dart';
+import '../widgets/home_banner_carousel.dart';
 import '../widgets/ui/category_icons.dart';
 import '../widgets/ui/display_text.dart';
 import '../widgets/ui/format.dart';
@@ -47,6 +49,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     context.read<OrderProvider>().onAppResumed();
     unawaited(context.read<DhabaProvider>().refreshHome());
+    _refreshBanners();
   });
   final TextEditingController _searchController = TextEditingController();
 
@@ -57,7 +60,15 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(Provider.of<DhabaProvider>(context, listen: false).refreshHome());
+      _refreshBanners();
     });
+  }
+
+  /// The promo banners load in the background with the rest of Home (no spinner, failures keep the
+  /// last list). The provider is optional: without it Home simply has no banner row.
+  void _refreshBanners() {
+    final banners = Provider.of<BannerProvider?>(context, listen: false);
+    if (banners != null) unawaited(banners.refresh());
   }
 
   /// Pull-to-refresh on Home: kitchens and orders. Says so when the kitchens could not be refreshed.
@@ -65,6 +76,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final orders = context.read<OrderProvider>();
     final dhabas = context.read<DhabaProvider>();
     unawaited(orders.refreshActive());
+    _refreshBanners();
     final ok = await dhabas.refreshHome();
     if (!mounted || ok) return;
     showKSnack(context, 'Couldn\'t refresh the kitchens. Check your connection and try again.', error: true);
@@ -300,11 +312,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
-                // INSERTION POINT for the promo banner carousel (Docs/25 section 4): a Column child right
-                // here, between the search field and the first-order promo. Gesture rule for it:
-                // wrap its horizontal PageView in KTabPagerHandoff and give it
-                // `physics: KTabPagerHandoff.pagePhysics`, so a swipe past its first/last card
-                // moves the tab pager instead of getting stuck (see kraveo_ui tab_pager_scope.dart).
+                // Promo banner carousel (Docs/25 section 4): no space at all until banners were loaded.
+                // Its PageView hands a swipe past the first/last card to the tab pager (KTabPagerHandoff).
+                const HomeBannerCarousel(),
                 // The first-order promo is only shown to a student who has no earlier order (the
                 // server refuses VITFIRST otherwise); while that is unknown it stays hidden.
                 if (!filtering && orderProvider.isFirstTimeCustomer) const KReveal(index: 2, child: _PromoCard()) else const SizedBox(height: 16),
