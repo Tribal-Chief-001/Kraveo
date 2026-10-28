@@ -1,6 +1,18 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 import '../../models/geo.dart';
+
+/// Gesture priority of the tracking map inside the swipeable tab shell. The map is a platform
+/// view that only gets the gestures nobody else claims, and the shell's tab pager claims every
+/// horizontal drag. Listing a horizontal drag (and pinch) recognizer here puts them in the
+/// gesture arena BELOW the pager, so a horizontal drag that starts on the map pans the map
+/// (deeper recognizers win ties), while a horizontal drag anywhere else on the tab swipes the
+/// tabs. Vertical drags are deliberately not listed: they keep scrolling the page, as before.
+const Set<Factory<OneSequenceGestureRecognizer>> trackingMapGestureRecognizers = <Factory<OneSequenceGestureRecognizer>>{
+  Factory<HorizontalDragGestureRecognizer>(HorizontalDragGestureRecognizer.new),
+  Factory<ScaleGestureRecognizer>(ScaleGestureRecognizer.new),
+};
 
 /// Everything a real map view needs to draw the tracking picture. The tracking screen owns the
 /// state; the view only paints it, so it can be replaced by a fake in tests.

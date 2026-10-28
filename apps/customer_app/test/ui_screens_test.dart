@@ -24,6 +24,7 @@ import 'package:provider/provider.dart';
 
 import 'support/order_fakes.dart';
 import 'support/sample_catalog.dart';
+import 'support/shell_finders.dart';
 
 /// Renders screens on the smallest supported phone (360x640) at 1.3x system text scale.
 /// Any RenderFlex overflow or build error surfaces as a test exception.
@@ -140,7 +141,7 @@ void main() {
     expect(find.text('Kitchens near campus'), findsOneWidget);
     expect(find.text('Home'), findsOneWidget);
 
-    await tester.scrollUntilVisible(find.text('Sharma Highway Dhaba'), 200, scrollable: find.byType(Scrollable).first);
+    await tester.scrollUntilVisible(find.text('Sharma Highway Dhaba'), 200, scrollable: homeFeedScrollable());
     expect(find.text('Sharma Highway Dhaba'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -162,7 +163,7 @@ void main() {
     await pumpScreen(tester, const HomeScreen(), dhabas: dhabas);
     await tester.pump(const Duration(seconds: 5));
     await tester.pump(const Duration(milliseconds: 800));
-    await tester.scrollUntilVisible(find.text('No kitchens match'), 200, scrollable: find.byType(Scrollable).first);
+    await tester.scrollUntilVisible(find.text('No kitchens match'), 200, scrollable: homeFeedScrollable());
     expect(find.text('No kitchens match'), findsOneWidget);
     expect(find.text('Clear filters'), findsOneWidget);
     expect(tester.takeException(), isNull);

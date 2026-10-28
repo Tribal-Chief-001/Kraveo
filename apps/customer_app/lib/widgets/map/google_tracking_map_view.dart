@@ -125,6 +125,7 @@ class _GoogleTrackingMapViewState extends State<GoogleTrackingMapView> {
   Widget _map(MapViewSpec spec, GeoPoint? rider, {required bool stale}) {
     return GoogleMap(
       initialCameraPosition: CameraPosition(target: _ll(spec.dropoff), zoom: 16),
+      gestureRecognizers: trackingMapGestureRecognizers,
       markers: _markers(rider, stale: stale),
       onMapCreated: (c) {
         _controller = c;

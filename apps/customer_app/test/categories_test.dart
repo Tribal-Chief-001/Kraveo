@@ -28,6 +28,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/category_fixtures.dart';
+import 'support/shell_finders.dart';
 
 class _NoGoogle implements GoogleAuthService {
   @override
@@ -449,7 +450,7 @@ void main() {
 
       await tester.tap(find.widgetWithText(KChoiceChip, 'Chai'));
       await _settle(tester);
-      await tester.scrollUntilVisible(find.text('Chai Corner'), 200, scrollable: find.byType(Scrollable).first);
+      await tester.scrollUntilVisible(find.text('Chai Corner'), 200, scrollable: homeFeedScrollable());
       expect(find.text('Chai Corner'), findsOneWidget);
       expect(find.text('Biryani House'), findsNothing);
       expect(tester.takeException(), isNull);

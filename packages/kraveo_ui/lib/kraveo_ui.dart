@@ -16,3 +16,5 @@ export 'src/widgets/glass_nav.dart';
 export 'src/widgets/slide_confirm.dart';
 export 'src/widgets/brand.dart';
 export 'src/widgets/avatar.dart';
+export 'src/widgets/fluid_nav.dart';
+export 'src/widgets/tab_pager_scope.dart';

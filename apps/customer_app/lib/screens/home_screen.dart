@@ -29,7 +29,17 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  /// The tab pager (Home, Track, Orders, Me). Swiping moves it with the finger; the nav's
+  /// highlight reads its page position. Pages are kept alive, so scroll positions and screen
+  /// state survive swipes exactly as they did with the old IndexedStack.
+  PageController _pager = PageController();
+
+  /// The tab nearest to the pager right now (back button, selection).
   int _currentTab = 0;
+
+  /// The tab the pager has come to rest on; null while it is being dragged or animated. Only a
+  /// settled tab counts as shown (timers, sockets and the map of the Track tab depend on it).
+  int? _settledTab = 0;
 
   /// Catch up on order changes and the kitchen catalog (open / closed, sold out, new kitchens)
   /// when the app returns to the foreground (contract 3).
@@ -65,11 +75,56 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _lifecycle.dispose();
+    _pager.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
-  void _goToTab(int index) => setState(() => _currentTab = index);
+  /// Opens a tab: animates the pager (a tap, a banner or a button elsewhere), or jumps when the
+  /// platform asks to reduce motion. Before the pager is attached (first frame, app resume)
+  /// the shell simply starts on that tab. A far jump animates through the tabs in between:
+  /// they are kept alive, so each is built at most once and the motion stays continuous (a
+  /// jump-then-animate trick would flash the neighbour's content for one frame).
+  void _goToTab(int index) {
+    if (index < 0 || index > 3 || (index == _currentTab && _settledTab == index)) return;
+    if (!_pager.hasClients) {
+      final old = _pager;
+      _pager = PageController(initialPage: index);
+      WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+      setState(() {
+        _currentTab = index;
+        _settledTab = index;
+      });
+      return;
+    }
+    setState(() {
+      _currentTab = index;
+      _settledTab = null;
+    });
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _pager.jumpToPage(index);
+    } else {
+      final hops = ((_pager.page ?? index) - index).abs();
+      unawaited(_pager.animateToPage(index, duration: Duration(milliseconds: hops > 1.5 ? 380 : 320), curve: Curves.easeInOutCubicEmphasized));
+    }
+  }
+
+  /// Tracks the pager's own scrolling (depth 0: scrollables inside the tabs are not ours).
+  bool _onPagerScroll(ScrollNotification n) {
+    if (n.depth != 0 || n.metrics.axis != Axis.horizontal || !mounted) return false;
+    if (n is ScrollStartNotification) {
+      if (_settledTab != null) setState(() => _settledTab = null);
+    } else if (n is ScrollEndNotification) {
+      final page = (_pager.hasClients ? _pager.page : null)?.round();
+      if (page != null && (page != _settledTab || page != _currentTab)) {
+        setState(() {
+          _currentTab = page;
+          _settledTab = page;
+        });
+      }
+    }
+    return false;
+  }
 
   /// Drop-off point changes made from Home are saved to the profile too, so the Me tab,
   /// checkout and the next launch all agree. Reverts (with a message) if saving fails.
@@ -101,23 +156,41 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: k.bg,
       extendBody: true,
-      body: IndexedStack(
-        index: _currentTab,
-        children: [
-          // Builder: the feed must read the padding Scaffold reports for the floating nav.
-          Builder(builder: _buildHomeFeed),
-          LiveTrackingScreen(visible: _currentTab == 1, onExplore: () => _goToTab(0)),
-          OrderHistoryScreen(
-            selectedHostel: selectedHostel,
-            onTrackOrder: () => _goToTab(1),
-            onExplore: () => _goToTab(0),
+      body: KTabPagerScope(
+        controller: _pager,
+        child: NotificationListener<ScrollNotification>(
+          onNotification: _onPagerScroll,
+          child: PageView(
+            controller: _pager,
+            onPageChanged: (i) {
+              if (i != _currentTab) setState(() => _currentTab = i);
+            },
+            children: [
+              // Builder: the feed must read the padding Scaffold reports for the floating nav.
+              _TabPage(active: _settledTab == null || _settledTab == 0, child: Builder(builder: _buildHomeFeed)),
+              _TabPage(
+                active: _settledTab == null || _settledTab == 1,
+                child: LiveTrackingScreen(visible: _settledTab == 1, onExplore: () => _goToTab(0)),
+              ),
+              _TabPage(
+                active: _settledTab == null || _settledTab == 2,
+                child: OrderHistoryScreen(
+                  selectedHostel: selectedHostel,
+                  onTrackOrder: () => _goToTab(1),
+                  onExplore: () => _goToTab(0),
+                ),
+              ),
+              _TabPage(
+                active: _settledTab == null || _settledTab == 3,
+                child: ProfileScreen(onOpenOrders: () => _goToTab(2), onTrackOrder: () => _goToTab(1)),
+              ),
+            ],
           ),
-          ProfileScreen(onOpenOrders: () => _goToTab(2), onTrackOrder: () => _goToTab(1)),
-        ],
+        ),
       ),
-      bottomNavigationBar: KGlassNav(
-        index: _currentTab,
-        onChanged: _goToTab,
+      bottomNavigationBar: KFluidNav(
+        controller: _pager,
+        onTap: _goToTab,
         items: const [
           KNavItem(LucideIcons.house, 'Home'),
           KNavItem(LucideIcons.bike, 'Track'),
@@ -227,6 +300,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
+                // INSERTION POINT for the promo banner carousel (Docs/25 section 4): a Column child right
+                // here, between the search field and the first-order promo. Gesture rule for it:
+                // wrap its horizontal PageView in KTabPagerHandoff and give it
+                // `physics: KTabPagerHandoff.pagePhysics`, so a swipe past its first/last card
+                // moves the tab pager instead of getting stuck (see kraveo_ui tab_pager_scope.dart).
                 // The first-order promo is only shown to a student who has no earlier order (the
                 // server refuses VITFIRST otherwise); while that is unknown it stays hidden.
                 if (!filtering && orderProvider.isFirstTimeCustomer) const KReveal(index: 2, child: _PromoCard()) else const SizedBox(height: 16),
@@ -234,10 +312,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (chips.length > 1)
                   KReveal(
                     index: 3,
-                    child: SizedBox(
+                    // The chips take their own horizontal drags; past either end the swipe moves the tab pager.
+                    child: KTabPagerHandoff(
+                      child: SizedBox(
                       height: 52,
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
+                        physics: KTabPagerHandoff.listPhysics,
                         padding: const EdgeInsets.symmetric(horizontal: KSpace.gutter, vertical: 4),
                         itemCount: chips.length,
                         separatorBuilder: (_, __) => const SizedBox(width: 8),
@@ -250,6 +331,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             onTap: () => dhabaProvider.setSelectedCategoryIndex(index),
                           );
                         },
+                      ),
                       ),
                     ),
                   ),
@@ -368,6 +450,30 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ]),
     );
+  }
+}
+
+/// One tab of the pager: kept alive when it is swiped away, and its tickers (entrance and
+/// pulse animations) only run while it is the resting tab or the pager is moving, as the
+/// IndexedStack used to do for the hidden tabs.
+class _TabPage extends StatefulWidget {
+  const _TabPage({required this.active, required this.child});
+
+  final bool active;
+  final Widget child;
+
+  @override
+  State<_TabPage> createState() => _TabPageState();
+}
+
+class _TabPageState extends State<_TabPage> with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return TickerMode(enabled: widget.active, child: widget.child);
   }
 }
 

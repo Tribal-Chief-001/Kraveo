@@ -39,6 +39,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/order_fakes.dart';
 import 'support/sample_catalog.dart';
+import 'support/shell_finders.dart';
 
 // ---- helpers ---------------------------------------------------------------------------------
 
@@ -243,7 +244,7 @@ void main() {
       await _tap(tester, find.text('Try again'));
       expect(server.vendorRequests, 2);
       expect(find.text('Can\'t load kitchens'), findsNothing);
-      await tester.scrollUntilVisible(find.text('Real Dhaba'), 200, scrollable: find.byType(Scrollable).first);
+      await tester.scrollUntilVisible(find.text('Real Dhaba'), 200, scrollable: homeFeedScrollable());
       expect(find.text('Real Dhaba'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
@@ -282,7 +283,7 @@ void main() {
       await tester.fling(find.byType(CustomScrollView).first, const Offset(0, 400), 1000);
       await _settle(tester);
       expect(find.textContaining('Couldn\'t refresh the kitchens'), findsOneWidget);
-      await tester.scrollUntilVisible(find.text('Real Dhaba'), 200, scrollable: find.byType(Scrollable).first);
+      await tester.scrollUntilVisible(find.text('Real Dhaba'), 200, scrollable: homeFeedScrollable());
       expect(find.text('Real Dhaba'), findsOneWidget);
       expect(find.text('Can\'t load kitchens'), findsNothing);
     });
@@ -316,7 +317,7 @@ void main() {
       await tester.tap(find.widgetWithText(KChoiceChip, 'Rolls'));
       await _settle(tester);
       expect(find.text('No kitchens match'), findsNothing);
-      await tester.scrollUntilVisible(find.text('Beta Kitchen'), 200, scrollable: find.byType(Scrollable).first);
+      await tester.scrollUntilVisible(find.text('Beta Kitchen'), 200, scrollable: homeFeedScrollable());
       expect(find.text('Beta Kitchen'), findsOneWidget);
       expect(find.text('Alpha Dhaba'), findsNothing);
       expect(tester.takeException(), isNull);
@@ -325,7 +326,7 @@ void main() {
     testWidgets('back from Orders / Me / Track returns to the Home tab first', (tester) async {
       _Server(vendors: [_vendor('v1', 'Real Dhaba')]).install();
       await _pump(tester, const HomeScreen(), dhabas: DhabaProvider());
-      int tab() => tester.widget<IndexedStack>(find.byType(IndexedStack).first).index ?? 0;
+      int tab() => tester.widget<PageView>(find.byType(PageView).first).controller!.page!.round();
       expect(tab(), 0);
       for (final (label, icon) in [('Orders', LucideIcons.receiptText), ('Me', LucideIcons.user), ('Track', LucideIcons.bike)]) {
         await tester.tap(find.byIcon(icon));
@@ -341,7 +342,7 @@ void main() {
     testWidgets('no invented "Min ₹99" on kitchen cards', (tester) async {
       _Server(vendors: [_vendor('v1', 'Real Dhaba')]).install();
       await _pump(tester, const HomeScreen(), dhabas: DhabaProvider());
-      await tester.scrollUntilVisible(find.text('Real Dhaba'), 200, scrollable: find.byType(Scrollable).first);
+      await tester.scrollUntilVisible(find.text('Real Dhaba'), 200, scrollable: homeFeedScrollable());
       expect(find.textContaining('Min'), findsNothing);
       expect(find.textContaining('Delivery'), findsWidgets);
     });
