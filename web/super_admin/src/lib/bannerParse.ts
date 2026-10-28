@@ -30,7 +30,14 @@ export interface Banner {
   /** Percent with one decimal (12.5 = 12.5 %); null while there are no views. */
   ctr: number | null;
   status: BannerStatus;
+  /** Position among the LIVE banners (1 = first card); null when not live. */
+  rank: number | null;
+  /** The app shows only the first MAX_SHOWN live banners: false = live but cut off (or not live). */
+  shown: boolean;
 }
+
+/** The app shows at most this many live banners at once (Docs/25 section 1). */
+export const MAX_SHOWN = 10;
 
 const isObject = (value: unknown): value is Record<string, any> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const count = (value: unknown): number => {
@@ -66,7 +73,10 @@ export const parseBanner = (raw: unknown): Banner | null => {
     startsAt: instant(raw.startsAt),
     endsAt: instant(raw.endsAt),
   };
+  const rankRaw = Number(raw.rank);
+  const rank = raw.rank !== null && raw.rank !== undefined && Number.isFinite(rankRaw) && rankRaw >= 1 ? Math.floor(rankRaw) : null;
   const ctrRaw = typeof raw.ctr === 'number' && Number.isFinite(raw.ctr) && raw.ctr >= 0 ? raw.ctr : null;
+  const status: BannerStatus = typeof raw.status === 'string' && STATUSES.includes(raw.status) ? (raw.status as BannerStatus) : statusOf(base);
   return {
     id,
     title: text(raw.title) ?? 'Untitled banner',
@@ -80,7 +90,10 @@ export const parseBanner = (raw: unknown): Banner | null => {
     viewCount,
     clickCount,
     ctr: ctrRaw ?? (viewCount > 0 ? Math.round((clickCount / viewCount) * 1000) / 10 : null),
-    status: typeof raw.status === 'string' && STATUSES.includes(raw.status) ? (raw.status as BannerStatus) : statusOf(base),
+    status,
+    rank,
+    // An older server sends no `shown`: a live banner then counts as shown (nothing is claimed that the server did not say).
+    shown: typeof raw.shown === 'boolean' ? raw.shown : status === 'LIVE',
   };
 };
 

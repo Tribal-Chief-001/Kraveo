@@ -499,3 +499,207 @@ describe('BannerDrawer: keyboard and focus', () => {
     expect(notice!.getAttribute('role')).toBe('status');
   });
 });
+
+// ───────────────────────────── review fixes (M2, L6, L7, host hint) ─────────────────────────────
+
+/** What Chrome does for a half-typed date-time: value stays '' and validity.badInput is true. jsdom cannot make that itself, so the flag is set by hand. */
+const halfFill = async (el: HTMLInputElement, how: 'input' | 'blur' = 'input') => {
+  Object.defineProperty(el, 'validity', { configurable: true, value: { badInput: true } });
+  await act(async () => { el.dispatchEvent(how === 'input' ? new Event('input', { bubbles: true }) : new FocusEvent('focusout', { bubbles: true })); });
+};
+const clearBtn = (label: string) => document.querySelector(`button[aria-label="Clear ${label}"]`) as HTMLButtonElement;
+const msgOf = (suffix: string) => document.getElementById(`${field(suffix).id}-msg`)?.textContent;
+
+describe('BannerDrawer: half-filled date-time (M2)', () => {
+  it.each([['input'], ['blur']] as const)('a half-typed start (%s event) is not "no schedule": message, Clear enabled, Save blocked', async (how) => {
+    const create = vi.spyOn(apiService, 'createBanner').mockResolvedValue(banner(rawCreated()));
+    await mount(render().element);
+    await fillValid();
+    expect(clearBtn('Starts (IST)').disabled).toBe(true);
+    await halfFill(field('startsAt'), how);
+    expect(field('startsAt').value).toBe('');
+    expect(msgOf('startsAt')).toBe('Enter the time too, or press Clear.');
+    expect(field('startsAt').getAttribute('aria-invalid')).toBe('true');
+    expect(clearBtn('Starts (IST)').disabled).toBe(false);
+    expect(document.querySelector('[data-testid="banner-when"]')!.textContent).toContain('half filled');
+    await click(saveBtn());
+    await flush();
+    expect(create).not.toHaveBeenCalled();
+    expect(alerts()).toContain('Some fields need fixing. They are marked below.');
+    expect(document.activeElement).toBe(field('startsAt'));
+  });
+
+  it('the same for the end picker, and on a saved banner the end is NOT silently cleared', async () => {
+    const b = banner({ endsAt: '2026-11-01T13:00:00.000Z' });
+    const update = vi.spyOn(apiService, 'updateBanner');
+    await mount(render({ banner: b }).element);
+    // the admin backspaces a segment: the native value becomes ''
+    await type(field('endsAt'), '');
+    await halfFill(field('endsAt'));
+    expect(msgOf('endsAt')).toBe('Enter the time too, or press Clear.');
+    await click(saveBtn());
+    await flush();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('Clear resets the native input (a new element) and removes the message; then Save works without that time', async () => {
+    const create = vi.spyOn(apiService, 'createBanner').mockResolvedValue(banner(rawCreated()));
+    await mount(render().element);
+    await fillValid();
+    const before = field('startsAt');
+    await halfFill(before);
+    await click(clearBtn('Starts (IST)'));
+    expect(field('startsAt')).not.toBe(before);
+    expect(field('startsAt').value).toBe('');
+    expect(field('startsAt').getAttribute('aria-invalid')).toBe('false');
+    expect(msgOf('startsAt')).not.toContain('Enter the time too');
+    expect(clearBtn('Starts (IST)').disabled).toBe(true);
+    await click(saveBtn());
+    await flush();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0]).not.toHaveProperty('startsAt');
+  });
+
+  it('completing the time clears the half-filled state', async () => {
+    await mount(render().element);
+    await halfFill(field('startsAt'));
+    expect(msgOf('startsAt')).toBe('Enter the time too, or press Clear.');
+    Object.defineProperty(field('startsAt'), 'validity', { configurable: true, value: { badInput: false } });
+    await type(field('startsAt'), '2026-11-01T10:00');
+    expect(field('startsAt').getAttribute('aria-invalid')).toBe('false');
+    expect(document.querySelector('[data-testid="banner-when"]')!.textContent).toBe('From 1 Nov 2026, 10:00 am IST');
+  });
+
+  it('a half-filled picker counts as unsaved work when closing', async () => {
+    const { props, element } = render();
+    await mount(element);
+    await halfFill(field('endsAt'));
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('BannerDrawer: IME composition (L6)', () => {
+  const enter = async (init: KeyboardEventInit) => act(async () => { field('title').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, ...init })); });
+
+  it('Enter while an IME word is being composed does not save (isComposing, and keyCode 229)', async () => {
+    const create = vi.spyOn(apiService, 'createBanner').mockResolvedValue(banner(rawCreated()));
+    await mount(render().element);
+    await type(field('imageUrl'), BANNER_IMG);
+    await type(field('title'), 'दिवाली धमाका');
+    await enter({ isComposing: true });
+    await enter({ keyCode: 229 });
+    await flush();
+    expect(create).not.toHaveBeenCalled();
+    await enter({});
+    await flush();
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BannerDrawer: closing (L7)', () => {
+  const closeAttempts = async () => {
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    await click(document.querySelector('button[aria-label="Close panel"]'));
+    await click(document.querySelector('[role="dialog"]')!.previousElementSibling); // the dimmed backdrop
+    await click(byText('button', 'Cancel', document.querySelector('footer')!));
+  };
+
+  it('Esc, X, backdrop and Cancel are all ignored while the save is running', async () => {
+    let release: (b: any) => void = () => {};
+    vi.spyOn(apiService, 'createBanner').mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+    const { props, element } = render();
+    await mount(element);
+    await fillValid();
+    await click(saveBtn());
+    await closeAttempts();
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () => { release(banner(rawCreated())); });
+    await flush();
+    expect(props.onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it('and while a picture is uploading', async () => {
+    vi.spyOn(apiService, 'uploadImage').mockImplementation(() => new Promise(() => {}));
+    const { props, element } = render({ imageEnv: fakeEnv() });
+    await mount(element);
+    await choose(new File([new Uint8Array(3000)], 'a.jpg', { type: 'image/jpeg' }));
+    await flush();
+    await closeAttempts();
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+  });
+
+  it('with unsaved edits every way of closing asks "Discard changes?" first; Keep editing stays, Discard closes', async () => {
+    const { props, element } = render();
+    await mount(element);
+    await type(field('title'), 'Half written');
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    const dialog = () => document.querySelector('[role="alertdialog"]')!;
+    expect(dialog().textContent).toContain('Discard changes?');
+    expect(dialog().textContent).toContain('will be lost');
+    expect(props.onClose).not.toHaveBeenCalled();
+    await click(byText('button', 'Keep editing', dialog()));
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(field('title').value).toBe('Half written');
+    // the other three routes ask too
+    await click(document.querySelector('button[aria-label="Close panel"]'));
+    expect(dialog()).toBeTruthy();
+    await click(byText('button', 'Keep editing', dialog()));
+    await click(document.querySelector('[role="dialog"]')!.previousElementSibling);
+    expect(dialog()).toBeTruthy();
+    await click(byText('button', 'Keep editing', dialog()));
+    await click(byText('button', 'Cancel', document.querySelector('footer')!));
+    expect(dialog()).toBeTruthy();
+    await click(byText('button', 'Discard changes', dialog()));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('an untouched form, and an edit form that is back to its saved values, close without asking', async () => {
+    const { props, element } = render({ banner: banner() });
+    await mount(element);
+    await type(field('title'), 'Changed');
+    await type(field('title'), 'One');
+    await click(byText('button', 'Cancel', document.querySelector('footer')!));
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BannerDrawer: sites the server allows (BANNER_LINK_INVALID / BANNER_IMAGE_INVALID)', () => {
+  it('shows the server message in full and a one-line hint at the link field', async () => {
+    const message = 'The link must be on one of these sites: play.google.com, forms.gle, docs.google.com, kraveo.site.';
+    vi.spyOn(apiService, 'createBanner').mockRejectedValue(apiError(400, 'BANNER_LINK_INVALID', message, 'linkUrl'));
+    await mount(render().element);
+    await fillValid();
+    await type(field('linkUrl'), 'https://example.com/x');
+    await click(saveBtn()); await flush();
+    expect(msgOf('linkUrl')).toBe(message);
+    expect(document.querySelector('[data-testid="linkUrl-host-hint"]')!.textContent).toContain('Only the sites named above are allowed');
+    expect(document.querySelector('[data-testid="imageUrl-host-hint"]')).toBeNull();
+    await type(field('linkUrl'), 'https://forms.gle/x'); // typing again clears message and hint
+    expect(document.querySelector('[data-testid="linkUrl-host-hint"]')).toBeNull();
+  });
+
+  it('the same for the picture address', async () => {
+    const message = 'The image address must be on one of these sites: kraveo.site, images.unsplash.com.';
+    vi.spyOn(apiService, 'createBanner').mockRejectedValue(apiError(400, 'BANNER_IMAGE_INVALID', message, 'imageUrl'));
+    await mount(render().element);
+    await fillValid();
+    await click(saveBtn()); await flush();
+    expect(msgOf('imageUrl')).toBe(message);
+    expect(document.querySelector('[data-testid="imageUrl-host-hint"]')).not.toBeNull();
+  });
+
+  it('an ordinary link error gets no hint', async () => {
+    vi.spyOn(apiService, 'createBanner').mockRejectedValue(apiError(400, 'BANNER_LINK_INVALID', 'The link must use a real website name, like example.com.', 'linkUrl'));
+    await mount(render().element);
+    await fillValid();
+    await click(saveBtn()); await flush();
+    expect(document.querySelector('[data-testid="linkUrl-host-hint"]')).toBeNull();
+  });
+});

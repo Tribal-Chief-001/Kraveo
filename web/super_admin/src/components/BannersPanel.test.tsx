@@ -453,3 +453,39 @@ describe('BannersPanel at phone width (360 px)', () => {
     expect(document.querySelector('footer')).not.toBeNull(); // Save / Cancel stay visible outside the scrolling area
   });
 });
+
+describe('BannersPanel: live limit and wording (L4, L5)', () => {
+  const twelveLive = () => Array.from({ length: 12 }, (_, i) => parseBanner(rawBanner({ id: `live-${i + 1}`, title: `Live ${i + 1}`, status: 'LIVE', startsAt: null, endsAt: null, sortOrder: (i + 1) * 10, rank: i + 1, shown: i + 1 <= 10 }))!);
+
+  it('the 11th and 12th live banners say they are not shown; the first ten say Live and "Customers see it now."', async () => {
+    vi.spyOn(apiService, 'fetchBanners').mockResolvedValue(twelveLive());
+    await mount(render().element);
+    await flush();
+    const chip = (t: string) => rowOf(t).querySelector('[data-testid="banner-status"]') as HTMLElement;
+    expect(chip('Live 10').textContent).toBe('Live');
+    expect(chip('Live 10').getAttribute('title')).toBe('Customers see it now.');
+    expect(rowOf('Live 10').querySelector('[data-testid="banner-notshown"]')).toBeNull();
+    expect(chip('Live 11').textContent).toBe('Live (not shown, limit 10)');
+    expect(chip('Live 11').getAttribute('title')).not.toContain('Customers see it now');
+    expect(rowOf('Live 11').querySelector('[data-testid="banner-notshown"]')!.textContent).toBe('The app shows only the first 10 live banners, and this one is number 11. Move it up, or switch another banner off, for customers to see it.');
+    expect(chip('Live 12').textContent).toBe('Live (not shown, limit 10)');
+    expect(rowOf('Live 12').textContent).toContain('number 12');
+  });
+
+  it('other statuses are unchanged (Scheduled / Off / Expired never claim to be shown)', async () => {
+    vi.spyOn(apiService, 'fetchBanners').mockResolvedValue(four());
+    await mount(render().element);
+    await flush();
+    for (const r of rows()) expect(r.querySelector('[data-testid="banner-notshown"]')).toBeNull();
+    expect(rowOf('One').querySelector('[data-testid="banner-status"]')!.getAttribute('title')).toBe('Switched on, waiting for its start time.');
+  });
+
+  it('tells the truth about how fast changes arrive and that counters are approximate', async () => {
+    vi.spyOn(apiService, 'fetchBanners').mockResolvedValue([SCHEDULED()]);
+    await mount(render().element);
+    await flush();
+    expect(bodyText()).toContain('Customers see changes the next time they open or refresh the app (and within about 10 minutes while the app stays open)');
+    expect(bodyText()).toContain('Views and taps are approximate and update within seconds.');
+    expect(bodyText()).not.toContain('about a minute');
+  });
+});

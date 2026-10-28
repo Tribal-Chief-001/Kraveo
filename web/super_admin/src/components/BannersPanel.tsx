@@ -1,7 +1,7 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Copy, ImageOff, Megaphone, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { apiService, ApiError } from '../services/api';
-import { Banner, BannerStatus, MAX_BANNERS, ctrText, scheduleText } from '../lib/bannerParse';
+import { Banner, BannerStatus, MAX_BANNERS, MAX_SHOWN, ctrText, scheduleText } from '../lib/bannerParse';
 import { moveItem } from '../lib/categoryParse';
 import { errorText } from '../lib/errors';
 import { BannerDrawer } from './BannerDrawer';
@@ -23,6 +23,15 @@ const STATUS: Record<BannerStatus, { label: string; cls: string; help: string }>
   SCHEDULED: { label: 'Scheduled', cls: 'bg-kraveo-yellow/15 text-kraveo-yellow', help: 'Switched on, waiting for its start time.' },
   EXPIRED: { label: 'Expired', cls: 'bg-kraveo-danger/10 text-kraveo-danger', help: 'Its end time has passed.' },
   OFF: { label: 'Off', cls: 'bg-kraveo-line text-kraveo-ink2', help: 'Switched off. Customers do not see it.' },
+};
+
+/** Chip text and explanation. A LIVE banner past the app's limit of 10 is not shown to customers, so it must not say so. */
+const statusInfo = (b: Banner): { label: string; cls: string; help: string; extra: string } => {
+  if (b.status === 'LIVE' && !b.shown) {
+    return { label: `Live (not shown, limit ${MAX_SHOWN})`, cls: 'bg-kraveo-yellow/15 text-kraveo-yellow', help: `Switched on and inside its dates, but the app shows only the first ${MAX_SHOWN} live banners.`, extra: `The app shows only the first ${MAX_SHOWN} live banners, and this one is number ${b.rank ?? '?'}. Move it up, or switch another banner off, for customers to see it.` };
+  }
+  const base = STATUS[b.status];
+  return { ...base, extra: '' };
 };
 
 interface RowProps {
@@ -51,7 +60,7 @@ const Thumb: React.FC<{ url: string }> = ({ url }) => {
 };
 
 const Row = memo<RowProps>(({ banner, position, total, busy, onToggle, onMove, onEdit, onDuplicate, onDelete, atLimit }) => {
-  const st = STATUS[banner.status];
+  const st = statusInfo(banner);
   const name = banner.title;
   return (
     <li className={`k-card flex flex-col gap-3 p-4 md:flex-row md:items-center ${banner.status === 'OFF' || banner.status === 'EXPIRED' ? 'opacity-90' : ''}`} data-banner-id={banner.id}>
@@ -67,6 +76,7 @@ const Row = memo<RowProps>(({ banner, position, total, busy, onToggle, onMove, o
           <span className="min-w-0 break-words" data-testid="banner-title">{banner.title}</span>
           <span className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${st.cls}`} title={st.help} data-testid="banner-status">{st.label}</span>
         </p>
+        {st.extra && <p className="break-words text-xs font-semibold text-kraveo-yellow" data-testid="banner-notshown">{st.extra}</p>}
         {banner.subtitle && <p className="line-clamp-2 break-words text-xs text-kraveo-ink2">{banner.subtitle}</p>}
         <p className="text-xs text-kraveo-ink2" data-testid="banner-schedule">{scheduleText(banner)}</p>
         <p className="break-all text-[11px] text-kraveo-ink3">{banner.linkUrl ? `Link: ${banner.linkUrl}` : 'No link (display only)'}</p>
@@ -108,6 +118,15 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
   const [serverOrder, setServerOrder] = useState<string[]>([]);
   const [order, setOrder] = useState<string[]>([]);
   const serverOrderRef = useRef<string[]>([]);
+  const orderRef = useRef<string[]>([]);
+  // Both orders are changed ONLY through these two, always with a value computed outside any state updater.
+  const commitOrder = (next: string[]) => { orderRef.current = next; setOrder(next); };
+  const commitServerOrder = (next: string[]) => { serverOrderRef.current = next; setServerOrder(next); };
+  // Reload race guards: a list fetched before a delete / duplicate / reorder / edit finished must never overwrite it.
+  const requestId = useRef(0); // grows with every fetch; only the newest may be applied
+  const mutationGen = useRef(0); // bumped when a change starts and when it finishes; a fetch that overlapped one is stale
+  const removedIds = useRef<Set<string>>(new Set()); // ids deleted (or being deleted) here: never shown again, even by a stale answer
+  const bumpMutation = () => { mutationGen.current += 1; };
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
@@ -115,30 +134,35 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   const busyRef = useRef<Set<string>>(new Set());
   const [savingOrder, setSavingOrder] = useState(false);
-  const [drawer, setDrawer] = useState<{ banner: Banner | null } | null>(null);
+  const [drawer, setDrawer] = useState<{ banner: Banner | null; session: number } | null>(null);
+  const drawerRef = useRef<typeof drawer>(null);
+  const sessionCounter = useRef(0);
+  const openDrawer = (banner: Banner | null) => { sessionCounter.current += 1; const next = { banner, session: sessionCounter.current }; drawerRef.current = next; setDrawer(next); };
+  const closeDrawer = () => { drawerRef.current = null; setDrawer(null); };
   const [announce, setAnnounce] = useState('');
   const focusAfter = useRef<{ id: string; dir: 'up' | 'down' } | null>(null);
-  const seq = useRef(0);
 
   useEffect(() => {
-    const mine = ++seq.current;
+    const mine = ++requestId.current;
+    const gen = mutationGen.current;
     setLoading(true);
     apiService.fetchBanners()
-      .then((rows) => {
-        if (mine !== seq.current) return;
+      .then((fetched) => {
+        if (mine !== requestId.current || gen !== mutationGen.current) return; // superseded, or a change happened while it was on the way
+        const rows = fetched.filter((r) => !removedIds.current.has(r.id));
         const ids = rows.map((r) => r.id);
         // Unsaved order changes survive a reload; an untouched order simply follows the server.
-        setOrder((current) => (sameOrder(current, serverOrderRef.current) ? ids : mergeOrder(current, ids)));
-        serverOrderRef.current = ids;
-        setList(rows); setServerOrder(ids); setError(''); setLoaded(true);
+        const nextOrder = sameOrder(orderRef.current, serverOrderRef.current) ? ids : mergeOrder(orderRef.current, ids);
+        commitOrder(nextOrder); commitServerOrder(ids);
+        setList(rows); setError(''); setLoaded(true);
       })
       .catch((failure) => {
-        if (mine !== seq.current) return;
+        if (mine !== requestId.current) return;
         onAuthError(failure);
         setError(errorText(failure, 'The banners could not be loaded.'));
       })
-      .finally(() => { if (mine === seq.current) setLoading(false); });
-    return () => { seq.current++; };
+      .finally(() => { if (mine === requestId.current) setLoading(false); });
+    return () => { requestId.current++; };
   }, [reloadKey, onAuthError]);
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
@@ -154,15 +178,13 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
   const replaceRow = useCallback((next: Banner) => setList((current) => current.map((b) => (b.id === next.id ? next : b))), []);
   const addRow = (banner: Banner) => {
     setList((current) => [...current, banner]);
-    serverOrderRef.current = [...serverOrderRef.current, banner.id];
-    setServerOrder(serverOrderRef.current);
-    setOrder((current) => [...current, banner.id]);
+    commitServerOrder([...serverOrderRef.current, banner.id]);
+    commitOrder([...orderRef.current, banner.id]);
   };
   const dropRow = (id: string) => {
     setList((current) => current.filter((b) => b.id !== id));
-    serverOrderRef.current = serverOrderRef.current.filter((x) => x !== id);
-    setServerOrder(serverOrderRef.current);
-    setOrder((current) => current.filter((x) => x !== id));
+    commitServerOrder(serverOrderRef.current.filter((x) => x !== id));
+    commitOrder(orderRef.current.filter((x) => x !== id));
   };
 
   // Not optimistic: the switch shows what the server has. It is disabled while the request runs, and the server may refuse
@@ -170,6 +192,7 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
   const toggle = useCallback(async (banner: Banner) => {
     if (busyRef.current.has(banner.id)) return;
     setBusy(banner.id, true);
+    bumpMutation();
     try {
       const out = await apiService.updateBanner(banner.id, { isActive: !banner.isActive });
       replaceRow(out.banner);
@@ -179,6 +202,7 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
       toast.error('Not changed', errorText(failure));
       if (failure instanceof ApiError && failure.status === 404) reload();
     } finally {
+      bumpMutation();
       setBusy(banner.id, false);
     }
   }, [onAuthError, reload, replaceRow, toast]);
@@ -188,7 +212,7 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
     const next = moveItem(order, index, delta);
     if (next === order) return;
     focusAfter.current = { id, dir: delta < 0 ? 'up' : 'down' };
-    setOrder(next);
+    commitOrder(next);
     setAnnounce(`${byId.get(id)?.title ?? 'Banner'} moved to position ${index + delta + 1} of ${order.length}.`);
   }, [order, byId]);
 
@@ -206,11 +230,12 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
   const saveOrder = async () => {
     if (savingOrder || !orderDirty) return;
     setSavingOrder(true);
+    bumpMutation();
     try {
-      const rows = await apiService.reorderBanners(order);
+      const rows = (await apiService.reorderBanners(order)).filter((r) => !removedIds.current.has(r.id));
       const ids = rows.map((r) => r.id);
-      serverOrderRef.current = ids;
-      setList(rows); setServerOrder(ids); setOrder(ids);
+      commitServerOrder(ids); commitOrder(ids);
+      setList(rows);
       toast.success('Order saved', 'The app shows live banners in this order.');
       setAnnounce('Order saved.');
     } catch (failure) {
@@ -219,13 +244,17 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
       setAnnounce('The order could not be saved.');
       if (failure instanceof ApiError && failure.code === 'BANNER_UNKNOWN') reload(); // a banner was deleted meanwhile
     } finally {
+      bumpMutation();
       setSavingOrder(false);
     }
   };
-  const discardOrder = () => { setOrder(serverOrder); setAnnounce('Order changes discarded.'); };
+  const discardOrder = () => { commitOrder(serverOrder); setAnnounce('Order changes discarded.'); };
 
-  const onSaved = (banner: Banner, created: boolean, message: string) => {
-    setDrawer(null);
+  // `session` = which opening of the drawer made the save. A save that finishes for an older opening still updates the list (it happened on
+  // the server) but never closes a drawer the admin has opened since.
+  const onSaved = (session: number, banner: Banner, created: boolean, message: string) => {
+    if (drawerRef.current?.session === session) closeDrawer();
+    bumpMutation();
     if (created) {
       addRow(banner);
       toast.success('Banner added', `“${banner.title}” was added to the end of the list.`);
@@ -242,6 +271,7 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
   const duplicate = useCallback(async (banner: Banner) => {
     if (busyRef.current.has(banner.id)) return;
     setBusy(banner.id, true);
+    bumpMutation();
     try {
       const copy = await apiService.duplicateBanner(banner.id);
       addRow(copy);
@@ -252,6 +282,7 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
       toast.error('Not copied', errorText(failure));
       if (failure instanceof ApiError && (failure.status === 404 || failure.status === 409)) reload();
     } finally {
+      bumpMutation();
       setBusy(banner.id, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -262,29 +293,34 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
     const ok = await confirm({ title: `Delete “${banner.title}”?`, message: 'Customers stop seeing it and its view and tap counts are lost. This cannot be undone. To hide it for a while, switch it off instead.', confirmLabel: 'Delete banner', danger: true });
     if (!ok) return;
     setBusy(banner.id, true);
+    bumpMutation();
+    removedIds.current.add(banner.id); // from now on no (older) list answer may bring the row back
     try {
       await apiService.deleteBanner(banner.id);
       dropRow(banner.id);
       toast.success('Banner deleted', `“${banner.title}” was removed.`);
       setAnnounce('Banner deleted.');
     } catch (failure) {
+      removedIds.current.delete(banner.id); // the delete did not happen: the row belongs back
       onAuthError(failure);
       toast.error('Not deleted', errorText(failure));
+      reload(); // a list answer in the meantime may have left the row out
     } finally {
+      bumpMutation();
       setBusy(banner.id, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [confirm, onAuthError, toast]);
+  }, [confirm, onAuthError, reload, toast]);
 
-  const edit = useCallback((banner: Banner) => setDrawer({ banner }), []);
+  const edit = useCallback((banner: Banner) => openDrawer(banner), []);
   const initialLoad = loading && !loaded && !error;
   const empty = loaded && !error && list.length === 0;
-  const add = () => setDrawer({ banner: null });
+  const add = () => openDrawer(null);
 
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-kraveo-ink2">The pictures that slide across the top of the customer app Home. Use them for launches, offers and events. Changes reach customers within about a minute, without a new app version.</p>
+        <p className="text-sm text-kraveo-ink2">The pictures that slide across the top of the customer app Home. Use them for launches, offers and events. Customers see changes the next time they open or refresh the app (and within about 10 minutes while the app stays open), without a new app version. Views and taps are approximate and update within seconds.</p>
         <div className="flex shrink-0 items-center gap-2">
           <button type="button" className="k-icon-btn" aria-label="Reload banners" title="Reload banners" onClick={reload} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" /></button>
           <button type="button" className="k-btn-accent" onClick={add} disabled={atLimit} aria-describedby={atLimit ? 'banner-limit' : undefined}><Plus className="h-4 w-4" aria-hidden="true" />Add banner</button>
@@ -297,7 +333,7 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
         <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
           <li>Customers see banners that are switched on and inside their dates, in the order below. The app shows at most 10 at once.</li>
           <li>Live = showing now. Scheduled = waiting for its start. Expired = its end has passed. Off = switched off.</li>
-          <li>Times are in India time (IST). Views and taps are counted by the app; they cannot be edited. CTR is taps divided by views.</li>
+          <li>Times are in India time (IST). Views and taps are counted by the app, are approximate and cannot be edited. CTR is taps divided by views.</li>
           <li>Tapping a banner opens its link (a web page, a Play Store page or a Google Form). A banner without a link only shows.</li>
         </ul>
       </details>
@@ -350,7 +386,7 @@ const BannersPanelBase: React.FC<Props> = ({ onAuthError, imageEnv }) => {
         </div>
       )}
 
-      {drawer && <BannerDrawer banner={drawer.banner} onClose={() => setDrawer(null)} onSaved={onSaved} onAuthError={onAuthError} imageEnv={imageEnv} />}
+      {drawer && <BannerDrawer key={drawer.session} banner={drawer.banner} onClose={closeDrawer} onSaved={(b, c, m) => onSaved(drawer.session, b, c, m)} onAuthError={onAuthError} imageEnv={imageEnv} />}
       {dialog}
     </div>
   );

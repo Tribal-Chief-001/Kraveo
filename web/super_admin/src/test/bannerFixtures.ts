@@ -21,6 +21,8 @@ export const rawBanner = (over: Record<string, unknown> = {}): Record<string, an
   clickCount: 5,
   ctr: 12.5,
   status: 'SCHEDULED',
+  rank: null,
+  shown: false,
   createdByUserId: 'usr-5',
   createdAt: '2026-10-28T17:30:38.940Z',
   updatedAt: '2026-10-28T17:30:38.954Z',
@@ -30,18 +32,18 @@ export const rawBanner = (over: Record<string, unknown> = {}): Record<string, an
 /** The create answer: always-on, no link, no counters (section 7.2 "Create"). */
 export const rawCreated = (over: Record<string, unknown> = {}) => rawBanner({
   id: '33341894-b6d3-4f67-91fa-a908eca24823', title: 'Diwali Dhamaka', linkUrl: null, ctaLabel: null, startsAt: null, endsAt: null, viewCount: 0, clickCount: 0, ctr: null,
-  status: 'LIVE', createdAt: '2026-10-28T17:30:38.920Z', updatedAt: '2026-10-28T17:30:38.920Z', ...over,
+  status: 'LIVE', rank: 1, shown: true, createdAt: '2026-10-28T17:30:38.920Z', updatedAt: '2026-10-28T17:30:38.920Z', ...over,
 });
 
 /** The duplicate answer (section 7.2 "Duplicate"): switched off, counters 0, "(copy)". */
 export const rawCopy = (over: Record<string, unknown> = {}) => rawBanner({
   id: 'f380a834-5b4e-4fa1-b906-45b2dc91f99f', title: 'Launch (copy)', subtitle: 'Sub', linkUrl: 'https://forms.gle/z', ctaLabel: 'Join', theme: 'LIGHT', isActive: false,
-  startsAt: '2026-11-01T11:00:00.000Z', endsAt: '2026-11-01T12:00:00.000Z', sortOrder: 30, viewCount: 0, clickCount: 0, ctr: null, status: 'OFF', ...over,
+  startsAt: '2026-11-01T11:00:00.000Z', endsAt: '2026-11-01T12:00:00.000Z', sortOrder: 30, viewCount: 0, clickCount: 0, ctr: null, status: 'OFF', rank: null, shown: false, ...over,
 });
 
 export const rawSecond = (over: Record<string, unknown> = {}) => rawBanner({
   id: '3a6fef14-70ff-47de-b0c2-1d328e4b597e', title: 'Second', subtitle: 'Sub', linkUrl: null, ctaLabel: null, theme: 'LIGHT', startsAt: null, endsAt: null, sortOrder: 20,
-  viewCount: 0, clickCount: 0, ctr: null, status: 'LIVE', ...over,
+  viewCount: 0, clickCount: 0, ctr: null, status: 'LIVE', rank: 1, shown: true, ...over,
 });
 
 export const rawBannerList = (rows: Record<string, unknown>[] = [rawBanner(), rawSecond()]) => ({ success: true, count: rows.length, data: rows });

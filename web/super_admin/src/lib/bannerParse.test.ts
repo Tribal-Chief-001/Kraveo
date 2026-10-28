@@ -15,7 +15,7 @@ describe('parseBanner / parseBannerList (real admin shapes)', () => {
     expect(parseBanner(rawBanner())).toEqual({
       id: 'dd002330-7627-4565-8199-a55a758f1411', title: 'One', subtitle: null, imageUrl: 'https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg',
       linkUrl: 'https://forms.gle/x1', ctaLabel: 'Go', theme: 'DARK', isActive: true, startsAt: '2026-11-01T09:50:00.000Z', endsAt: '2026-11-01T10:10:00.000Z',
-      sortOrder: 10, viewCount: 40, clickCount: 5, ctr: 12.5, status: 'SCHEDULED',
+      sortOrder: 10, viewCount: 40, clickCount: 5, ctr: 12.5, status: 'SCHEDULED', rank: null, shown: false,
     });
   });
 
@@ -57,6 +57,23 @@ describe('parseBanner / parseBannerList (real admin shapes)', () => {
     expect(parseBannerResult(copyAnswer(rawCopy()))).toMatchObject({ banner: { title: 'Launch (copy)', isActive: false, status: 'OFF' } });
     expect(parseBannerResult({})).toEqual({ banner: null, changed: true, message: '' });
     expect(parseBannerResult(null).banner).toBeNull();
+  });
+});
+
+describe('rank / shown (the app shows only the first 10 live banners)', () => {
+  it('reads rank and shown from the real rows around the cut line', () => {
+    expect(parseBanner(rawBanner({ status: 'LIVE', rank: 10, shown: true }))).toMatchObject({ rank: 10, shown: true });
+    expect(parseBanner(rawBanner({ status: 'LIVE', rank: 11, shown: false }))).toMatchObject({ rank: 11, shown: false });
+    expect(parseBanner(rawBanner({ status: 'OFF', rank: null, shown: false }))).toMatchObject({ rank: null, shown: false });
+  });
+  it('an older server without these fields: live counts as shown, others do not; junk never gives NaN', () => {
+    const { rank, shown, ...old } = rawBanner({ status: 'LIVE' });
+    void rank; void shown;
+    expect(parseBanner(old)).toMatchObject({ rank: null, shown: true });
+    expect(parseBanner({ ...old, status: 'SCHEDULED' })).toMatchObject({ rank: null, shown: false });
+    expect(parseBanner(rawBanner({ rank: 'x', shown: 'yes', status: 'LIVE' }))).toMatchObject({ rank: null, shown: true });
+    expect(parseBanner(rawBanner({ rank: -2 }))!.rank).toBeNull();
+    expect(parseBanner(rawBanner({ rank: 3.9 }))!.rank).toBe(3);
   });
 });
 
