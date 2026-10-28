@@ -17,6 +17,7 @@ import { catalogRouter } from './catalog';
 import { retryStaleRead } from '../utils/prismaRetry';
 import { categoriesRouter } from './categories';
 import { uploadRouter } from './uploads';
+import { bannersRouter } from './banners';
 import { prepareNewVendorCuisines, linkNewVendorCuisines, checkCuisineIds } from '../services/categories';
 import { editVendorProfile } from '../services/vendorProfile';
 import { financeRouter } from './finance';
@@ -45,6 +46,8 @@ apiRouter.use(deviceRouter);
 apiRouter.use(catalogRouter);
 // Managed categories (Docs/23): public GET /categories and the admin category tools.
 apiRouter.use(categoriesRouter);
+// Home banners (Docs/25): public GET /banners + POST /banners/events and the admin banner tools.
+apiRouter.use(bannersRouter);
 // Admin image upload (Docs/23 section 3.6); the files themselves are served by mountUploads() in routes/uploads.ts.
 apiRouter.use(uploadRouter);
 // Payout details, settlements, finance analytics and the rider payout ledger (Docs/21 phase 2).

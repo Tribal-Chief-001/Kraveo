@@ -129,6 +129,10 @@ const RULES: Rule[] = [
   { name: 'PARTNER_APPLICATION_WRITE', scope: 'user', max: 10, windowMs: 60 * MIN, applies: (r, p) => r.method === 'PUT' && p === '/partner/application', message: 'You changed the application too many times. Please try again in an hour.' },
   // Docs/23: the public category list is cached on the server; this only stops a loop (a campus NAT is one address, so the number is generous).
   { name: 'CATEGORIES_PUBLIC', scope: 'ip', max: 600, windowMs: MIN, applies: (r, p) => r.method === 'GET' && p === '/categories', message: 'Too many requests from this network. Please try again in a minute.' },
+  // Docs/25: Home banners. The public list is cached on the server and the events call is tiny; these only stop a loop (a campus NAT is one address).
+  { name: 'BANNERS_PUBLIC', scope: 'ip', max: 600, windowMs: MIN, applies: (r, p) => r.method === 'GET' && p === '/banners', message: 'Too many requests from this network. Please try again in a minute.' },
+  { name: 'BANNER_EVENTS', scope: 'ip', max: 300, windowMs: MIN, applies: (r, p) => r.method === 'POST' && p === '/banners/events', message: 'Too many requests from this network. Please try again in a minute.' },
+  { name: 'ADMIN_BANNER_WRITE', scope: 'user', max: 120, windowMs: 10 * MIN, applies: (r, p) => ['POST', 'PATCH', 'DELETE'].includes(r.method) && /^\/admin\/banners(\/|$)/.test(p), message: 'Too many banner changes. Please wait a few minutes.' },
   { name: 'ADMIN_RECALCULATE', scope: 'user', max: 20, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/catalog/recalculate', message: 'Too many price recalculations. Please wait a few minutes.' },
   { name: 'ADMIN_SETTINGS_WRITE', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => r.method === 'PUT' && /^\/admin\/settings\/[^/]+$/.test(p), message: 'Too many settings changes. Please wait a few minutes.' },
   // Docs/21 phase 2: payout details, settlement actions and the rider ledger. Money endpoints: tight enough that a stuck loop or a

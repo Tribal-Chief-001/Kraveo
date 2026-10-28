@@ -47,3 +47,267 @@ Link rules (security): `linkUrl` must parse as a URL with scheme exactly `https`
 - No regression: backend (1039), dashboard (790), customer (433), restaurant (514), rider (394) and `kraveo_ui` tests keep passing; the rider app still builds against `kraveo_ui`. Old customer app builds keep working against the new server (new endpoints are additive). Migration additive.
 - Tests with real Postgres for banners (validation incl. every bad link scheme, schedule logic with a fake clock, status computation, ordering, caps, cache invalidation, events counting atomically under parallel calls, rate limits, role checks (customer/owner/driver/anonymous cannot use admin endpoints), idempotent reorder, delete), dashboard component/API tests with REAL response shapes, widget tests for the carousel (auto-advance with fake time, pause on touch/hidden tab, dots follow the page, tap opens link via a mocked launcher, failure snackbar, hidden when empty, 2x text, 360x640, dark mode) and for `KFluidNav` + the swipeable shell (swipe changes tab, tap animates, keep-alive state survives, back button, badge, reduce-motion, semantics).
 - Deploy order: backend (migration + restart), dashboard, then the app build (the app hides the carousel on old servers: 404 -> nothing).
+
+## 7. Implementation notes (backend, 28 Oct 2026) - exact shapes for the dashboard and the apps
+Built in `backend/`: migration `prisma/migrations/20261013_home_banners` (one new table + one index, idempotent, verified to match `schema.prisma`), `src/services/banners.ts`, `src/routes/banners.ts`, rate-limit rules in `middleware/rateLimit.ts`, a 2 KB parser for the events call (`middleware/bodyLimits.ts`), `purpose=promo` in `routes/uploads.ts`. Tests: `test/e2e/home_banners.test.ts` (real Postgres, real HTTP). The JSON below was copied from those tests (dates come from a fake clock where noted).
+
+### 7.1 Decisions where this document was ambiguous (safest option taken)
+- **Link / image address**: raw text must start with `https://` (case-insensitive); outer spaces are trimmed, any inner whitespace, control, hidden or bidi character or backslash is refused; no explicit port (not even 8443), no username/password, host must be a DNS name with a dot (IPv4 in any spelling such as `2130706433`, `0x7f.0.0.1`, IPv6 and `localhost`/`*.localhost` refused); stored as `new URL().toString()` (host lower-cased, IDN punycoded, `https://example.com` becomes `https://example.com/`); <= 500 chars. `imageUrl` uses the same check (error code `BANNER_IMAGE_INVALID`, always required). Empty / blank / `null` link = display-only banner.
+- **Text** (title 2..60, subtitle <= 120, button text <= 20; lengths count characters, an emoji is one): NFC, white space collapsed. Hindi and emoji are allowed. Refused: control, bidi and zero-width characters (ZWJ/ZWNJ are allowed because Devanagari and emoji sequences need them) and `<` / `>` (no markup is ever stored). Blank subtitle / button text is stored as `null`.
+- **Strict bodies**: unknown keys (including `__proto__`, `constructor`, `viewCount`, `sortOrder`, `id`, `status`) -> 400. Allowed keys on create AND patch: `title, subtitle, imageUrl, linkUrl, ctaLabel, theme, placement, isActive, startsAt, endsAt` (`placement` can only be `HOME`). Order is changed ONLY through reorder.
+- **Dates**: ISO 8601 with a zone (`...Z` or `+05:30`), years 2000..2100, impossible calendar dates refused; stored and returned as UTC `.toISOString()`. `null` clears. `endsAt <= startsAt` -> 400 `BANNER_SCHEDULE_INVALID` (field `endsAt`).
+- **Expired rule**: an ACTIVE banner may not end in the past when this request turns it on (`isActive:true`) or sets `endsAt`; so an OFF banner with a past end needs a new `endsAt` (or `null`) in the same patch to be switched on. A request that touches neither (for example fixing a title of a banner that expired by itself) is allowed. Create follows the same rule.
+- **`ctr`** is a percentage with one decimal (`12.5` = 12.5 %), `null` while `viewCount` is 0; it can pass 100 (clicks are counted without a matching view).
+- **status**: `OFF` (switch off, whatever the dates) > `EXPIRED` (`endsAt <= now`) > `SCHEDULED` (`startsAt > now`) > `LIVE`. Start is inclusive, end exclusive. The public list uses the same clock on every request, even when its 30 s cache is warm.
+- **Events**: ids that are listed twice count once; at most 10 views and 5 clicks per call (extra ids are ignored); rows are updated in ascending id order (no deadlocks); only `isActive` banners count (a scheduled or expired but switched-on banner still counts). Garbage in the body, wrong types and unknown ids all answer `200 {"success":true}`; a database error is logged and also answers 200. Only transport problems answer an error: 413 (> 2 KB, refused before reading), 400 (broken JSON), 415 (compressed body), 429.
+- **Delete is idempotent**: second delete answers 200 with `deleted:false`. **Duplicate** is not idempotent (each call makes a copy, at the end of the list, OFF, counters 0, same schedule and link; title cut so that "(copy)" fits 60 chars). **Reorder** with unknown ids -> 400 `BANNER_UNKNOWN` and nothing changes; repeated identical reorder -> `changed:false`. Reorder renumbers EVERY row 10, 20, 30 ...; a new banner gets max + 10.
+- **Rate limits** (429 `RATE_LIMITED`): public list 600/min/IP, events 300/min/IP, admin banner writes 120 per 10 min per admin (reads unlimited), uploads keep their 60/hour rule.
+- Only the ADMIN role can use `/api/admin/banners*` (customer / owner / driver 403, no token 401).
+
+### 7.2 Endpoints and real responses
+**Public list** `GET /api/banners` (no auth, `Cache-Control: public, max-age=30`; max 10; empty list = `{"success":true,"data":[]}`):
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "3a6fef14-70ff-47de-b0c2-1d328e4b597e",
+      "title": "Second",
+      "subtitle": null,
+      "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
+      "linkUrl": null,
+      "ctaLabel": null,
+      "theme": "DARK"
+    },
+    {
+      "id": "dc939b34-9465-4318-a3cf-7b40dd25a208",
+      "title": "First",
+      "subtitle": "Sub",
+      "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
+      "linkUrl": "https://forms.gle/AbC123",
+      "ctaLabel": "Join now",
+      "theme": "LIGHT"
+    }
+  ]
+}
+```
+
+**Events** `POST /api/banners/events` (no auth, body <= 2 KB, `Content-Type: application/json`), request then response:
+```json
+{
+  "views": [
+    "f08d08b3-ae9b-42c9-94a2-f6844f4a9e41"
+  ],
+  "clicks": [
+    "f08d08b3-ae9b-42c9-94a2-f6844f4a9e41"
+  ]
+}
+```
+```json
+{
+  "success": true
+}
+```
+
+**Admin list** `GET /api/admin/banners` (all rows incl. OFF / expired, ordered by `sortOrder`, `createdAt`; second row omitted here; this sample ran with a fake clock before the schedule, hence `SCHEDULED`):
+```json
+{
+  "success": true,
+  "count": 2,
+  "data": [
+    {
+      "id": "dd002330-7627-4565-8199-a55a758f1411",
+      "title": "One",
+      "subtitle": null,
+      "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
+      "linkUrl": "https://forms.gle/x1",
+      "ctaLabel": "Go",
+      "theme": "DARK",
+      "placement": "HOME",
+      "isActive": true,
+      "startsAt": "2026-11-01T09:50:00.000Z",
+      "endsAt": "2026-11-01T10:10:00.000Z",
+      "sortOrder": 10,
+      "viewCount": 40,
+      "clickCount": 5,
+      "ctr": 12.5,
+      "status": "SCHEDULED",
+      "createdByUserId": "usr-5",
+      "createdAt": "2026-10-28T17:30:38.940Z",
+      "updatedAt": "2026-10-28T17:30:38.954Z"
+    }
+  ]
+}
+```
+
+**Create** `POST /api/admin/banners` -> 201 (body: `title` and `imageUrl` required, the rest optional; defaults `theme:"DARK"`, `isActive:true`):
+```json
+{
+  "success": true,
+  "message": "Banner created.",
+  "data": {
+    "id": "33341894-b6d3-4f67-91fa-a908eca24823",
+    "title": "Diwali Dhamaka",
+    "subtitle": null,
+    "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
+    "linkUrl": null,
+    "ctaLabel": null,
+    "theme": "DARK",
+    "placement": "HOME",
+    "isActive": true,
+    "startsAt": null,
+    "endsAt": null,
+    "sortOrder": 10,
+    "viewCount": 0,
+    "clickCount": 0,
+    "ctr": null,
+    "status": "LIVE",
+    "createdByUserId": "usr-5",
+    "createdAt": "2026-10-28T17:30:38.920Z",
+    "updatedAt": "2026-10-28T17:30:38.920Z"
+  }
+}
+```
+
+**Patch** `PATCH /api/admin/banners/:id` -> 200 (partial; answers the full row; `changed:false` + message `Nothing to change.` when nothing differs):
+```json
+{
+  "success": true,
+  "changed": true,
+  "message": "Banner saved.",
+  "data": {
+    "id": "95e9a4f1-b283-4903-b816-b39618a306de",
+    "title": "Renamed",
+    "subtitle": "Sub",
+    "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
+    "linkUrl": "https://play.google.com/store/apps/details?id=x",
+    "ctaLabel": "Order now",
+    "theme": "LIGHT",
+    "placement": "HOME",
+    "isActive": true,
+    "startsAt": null,
+    "endsAt": null,
+    "sortOrder": 10,
+    "viewCount": 0,
+    "clickCount": 0,
+    "ctr": null,
+    "status": "LIVE",
+    "createdByUserId": "usr-5",
+    "createdAt": "2026-10-28T17:30:38.975Z",
+    "updatedAt": "2026-10-28T17:30:38.984Z"
+  }
+}
+```
+
+**Reorder** `POST /api/admin/banners/reorder`, request then response (`data` is the FULL admin list in the new order, shortened to its first row here; `changed:false` and message `The order was already like this.` when nothing moved):
+```json
+{
+  "ids": [
+    "6d7f3ff8-7bb0-4add-94e9-4f8aabe6639e",
+    "2d86dabf-8289-48de-b75e-0fe4affd5760"
+  ]
+}
+```
+```json
+{
+  "success": true,
+  "changed": true,
+  "message": "Order saved.",
+  "data": [
+    {
+      "id": "6d7f3ff8-7bb0-4add-94e9-4f8aabe6639e",
+      "title": "Gamma",
+      "subtitle": null,
+      "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
+      "linkUrl": null,
+      "ctaLabel": null,
+      "theme": "DARK",
+      "placement": "HOME",
+      "isActive": true,
+      "startsAt": null,
+      "endsAt": null,
+      "sortOrder": 10,
+      "viewCount": 0,
+      "clickCount": 0,
+      "ctr": null,
+      "status": "LIVE",
+      "createdByUserId": "usr-5",
+      "createdAt": "2026-10-28T17:30:39.921Z",
+      "updatedAt": "2026-10-28T17:30:39.938Z"
+    }
+  ]
+}
+```
+
+**Duplicate** `POST /api/admin/banners/:id/duplicate` -> 201:
+```json
+{
+  "success": true,
+  "message": "Banner duplicated. The copy is switched off.",
+  "data": {
+    "id": "f380a834-5b4e-4fa1-b906-45b2dc91f99f",
+    "title": "Launch (copy)",
+    "subtitle": "Sub",
+    "imageUrl": "https://api.kraveo.site/uploads/promo/2026/0123456789abcdef0123456789abcdef.jpg",
+    "linkUrl": "https://forms.gle/z",
+    "ctaLabel": "Join",
+    "theme": "LIGHT",
+    "placement": "HOME",
+    "isActive": false,
+    "startsAt": "2026-11-01T11:00:00.000Z",
+    "endsAt": "2026-11-01T12:00:00.000Z",
+    "sortOrder": 30,
+    "viewCount": 0,
+    "clickCount": 0,
+    "ctr": null,
+    "status": "OFF",
+    "createdByUserId": "usr-5",
+    "createdAt": "2026-10-28T17:30:40.103Z",
+    "updatedAt": "2026-10-28T17:30:40.103Z"
+  }
+}
+```
+
+**Delete** `DELETE /api/admin/banners/:id` -> 200 (already deleted: `data:{"id":"...","deleted":false}`, message `The banner was already deleted.`):
+```json
+{
+  "success": true,
+  "message": "Banner deleted.",
+  "data": {
+    "id": "ad014502-4efe-4931-8e69-a4cce3fb969f",
+    "title": "Doomed",
+    "deleted": true
+  }
+}
+```
+
+**Upload** `POST /api/admin/uploads/image?purpose=promo` (raw body, `Content-Type: image/jpeg|png|webp`, <= 1 MB, 200..2400 px; stored under `promo/`; served at the returned URL). In production the host is `https://api.kraveo.site`; the test environment's host is shown here. Use `data.url` as `imageUrl`:
+```json
+{
+  "success": true,
+  "data": {
+    "url": "https://api.test.kraveo/uploads/promo/2026/e04403271c142510261d74e738ff1852.png",
+    "width": 1200,
+    "height": 600,
+    "bytes": 68
+  }
+}
+```
+
+### 7.3 Errors (all `{ "success": false, "code": "...", "message": "...", "field": "..." }`)
+| Status | code | When | field |
+|---|---|---|---|
+| 400 | `BAD_REQUEST` | wrong type / length / enum / unknown key / empty patch / bad `ids` list / bad id in the path | the field (`title`, `subtitle`, `ctaLabel`, `theme`, `isActive`, `placement`, `ids`, `id`, `body`) |
+| 400 | `BANNER_LINK_INVALID` | `linkUrl` is not an allowed https address (message explains) | `linkUrl` |
+| 400 | `BANNER_IMAGE_INVALID` | `imageUrl` missing or not an allowed https address | `imageUrl` |
+| 400 | `BANNER_SCHEDULE_INVALID` | bad date format, end not after start, active banner with a past end | `startsAt` or `endsAt` |
+| 400 | `BANNER_UNKNOWN` | reorder lists an id that does not exist (maybe just deleted): reload the list | `ids` |
+| 401 / 403 | (auth) | no token / not an ADMIN | - |
+| 404 | `NOT_FOUND` | patch or duplicate of a banner that does not exist | - |
+| 409 | `BANNER_LIMIT` | 30 banners already (create and duplicate) | - |
+| 413 | `PAYLOAD_TOO_LARGE` | body over 100 KB (events: over 2 KB) | - |
+| 429 | `RATE_LIMITED` | see 7.1; has `retryAfterSeconds` | - |
+Example: `{"success":false,"code":"BANNER_LINK_INVALID","message":"The link must start with https:// (http, javascript:, data:, intent:, market:, mailto:, tel:, file: and app links are not allowed).","field":"linkUrl"}`. Upload errors keep the codes of Docs/23 section 8 (`IMAGE_TOO_SMALL`, `UNSUPPORTED_IMAGE_TYPE`, ...); an unknown `purpose` is still 400 with `field:"purpose"`.
+
+### 7.4 Deploy note
+Migration is additive (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`): run it, restart the backend. Rolling back = drop the table `"HomeBanner"`; nothing else references it. Uploaded promo files live in `UPLOAD_DIR/promo/` (part of the same nightly backup as the other purposes). The 30 s caches are per process (single instance today).

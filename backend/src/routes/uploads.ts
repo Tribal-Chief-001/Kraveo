@@ -11,7 +11,7 @@ import { writeAudit } from '../services/audit';
 /**
  * Admin image upload (Docs/23 section 3.6) and the static serving of the stored files.
  *
- *  POST /api/admin/uploads/image?purpose=banner|dish   ADMIN only, raw body (image/jpeg | image/png | image/webp), <= 1 MB,
+ *  POST /api/admin/uploads/image?purpose=banner|dish|promo   ADMIN only, raw body (image/jpeg | image/png | image/webp), <= 1 MB,
  *                                                      60 per hour per admin (middleware/rateLimit.ts, rule ADMIN_UPLOAD).
  *  GET  /uploads/<purpose>/<yyyy>/<32 hex>.<jpg|png|webp>   immutable, nosniff, CORP cross-origin (mountUploads below).
  *
@@ -25,9 +25,9 @@ export const MIN_SIDE_PX = 200;
 // 2400 px: the customer app decodes a photo at full size, 2400 x 2400 x 4 bytes is already 23 MB (a 4000 x 4000 photo would be 64 MB).
 export const MAX_SIDE_PX = 2400;
 export const DEFAULT_UPLOAD_QUOTA_MB = 1500;
-export const UPLOAD_PURPOSES = ['banner', 'dish'] as const;
+export const UPLOAD_PURPOSES = ['banner', 'dish', 'promo'] as const;
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-const FILE_PATH_RE = /^\/(banner|dish)\/\d{4}\/[0-9a-f]{32}\.(jpg|png|webp)$/;
+const FILE_PATH_RE = /^\/(banner|dish|promo)\/\d{4}\/[0-9a-f]{32}\.(jpg|png|webp)$/;
 
 /** Read on every call (tests and deployments set it at run time). */
 export const uploadDir = (): string => path.resolve(process.env.UPLOAD_DIR || '/home/ubuntu/kraveo-uploads');
@@ -69,7 +69,7 @@ uploadRouter.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const purpose = typeof req.query.purpose === 'string' ? req.query.purpose : '';
-      if (!(UPLOAD_PURPOSES as readonly string[]).includes(purpose)) throw new AppError(400, 'BAD_REQUEST', "purpose must be 'banner' or 'dish'.", 'purpose');
+      if (!(UPLOAD_PURPOSES as readonly string[]).includes(purpose)) throw new AppError(400, 'BAD_REQUEST', "purpose must be 'banner', 'dish' or 'promo'.", 'purpose');
       const declared = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
       if (!ALLOWED_TYPES.includes(declared)) {
         throw new AppError(415, 'UNSUPPORTED_IMAGE_TYPE', 'Only JPEG, PNG or WebP photos can be uploaded.');

@@ -195,6 +195,30 @@ model Category {
   @@index([isActive, sortOrder])
 }
 
+/// Docs/25: admin-managed promo slideshow on the customer Home. At most 30 rows, at most 10 shown at once. Counters are bumped
+/// with atomic UPDATE ... SET x = x + 1 (POST /api/banners/events). `linkUrl` is validated https-only by services/banners.ts.
+model HomeBanner {
+  id              String    @id @default(uuid())
+  title           String
+  subtitle        String?
+  imageUrl        String
+  linkUrl         String?
+  ctaLabel        String?
+  theme           String    @default("DARK")
+  placement       String    @default("HOME")
+  isActive        Boolean   @default(true)
+  startsAt        DateTime?
+  endsAt          DateTime?
+  sortOrder       Int       @default(0)
+  viewCount       Int       @default(0)
+  clickCount      Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
+  createdByUserId String?
+
+  @@index([placement, isActive, sortOrder])
+}
+
 /// A restaurant's category (cuisine) tag. Deleting a restaurant removes its tags; a category in use cannot be deleted (RESTRICT).
 model VendorCategory {
   vendorId   String

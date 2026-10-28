@@ -9,6 +9,9 @@ import express from 'express';
  */
 export const IMPORT_JSON_LIMIT = '400kb';
 const IMPORT_PATH_RE = /^\/api\/admin\/vendors\/[^/]+\/menu-import\/?$/i;
+/** Docs/25: the public banner events call has its own 2 KB parser (routes/banners.ts); the global 100 KB parser skips it. */
+export const EVENTS_JSON_LIMIT = '2kb';
+const EVENTS_PATH_RE = /^\/api\/banners\/events\/?$/i;
 
 export const menuImportJson = express.json({ limit: IMPORT_JSON_LIMIT });
 
@@ -16,6 +19,6 @@ export const menuImportJson = express.json({ limit: IMPORT_JSON_LIMIT });
 export const jsonUnlessMenuImport = (req: unknown): boolean => {
   const r = req as { url?: string; is?: (t: string) => string | false | null };
   const pathOnly = String(r.url ?? '').split('?')[0];
-  if (IMPORT_PATH_RE.test(pathOnly)) return false;
+  if (IMPORT_PATH_RE.test(pathOnly) || EVENTS_PATH_RE.test(pathOnly)) return false;
   return !!r.is?.('application/json');
 };
