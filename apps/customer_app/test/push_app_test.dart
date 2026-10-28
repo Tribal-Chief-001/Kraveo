@@ -193,6 +193,7 @@ void main() {
     await launch(tester, push: makePush());
     expect(find.byType(LiveTrackingScreen), findsNothing);
     // Home keeps its own Track tab mounted (offstage); count on top of that.
+    await tester.pump(const Duration(seconds: 3)); // Home builds its other tabs in the background after ~2 s
     final tabCopies = find.byType(LiveTrackingScreen, skipOffstage: false).evaluate().length;
     fcm.opened.add(PushMessage(messageId: 'a', data: pushData('ORDER_READY', orderId: 'order-ready')));
     await _settle(tester);

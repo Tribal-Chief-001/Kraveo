@@ -43,7 +43,13 @@ class TrackingMap extends StatefulWidget {
     this.readyTimeout = kMapReadyTimeout,
     this.clock = DateTime.now,
     this.staleCheckInterval = kStaleCheckInterval,
+    this.mapEnabled = true,
   });
+
+  /// False while the screen is only passing by (the Track tab being swiped through): the stylised
+  /// strip is shown and the real map (a platform view, expensive to create) is not created yet.
+  /// Once true the map is created and stays.
+  final bool mapEnabled;
 
   final OrderModel order;
 
@@ -101,12 +107,16 @@ class _TrackingMapState extends State<TrackingMap> with SingleTickerProviderStat
     _onFix();
     if (_dropoff == null || widget.order.isTerminal) {
       _mode = _Mode.fallback; // nothing to draw, or the trip is over: the plain strip is enough
-    } else {
+    } else if (widget.mapEnabled) {
       unawaited(_probe());
     }
   }
 
+  bool _probed = false;
+
   Future<void> _probe() async {
+    if (_probed) return;
+    _probed = true;
     bool ok;
     try {
       ok = await _factory.isAvailable();
@@ -184,6 +194,7 @@ class _TrackingMapState extends State<TrackingMap> with SingleTickerProviderStat
     }
     if (old.order.status != widget.order.status || !identical(old.rider, widget.rider)) _onFix();
     if (widget.order.isTerminal && _mode != _Mode.fallback) _fail('Order finished.');
+    if (widget.mapEnabled && !old.mapEnabled && _mode == _Mode.checking) unawaited(_probe());
   }
 
   @override

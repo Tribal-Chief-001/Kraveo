@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show ValueListenable, visibleForTesting;
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kraveo_ui/kraveo_ui.dart';
@@ -23,6 +25,16 @@ import 'live_tracking_screen.dart';
 import 'order_history_screen.dart';
 import 'profile_screen.dart';
 
+/// Test hook: how many times the Home feed has been built (a swipe must not add to it).
+@visibleForTesting
+int debugHomeFeedBuilds = 0;
+
+/// How often Home refreshes the promo banners while it is on screen and the app is in front.
+const Duration kBannerRefreshInterval = Duration(minutes: 10);
+
+/// How long after Home appears the other tabs are built in the background.
+const Duration kWarmUpDelay = Duration(milliseconds: 1800);
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -36,12 +48,36 @@ class _HomeScreenState extends State<HomeScreen> {
   /// state survive swipes exactly as they did with the old IndexedStack.
   PageController _pager = PageController();
 
-  /// The tab nearest to the pager right now (back button, selection).
-  int _currentTab = 0;
+  /// The tab the user is on, or is being taken to (back button, selection). While a tap-driven
+  /// animation runs this is the TARGET, not the tabs the pager passes through.
+  ///
+  /// The shell state lives in notifiers, never in setState: a swipe starting, ending or crossing
+  /// a page boundary must not rebuild the Scaffold and the whole Home feed (only PopScope, the
+  /// tab wrappers and the Track tab's `visible` flag listen).
+  final ValueNotifier<int> _currentTab = ValueNotifier(0);
 
-  /// The tab the pager has come to rest on; null while it is being dragged or animated. Only a
-  /// settled tab counts as shown (timers, sockets and the map of the Track tab depend on it).
-  int? _settledTab = 0;
+  /// The tab the pager has come to rest on; null while it is being dragged or animated. Drives
+  /// the hidden tabs' tickers and semantics only.
+  final ValueNotifier<int?> _settledTab = ValueNotifier(0);
+
+  /// Whether the Track tab counts as shown (its timers, socket and map). True only once the pager
+  /// has settled on it, and it stays true through a drag that springs back: it turns false when
+  /// the page has actually left Track (more than half a page away), so a wobble costs no unwatch,
+  /// no refresh and no socket churn.
+  final ValueNotifier<bool> _trackVisible = ValueNotifier(false);
+
+  /// The tab a tap-driven animation is heading for (null = none). While set, the pages the pager
+  /// passes through are ignored and a second tap on the same target does not restart the animation.
+  int? _animTarget;
+
+  /// 1.0 or more while the other tabs are being built in the background (see [_warmUp]).
+  final ValueNotifier<double> _warmExtent = ValueNotifier(0);
+  Timer? _warmTimer;
+
+  /// Refresh the promo banners now and then while Home is on screen (an admin switching a banner
+  /// off reaches an app that stays open); one cheap GET, the last good list survives a failure.
+  Timer? _bannerTimer;
+  bool _bannerDue = false;
 
   /// Catch up on order changes and the kitchen catalog (open / closed, sold out, new kitchens)
   /// when the app returns to the foreground (contract 3).
@@ -57,11 +93,37 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _lifecycle; // start listening
+    _pager.addListener(_onPagerMoved);
+    _bannerTimer = Timer.periodic(kBannerRefreshInterval, (_) => _refreshBannersIfVisible());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(Provider.of<DhabaProvider>(context, listen: false).refreshHome());
       _refreshBanners();
+      _warmTimer = Timer(kWarmUpDelay, () => _warmUp(2));
     });
+  }
+
+  void _refreshBannersIfVisible() {
+    if (!mounted) return;
+    final life = WidgetsBinding.instance.lifecycleState;
+    if (life != null && life != AppLifecycleState.resumed) return;
+    if (_settledTab.value != 0) {
+      _bannerDue = true; // refreshed when the user is back on Home
+      return;
+    }
+    _refreshBanners();
+  }
+
+  /// Builds the other tabs once, shortly after Home is up, so the first swipe to Orders or Me does
+  /// not construct a list mid-gesture (a PageView builds only what is on screen). The pager is
+  /// asked to build 2, then 3 viewports around the current page for ~0.4 s each, then goes back to
+  /// building nothing extra; the tabs stay alive (keep-alive) and their semantics stay excluded
+  /// while hidden (see [_TabPage]), so a screen reader never meets them. The Track tab is built
+  /// too, but its map is only created once it is shown (see LiveTrackingScreen).
+  void _warmUp(int step) {
+    if (!mounted) return;
+    _warmExtent.value = step == 2 ? 2 : (step == 3 ? 3 : 0);
+    if (step <= 3) _warmTimer = Timer(const Duration(milliseconds: 400), () => _warmUp(step == 2 ? 3 : 4));
   }
 
   /// The promo banners load in the background with the rest of Home (no spinner, failures keep the
@@ -87,7 +149,14 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _lifecycle.dispose();
+    _bannerTimer?.cancel();
+    _warmTimer?.cancel();
+    _pager.removeListener(_onPagerMoved);
     _pager.dispose();
+    _currentTab.dispose();
+    _settledTab.dispose();
+    _trackVisible.dispose();
+    _warmExtent.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -98,41 +167,58 @@ class _HomeScreenState extends State<HomeScreen> {
   /// they are kept alive, so each is built at most once and the motion stays continuous (a
   /// jump-then-animate trick would flash the neighbour's content for one frame).
   void _goToTab(int index) {
-    if (index < 0 || index > 3 || (index == _currentTab && _settledTab == index)) return;
+    if (index < 0 || index > 3 || index == _animTarget || (index == _currentTab.value && _settledTab.value == index)) return;
     if (!_pager.hasClients) {
-      final old = _pager;
-      _pager = PageController(initialPage: index);
+      final old = _pager..removeListener(_onPagerMoved);
+      _pager = PageController(initialPage: index)..addListener(_onPagerMoved);
       WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
-      setState(() {
-        _currentTab = index;
-        _settledTab = index;
-      });
+      _currentTab.value = index;
+      _settledTab.value = index;
+      _trackVisible.value = index == 1;
+      setState(() {}); // the PageView and the nav take the new controller
       return;
     }
-    setState(() {
-      _currentTab = index;
-      _settledTab = null;
-    });
+    _animTarget = index;
+    _currentTab.value = index;
+    _settledTab.value = null;
+    if (index != 1) _trackVisible.value = false;
     if (MediaQuery.disableAnimationsOf(context)) {
+      _animTarget = null;
       _pager.jumpToPage(index);
     } else {
       final hops = ((_pager.page ?? index) - index).abs();
-      unawaited(_pager.animateToPage(index, duration: Duration(milliseconds: hops > 1.5 ? 380 : 320), curve: Curves.easeInOutCubicEmphasized));
+      unawaited(_pager
+          .animateToPage(index, duration: Duration(milliseconds: hops > 1.5 ? 380 : 320), curve: Curves.easeInOutCubicEmphasized)
+          .whenComplete(() {
+        if (_animTarget == index) _animTarget = null; // also when there was nothing to animate
+      }));
     }
+  }
+
+  /// Track stops counting as shown only once the page has really left it (not at drag start).
+  void _onPagerMoved() {
+    if (!_trackVisible.value || !_pager.hasClients) return;
+    final page = _pager.page;
+    if (page != null && (page - 1).abs() > 0.5) _trackVisible.value = false;
   }
 
   /// Tracks the pager's own scrolling (depth 0: scrollables inside the tabs are not ours).
   bool _onPagerScroll(ScrollNotification n) {
     if (n.depth != 0 || n.metrics.axis != Axis.horizontal || !mounted) return false;
     if (n is ScrollStartNotification) {
-      if (_settledTab != null) setState(() => _settledTab = null);
+      if (n.dragDetails != null) _animTarget = null; // a finger took over from an animation
+      if (_settledTab.value != null) _settledTab.value = null;
     } else if (n is ScrollEndNotification) {
       final page = (_pager.hasClients ? _pager.page : null)?.round();
-      if (page != null && (page != _settledTab || page != _currentTab)) {
-        setState(() {
-          _currentTab = page;
-          _settledTab = page;
-        });
+      if (page != null) {
+        _animTarget = null;
+        _currentTab.value = page;
+        _settledTab.value = page;
+        _trackVisible.value = page == 1;
+        if (page == 0 && _bannerDue) {
+          _bannerDue = false;
+          _refreshBanners();
+        }
       }
     }
     return false;
@@ -155,16 +241,43 @@ class _HomeScreenState extends State<HomeScreen> {
     final k = context.k;
     final selectedHostel = context.select<SessionProvider, String?>((s) => s.deliveryPoint);
     // Back on Orders / Track / Me returns to the Home tab first; only Home itself leaves the app.
-    return PopScope(
-      canPop: _currentTab == 0,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _currentTab != 0) _goToTab(0);
-      },
+    // Only the PopScope listens to the current tab; the Scaffold below is passed in as `child`.
+    return ValueListenableBuilder<int>(
+      valueListenable: _currentTab,
       child: _buildScaffold(context, k, selectedHostel),
+      builder: (context, tab, child) => PopScope(
+        canPop: tab == 0,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && _currentTab.value != 0) _goToTab(0);
+        },
+        child: child!,
+      ),
     );
   }
 
   Widget _buildScaffold(BuildContext context, KraveoTokens k, String? selectedHostel) {
+    final pages = <Widget>[
+      // Builder: the feed must read the padding Scaffold reports for the floating nav.
+      _TabPage(index: 0, settled: _settledTab, child: Builder(builder: _buildHomeFeed)),
+      _TabPage(
+        index: 1,
+        settled: _settledTab,
+        child: ValueListenableBuilder<bool>(
+          valueListenable: _trackVisible,
+          builder: (context, visible, _) => LiveTrackingScreen(visible: visible, onExplore: () => _goToTab(0)),
+        ),
+      ),
+      _TabPage(
+        index: 2,
+        settled: _settledTab,
+        child: OrderHistoryScreen(
+          selectedHostel: selectedHostel,
+          onTrackOrder: () => _goToTab(1),
+          onExplore: () => _goToTab(0),
+        ),
+      ),
+      _TabPage(index: 3, settled: _settledTab, child: ProfileScreen(onOpenOrders: () => _goToTab(2), onTrackOrder: () => _goToTab(1))),
+    ];
     return Scaffold(
       backgroundColor: k.bg,
       extendBody: true,
@@ -172,31 +285,18 @@ class _HomeScreenState extends State<HomeScreen> {
         controller: _pager,
         child: NotificationListener<ScrollNotification>(
           onNotification: _onPagerScroll,
-          child: PageView(
-            controller: _pager,
-            onPageChanged: (i) {
-              if (i != _currentTab) setState(() => _currentTab = i);
-            },
-            children: [
-              // Builder: the feed must read the padding Scaffold reports for the floating nav.
-              _TabPage(active: _settledTab == null || _settledTab == 0, child: Builder(builder: _buildHomeFeed)),
-              _TabPage(
-                active: _settledTab == null || _settledTab == 1,
-                child: LiveTrackingScreen(visible: _settledTab == 1, onExplore: () => _goToTab(0)),
-              ),
-              _TabPage(
-                active: _settledTab == null || _settledTab == 2,
-                child: OrderHistoryScreen(
-                  selectedHostel: selectedHostel,
-                  onTrackOrder: () => _goToTab(1),
-                  onExplore: () => _goToTab(0),
-                ),
-              ),
-              _TabPage(
-                active: _settledTab == null || _settledTab == 3,
-                child: ProfileScreen(onOpenOrders: () => _goToTab(2), onTrackOrder: () => _goToTab(1)),
-              ),
-            ],
+          child: ValueListenableBuilder<double>(
+            valueListenable: _warmExtent,
+            builder: (context, warm, _) => PageView(
+              controller: _pager,
+              // Warm-up only (see _warmUp): a cache extent makes the pager build the tabs around it.
+              allowImplicitScrolling: warm > 0,
+              scrollCacheExtent: warm > 0 ? ScrollCacheExtent.viewport(warm) : null,
+              onPageChanged: (i) {
+                if (_animTarget == null) _currentTab.value = i; // a tap's animation keeps its target
+              },
+              children: pages,
+            ),
           ),
         ),
       ),
@@ -222,6 +322,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildHomeFeed(BuildContext context) {
+    debugHomeFeedBuilds++;
     final k = context.k;
     final dhabaProvider = Provider.of<DhabaProvider>(context);
     final orderProvider = Provider.of<OrderProvider>(context);
@@ -463,13 +564,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-/// One tab of the pager: kept alive when it is swiped away, and its tickers (entrance and
-/// pulse animations) only run while it is the resting tab or the pager is moving, as the
-/// IndexedStack used to do for the hidden tabs.
+/// One tab of the pager: kept alive when it is swiped away. While it is not the resting tab its
+/// tickers (entrance and pulse animations) are muted, as the IndexedStack used to do for hidden
+/// tabs, and its semantics are excluded, so a screen reader only ever sees the tab on screen
+/// (also while the other tabs are being built in the background). Listens to [settled] itself,
+/// so a swipe never rebuilds the tab's content.
 class _TabPage extends StatefulWidget {
-  const _TabPage({required this.active, required this.child});
+  const _TabPage({required this.index, required this.settled, required this.child});
 
-  final bool active;
+  final int index;
+  final ValueListenable<int?> settled;
   final Widget child;
 
   @override
@@ -483,7 +587,14 @@ class _TabPageState extends State<_TabPage> with AutomaticKeepAliveClientMixin {
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return TickerMode(enabled: widget.active, child: widget.child);
+    return ValueListenableBuilder<int?>(
+      valueListenable: widget.settled,
+      child: widget.child,
+      builder: (context, settled, child) {
+        final hidden = settled != null && settled != widget.index;
+        return TickerMode(enabled: !hidden, child: ExcludeSemantics(excluding: hidden, child: child!));
+      },
+    );
   }
 }
 

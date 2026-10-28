@@ -284,7 +284,11 @@ void main() {
       await tester.pump();
       expect(_page(tester), lessThan(1), reason: 'the page follows the finger (towards Home)');
       expect(_page(tester), greaterThan(0.2));
-      expect(_trackVisible(tester), isFalse);
+      expect(_trackVisible(tester), isTrue, reason: 'still more than half on Track: no unwatch yet');
+      await g.moveBy(const Offset(60, 0));
+      await tester.pump();
+      expect(_page(tester), lessThan(0.5));
+      expect(_trackVisible(tester), isFalse, reason: 'the page has really left Track');
       await g.moveBy(const Offset(200, 0));
       await g.up();
       await _settle(tester);

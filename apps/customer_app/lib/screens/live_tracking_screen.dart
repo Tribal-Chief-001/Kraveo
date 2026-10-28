@@ -75,6 +75,16 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
     }
   }
 
+  /// The real map is only created once this screen has been shown (the Track tab is built in the
+  /// background and while the pager passes it); after that it stays.
+  late bool _mapWanted = widget.visible;
+
+  @override
+  void didUpdateWidget(covariant LiveTrackingScreen old) {
+    super.didUpdateWidget(old);
+    if (widget.visible) _mapWanted = true;
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -259,7 +269,10 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
               SizedBox(
                 key: const ValueKey('order-switcher'),
                 height: 48,
-                child: ListView.separated(
+                // Past either end of the switcher a swipe moves the tab pager instead of getting stuck.
+                child: KTabPagerHandoff(
+                    child: ListView.separated(
+                  physics: KTabPagerHandoff.listPhysics,
                   scrollDirection: Axis.horizontal,
                   itemCount: live.length,
                   separatorBuilder: (_, __) => const SizedBox(width: 8),
@@ -268,7 +281,7 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
                     selected: live[i].id == order.id,
                     onTap: () => setState(() => _picked = live[i].id),
                   ),
-                ),
+                )),
               ),
               const SizedBox(height: 10),
             ],
@@ -318,6 +331,7 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
                   order: order,
                   rider: orders.riderLocationListenable(order.id),
                   factory: widget.mapFactory,
+                  mapEnabled: _mapWanted,
                 ),
               ),
               const SizedBox(height: 14),

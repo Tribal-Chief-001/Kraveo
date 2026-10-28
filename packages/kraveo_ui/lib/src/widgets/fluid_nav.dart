@@ -63,7 +63,7 @@ class KPagePosition extends ChangeNotifier implements ValueListenable<double> {
 /// No business logic: pass either the pager's [controller] or any [position] (a page index as a
 /// double) and handle [onTap]. Does not replace [KGlassNav], which other apps still use.
 class KFluidNav extends StatefulWidget {
-  KFluidNav({super.key, required this.items, required this.onTap, this.controller, this.position, this.height = 68})
+  KFluidNav({super.key, required this.items, required this.onTap, this.controller, this.position, this.height = 68, this.tabPositionLabel})
       : assert((controller == null) != (position == null), 'Pass exactly one of controller or position'),
         assert(items.length >= 2, 'A navigation needs at least two items');
 
@@ -73,11 +73,17 @@ class KFluidNav extends StatefulWidget {
   final ValueListenable<double>? position;
   final double height;
 
+  /// "tab 1 of 4" for screen readers, appended to each item's label. Null uses the framework's
+  /// localized string (`MaterialLocalizations.tabLabel`, first letter lower-cased in English-style
+  /// "Tab 1 of 4"), or plain English when there is no MaterialLocalizations above.
+  final String Function(int position, int count)? tabPositionLabel;
+
   @override
   State<KFluidNav> createState() => _KFluidNavState();
 }
 
 class _KFluidNavState extends State<KFluidNav> with TickerProviderStateMixin {
+  static const double _hysteresis = 0.62; // pages beyond the selected tab before the selection flips
   static const double _pad = 6; // pill inner padding
   static const double _slotMargin = 3; // gap between a slot and the highlight
   static const double _vInset = 9; // highlight inset from the pill's top and bottom
@@ -92,6 +98,7 @@ class _KFluidNavState extends State<KFluidNav> with TickerProviderStateMixin {
   late int _selected;
   int _popIndex = -1;
   int? _tapTarget;
+  int _idleFrames = 0;
   bool _reduce = false;
 
   // Stretch spring state.
@@ -145,22 +152,38 @@ class _KFluidNavState extends State<KFluidNav> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  /// One haptic tick and one icon pop per CHANGE OF TAB, not per half-page crossed:
+  /// * a finger drag must pass [_hysteresis] pages beyond the current tab before the selection
+  ///   changes, so wobbling around x.5 does not tick repeatedly;
+  /// * while a tap-driven animation runs ([_tapTarget]), the tabs it passes through are silent;
+  ///   only arriving at the target pops its icon (the tap itself already ticked).
   void _onPos() {
     final p = _pos.value;
-    final sel = p.round().clamp(0, _n - 1);
-    if (sel != _selected) {
-      _selected = sel;
-      if (_tapTarget != sel) HapticFeedback.selectionClick();
-      _tapTarget = null;
-      _popIcon(sel);
+    if ((p - _selected).abs() > _hysteresis) {
+      final sel = p.round().clamp(0, _n - 1);
+      if (sel != _selected) {
+        _selected = sel;
+        final target = _tapTarget;
+        if (target == null) {
+          HapticFeedback.selectionClick();
+          _popIcon(sel);
+        } else if (sel == target) {
+          _tapTarget = null;
+          _popIcon(sel);
+        }
+      }
     }
     if (_reduce) return;
-    if (!_ticker.isActive) {
-      _prev = _seen;
-      _last = Duration.zero;
-      _ticker.start();
-    }
+    _ensureTicker();
     _seen = p;
+  }
+
+  void _ensureTicker() {
+    if (_ticker.isActive) return;
+    _prev = _seen;
+    _last = Duration.zero;
+    _idleFrames = 0;
+    _ticker.start();
   }
 
   void _popIcon(int index) {
@@ -181,8 +204,12 @@ class _KFluidNavState extends State<KFluidNav> with TickerProviderStateMixin {
     final h = math.min(dt, 1 / 30);
     _v += (-380 * (_x - target) - 22 * _v) * h;
     _x += _v * h;
-    if (speed == 0 && _x.abs() < 0.002 && _v.abs() < 0.02) {
+    _idleFrames = speed == 0 ? _idleFrames + 1 : 0;
+    // At rest for a few frames (a tap's animation starts a frame or two after the tap): the tap
+    // target, if the pager never got there, is forgotten so it cannot mute a later swipe.
+    if (_idleFrames > 8 && _x.abs() < 0.002 && _v.abs() < 0.02) {
       _x = _v = 0;
+      _tapTarget = null;
       _ticker.stop();
     }
     _stretch.value = _x;
@@ -194,6 +221,7 @@ class _KFluidNavState extends State<KFluidNav> with TickerProviderStateMixin {
     } else {
       _tapTarget = i;
       HapticFeedback.selectionClick();
+      if (!_reduce) _ensureTicker();
     }
     widget.onTap(i);
   }
@@ -235,17 +263,21 @@ class _KFluidNavState extends State<KFluidNav> with TickerProviderStateMixin {
                 position: DecorationPosition.background,
                 child: Stack(children: [
                   // The 1 px inner highlight ("glass edge"), painted over the fill.
+                  // Own repaint layers: the static edge is never repainted by the moving track, and the
+                  // track (blob + icons, repainted every pager frame) never repaints the blurred bar.
                   Positioned.fill(
-                    child: IgnorePointer(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(KRadius.pill),
-                          border: Border.all(color: Colors.white.withValues(alpha: k.isDark ? 0.07 : 0.7)),
+                    child: RepaintBoundary(
+                      child: IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(KRadius.pill),
+                            border: Border.all(color: Colors.white.withValues(alpha: k.isDark ? 0.07 : 0.7)),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                  Positioned.fill(child: LayoutBuilder(builder: _buildTrack)),
+                  Positioned.fill(child: RepaintBoundary(child: LayoutBuilder(builder: _buildTrack))),
                 ]),
               ),
             ),
@@ -292,13 +324,18 @@ class _KFluidNavState extends State<KFluidNav> with TickerProviderStateMixin {
         final blobH = (box.maxHeight - 2 * _vInset) * (1 - stretch * 0.12);
 
         final lighter = Color.lerp(k.brand, Colors.white, k.isDark ? 0.10 : 0.16)!;
-        return Stack(clipBehavior: Clip.none, children: [
+        return Semantics(
+          role: SemanticsRole.tabBar,
+          container: true,
+          explicitChildNodes: true,
+          child: Stack(clipBehavior: Clip.none, children: [
           Positioned(
             left: center - blobW / 2,
             width: blobW,
             top: (box.maxHeight - blobH) / 2,
             height: blobH,
-            child: IgnorePointer(
+            child: RepaintBoundary(
+              child: IgnorePointer(
               child: DecoratedBox(
                 key: const ValueKey('k-fluid-nav-blob'),
                 decoration: BoxDecoration(
@@ -308,6 +345,7 @@ class _KFluidNavState extends State<KFluidNav> with TickerProviderStateMixin {
                   boxShadow: [BoxShadow(color: k.brand.withValues(alpha: k.isDark ? 0.30 : 0.34), blurRadius: 16, offset: const Offset(0, 6))],
                 ),
               ),
+            ),
             ),
           ),
           for (var i = 0; i < n; i++)
@@ -326,12 +364,23 @@ class _KFluidNavState extends State<KFluidNav> with TickerProviderStateMixin {
                 bump: i == _popIndex && !_reduce ? math.sin(math.pi * Curves.easeOut.transform(_pop.value)) * 0.22 : 0,
                 reduce: _reduce,
                 onTap: () => _tap(i),
+                tabPositionLabel: widget.tabPositionLabel,
               ),
             ),
-        ]);
+        ]),
+        );
       },
     );
   }
+}
+
+/// The framework's localized "Tab 1 of 4", lower-cased at the first letter ("tab 1 of 4") so it reads
+/// as a continuation of the item's label ("Home, tab 1 of 4"). Other scripts are left as they are.
+String _frameworkTabLabel(BuildContext context, int position, int count) {
+  final loc = Localizations.maybeLocaleOf(context) == null ? null : Localizations.of<MaterialLocalizations>(context, MaterialLocalizations);
+  final text = loc?.tabLabel(tabIndex: position, tabCount: count) ?? 'tab $position of $count';
+  final c = text.codeUnitAt(0);
+  return c >= 0x41 && c <= 0x5A ? String.fromCharCode(c + 32) + text.substring(1) : text;
 }
 
 class _FluidNavItem extends StatelessWidget {
@@ -345,8 +394,10 @@ class _FluidNavItem extends StatelessWidget {
     required this.bump,
     required this.reduce,
     required this.onTap,
+    required this.tabPositionLabel,
   });
 
+  final String Function(int position, int count)? tabPositionLabel;
   final KNavItem item;
   final int index, count;
   final double presence, bump;
@@ -359,7 +410,8 @@ class _FluidNavItem extends StatelessWidget {
     final color = Color.lerp(k.inkFaint, k.onBrand, Curves.easeOut.transform(presence))!;
     final scale = 1 + 0.08 * presence + bump;
     final badge = item.badge;
-    final label = '${item.label}${badge > 0 ? ', ${badge > 99 ? '99+' : badge} new' : ''}, tab ${index + 1} of $count';
+    final position = tabPositionLabel?.call(index + 1, count) ?? _frameworkTabLabel(context, index + 1, count);
+    final label = '${item.label}${badge > 0 ? ', ${badge > 99 ? '99+' : badge} new' : ''}, $position';
     return Semantics(
       container: true,
       role: SemanticsRole.tab,

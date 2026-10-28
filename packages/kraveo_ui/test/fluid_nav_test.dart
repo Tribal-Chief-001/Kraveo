@@ -294,4 +294,109 @@ void main() {
     expect(() => KFluidNav(items: _items, onTap: (_) {}), throwsAssertionError);
     expect(() => KFluidNav(items: _items, onTap: (_) {}, controller: PageController(), position: ValueNotifier(0.0)), throwsAssertionError);
   });
+
+  // ----------------------------------------------------------------- review fixes (L1, L11, perf) --
+  group('one haptic tick and one pop per change of tab', () {
+    late List<MethodCall> ticks;
+    setUp(() => ticks = []);
+    void mockHaptics(WidgetTester tester) {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'HapticFeedback.vibrate') ticks.add(call);
+        return null;
+      });
+      addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    }
+
+    testWidgets('a two-tab tap ticks once and does not pop the tab it passes through', (tester) async {
+      mockHaptics(tester);
+      final controller = PageController();
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(MaterialApp(
+        theme: KraveoTheme.customer(),
+        home: Scaffold(
+          body: PageView(controller: controller, children: [for (var i = 0; i < 4; i++) Center(child: Text('page $i'))]),
+          bottomNavigationBar: KFluidNav(
+            items: _items,
+            controller: controller,
+            onTap: (i) => controller.animateToPage(i, duration: const Duration(milliseconds: 400), curve: Curves.easeInOut),
+          ),
+        ),
+      ));
+      await tester.pump();
+      double scaleOf(IconData d) => tester.widget<Transform>(find.ancestor(of: find.byIcon(d), matching: find.byType(Transform)).first).transform.getMaxScaleOnAxis();
+      await tester.tap(find.byType(KPressable).at(2));
+      var maxMiddle = 0.0;
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        maxMiddle = maxMiddle < scaleOf(Icons.pedal_bike) ? scaleOf(Icons.pedal_bike) : maxMiddle;
+      }
+      await tester.pump(const Duration(seconds: 1));
+      expect(controller.page, 2);
+      expect(ticks.length, 1, reason: 'the tap tick only');
+      expect(maxMiddle, lessThan(1.09), reason: 'Track only grows by its presence (1.08), no 0.22 pop');
+      expect(find.text('Orders'), findsOneWidget);
+    });
+
+    testWidgets('a finger wobbling around the halfway point ticks nothing; a real change ticks once', (tester) async {
+      mockHaptics(tester);
+      final pos = ValueNotifier<double>(0);
+      await tester.pumpWidget(_host(KFluidNav(items: _items, position: pos, onTap: (_) {})));
+      for (final v in [0.45, 0.55, 0.45, 0.58, 0.5, 0.6, 0.4]) {
+        pos.value = v;
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(ticks, isEmpty);
+      pos.value = 0.7;
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(ticks.length, 1);
+      for (final v in [0.55, 0.65, 0.5, 0.7, 0.45]) {
+        pos.value = v;
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(ticks.length, 1, reason: 'still hovering around the Track/Home border');
+      pos.value = 0.2;
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(ticks.length, 2, reason: 'a clear move back to Home');
+    });
+
+    testWidgets('a tapped tab the pager never reaches does not mute later swipes', (tester) async {
+      mockHaptics(tester);
+      final pos = ValueNotifier<double>(0);
+      await tester.pumpWidget(_host(KFluidNav(items: _items, position: pos, onTap: (_) {})));
+      await tester.tap(find.byType(KPressable).at(3));
+      for (var i = 0; i < 30; i++) {
+        await tester.pump(const Duration(milliseconds: 16)); // the pager stays put
+      }
+      expect(ticks.length, 1);
+      pos.value = 1;
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(ticks.length, 2);
+    });
+  });
+
+  group('accessibility structure and repaint isolation', () {
+    testWidgets('the items sit in a tab bar; the position text comes from the framework by default and can be replaced', (tester) async {
+      final handle = tester.ensureSemantics();
+      final pos = ValueNotifier<double>(0);
+      await tester.pumpWidget(_host(KFluidNav(items: _items, position: pos, onTap: (_) {})));
+      await tester.pump();
+      expect(find.semantics.byPredicate((n) => n.role == SemanticsRole.tabBar), findsOneWidget);
+      expect(find.semantics.byPredicate((n) => n.role == SemanticsRole.tab), findsNWidgets(4));
+      expect(find.bySemanticsLabel('Home, tab 1 of 4'), findsOneWidget);
+
+      await tester.pumpWidget(_host(KFluidNav(items: _items, position: pos, onTap: (_) {}, tabPositionLabel: (i, n) => 'tab $i sur $n')));
+      await tester.pump();
+      expect(find.bySemanticsLabel('Me, tab 4 sur 4'), findsOneWidget);
+      handle.dispose();
+    });
+
+    testWidgets('the moving track (blob and icons) and the static glass edge have their own repaint layers', (tester) async {
+      final pos = ValueNotifier<double>(0);
+      await tester.pumpWidget(_host(KFluidNav(items: _items, position: pos, onTap: (_) {})));
+      final inNav = find.descendant(of: find.byType(KFluidNav), matching: find.byType(RepaintBoundary));
+      expect(inNav, findsAtLeastNWidgets(3));
+      expect(find.ancestor(of: _blob, matching: inNav), findsAtLeastNWidgets(2), reason: 'the blob has its own layer inside the track layer');
+      expect(find.ancestor(of: find.byIcon(Icons.home), matching: inNav), findsAtLeastNWidgets(1));
+    });
+  });
 }

@@ -81,6 +81,7 @@ void main() {
     final push = PushService(messaging: fcm, local: FakeLocalNotifier(), settings: FakeSystemSettings(), appVersion: '1.2.3');
     await tester.pumpWidget(KraveoCustomerApp(googleAuth: _NoGoogle(), createOrders: () => fakeOrders(orderApi), push: push));
     await _settle(tester);
+    await tester.pump(const Duration(seconds: 3)); // Home builds its other tabs in the background after ~2 s
     final tabCopies = find.byType(LiveTrackingScreen, skipOffstage: false).evaluate().length;
 
     fcm.opened.add(PushMessage(messageId: 'a', data: pushData('ORDER_ACCEPTED', orderId: 'gx-order-2')));
