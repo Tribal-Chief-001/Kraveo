@@ -6,11 +6,12 @@ import { ID_RE } from '../utils/http';
 import { priceProblem } from '../utils/catalog';
 import { errSummary } from '../utils/log';
 import { writeAudit } from './audit';
-import { approveDish, lockDish, notFound, priceFor, restoreDish, softDeleteDish, TX_OPTS, Actor } from './catalog';
+import { approveDish, lockDish, menuPriceProblem, notFound, priceFor, restoreDish, softDeleteDish, vendorPriceForMenuPrice, TX_OPTS, Actor } from './catalog';
+import { MAX_POSITION, SORT_STEP } from './menuOrder';
 import { lockCategories, peekDishCategory, resolveDishCategory, slugOf, MAX_DISH_CATEGORY_TEXT } from './categories';
 import { BAD_LABEL_CHARS, collapse, nameKey } from '../utils/labels';
 import { getSettings } from './settings';
-import { ruleFromColumns, toPaise } from './pricing';
+import { CommissionRule, resolveCommission, ruleFromColumns, toPaise } from './pricing';
 
 /**
  * Admin bulk actions on dishes and the whole-menu import (Docs/23 sections 3.5). Lock order everywhere: category rows (ascending id) ->
@@ -108,20 +109,33 @@ export const bulkDishAction = async (b: Record<string, unknown>, actor: Actor) =
 // ---------------------------------------------------------------------------------------------------------------------
 export const MAX_IMPORT_ROWS = 200;
 export const MAX_IMPORT_PRICE = 5000;
-const IMPORT_KEYS = ['name', 'category', 'vendorPrice', 'isVeg', 'description', 'imageUrl', 'isAvailable'];
+const IMPORT_KEYS = ['name', 'category', 'vendorPrice', 'menuPrice', 'position', 'isVeg', 'description', 'imageUrl', 'isAvailable'];
 export const DEFAULT_DISH_IMAGE = 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=400';
 
-type RowError = { field: string; message: string };
+type RowError = { field: string; message: string; /** Machine code for the Docs/26 errors (PRICE_REQUIRED, MENU_PRICE_NEEDS_CUT_RULE, MENU_PRICE_NOT_EXACT). */ code?: string; nearestPrice?: number };
 export type ImportAction = 'create' | 'update' | 'skip' | 'invalid';
-export type ImportRowReport = { index: number; name: string | null; action: ImportAction; errors: RowError[]; computedPrice: number | null; reason?: string; dishId?: string };
+export type ImportRowReport = {
+  index: number; name: string | null; action: ImportAction; errors: RowError[];
+  /** The customer price the dish gets (Docs/21 engine); with `menuPrice` it equals menuPrice. */
+  computedPrice: number | null;
+  /** Docs/26: the restaurant's price the row resolves to (given as vendorPrice, or derived from menuPrice); null when it cannot be known. */
+  vendorPrice: number | null;
+  /** Docs/26: the stored menu position (position x 10, or after the last dish) this row writes; null = the row does not change the position. */
+  sortOrder: number | null;
+  reason?: string; dishId?: string;
+};
 
 type ParsedRow = {
-  name: string; category: Category; vendorPrice: number; isVeg?: boolean; description?: string; imageUrl?: string; isAvailable?: boolean;
+  name: string; category: Category; isVeg?: boolean; description?: string; imageUrl?: string; isAvailable?: boolean;
+  /** Exactly one of the two (Docs/26). menuPrice needs a CUT rule and is turned into a vendorPrice in planImport. */
+  vendorPrice?: number; menuPrice?: number;
+  /** 1-based position as written in the file. */
+  position?: number;
 };
-type Existing = Pick<MenuItem, 'id' | 'name' | 'category' | 'categoryId' | 'vendorPrice' | 'price' | 'isVeg' | 'description' | 'imageUrl' | 'isAvailable' | 'commissionType' | 'commissionValue' | 'pendingVendorPrice'>;
+type Existing = Pick<MenuItem, 'id' | 'name' | 'sortOrder' | 'category' | 'categoryId' | 'vendorPrice' | 'price' | 'isVeg' | 'description' | 'imageUrl' | 'isAvailable' | 'commissionType' | 'commissionValue' | 'pendingVendorPrice'>;
 
 type Planned =
-  | { kind: 'create'; id: string; row: ParsedRow; price: number }
+  | { kind: 'create'; id: string; row: ParsedRow; vendorPrice: number; price: number; sortOrder: number }
   | { kind: 'update'; existing: Existing; row: ParsedRow; price: number; data: Prisma.MenuItemUpdateInput }
   | { kind: 'skip' }
   | { kind: 'invalid' };
@@ -152,11 +166,32 @@ const parseRow = (raw: unknown, cats: Map<string, Category>, suggest: (typed: st
     }
   }
 
+  // Docs/26: exactly one of vendorPrice (restaurant's price) / menuPrice (customer pays). null counts as absent.
+  const hasVendorPrice = r.vendorPrice !== undefined && r.vendorPrice !== null;
+  const hasMenuPrice = r.menuPrice !== undefined && r.menuPrice !== null;
   let vendorPrice: number | undefined;
-  const problem = priceProblem(r.vendorPrice);
-  if (problem) errors.push({ field: 'vendorPrice', message: problem.replace(/^Price/, 'The price') });
-  else if ((r.vendorPrice as number) > MAX_IMPORT_PRICE) errors.push({ field: 'vendorPrice', message: `The price cannot be more than ₹${MAX_IMPORT_PRICE}.` });
-  else vendorPrice = r.vendorPrice as number;
+  let menuPrice: number | undefined;
+  let priceOk = false;
+  if (hasVendorPrice && hasMenuPrice) {
+    errors.push({ field: 'menuPrice', code: 'PRICE_REQUIRED', message: 'Give either the restaurant price (vendorPrice) or the customer menu price (menuPrice), not both.' });
+  } else if (!hasVendorPrice && !hasMenuPrice) {
+    errors.push({ field: 'vendorPrice', code: 'PRICE_REQUIRED', message: 'Give the restaurant price (vendorPrice) or the customer menu price (menuPrice).' });
+  } else if (hasMenuPrice) {
+    const mp = menuPriceProblem(r.menuPrice);
+    if (mp) errors.push({ field: 'menuPrice', message: mp });
+    else { menuPrice = r.menuPrice as number; priceOk = true; }
+  } else {
+    const problem = priceProblem(r.vendorPrice);
+    if (problem) errors.push({ field: 'vendorPrice', message: problem.replace(/^Price/, 'The price') });
+    else if ((r.vendorPrice as number) > MAX_IMPORT_PRICE) errors.push({ field: 'vendorPrice', message: `The price cannot be more than ₹${MAX_IMPORT_PRICE}.` });
+    else { vendorPrice = r.vendorPrice as number; priceOk = true; }
+  }
+
+  let position: number | undefined;
+  if (r.position !== undefined && r.position !== null) {
+    if (typeof r.position !== 'number' || !Number.isInteger(r.position) || r.position < 1 || r.position > MAX_POSITION) errors.push({ field: 'position', message: `The position must be a whole number from 1 to ${MAX_POSITION}.` });
+    else position = r.position;
+  }
 
   if (r.isVeg !== undefined && r.isVeg !== null && typeof r.isVeg !== 'boolean') errors.push({ field: 'isVeg', message: 'isVeg must be true or false.' });
   if (r.isAvailable !== undefined && r.isAvailable !== null && typeof r.isAvailable !== 'boolean') errors.push({ field: 'isAvailable', message: 'isAvailable must be true or false.' });
@@ -172,12 +207,12 @@ const parseRow = (raw: unknown, cats: Map<string, Category>, suggest: (typed: st
     if (!u || u.length > 500 || !/^https?:\/\//i.test(u) || /\s/.test(u)) errors.push({ field: 'imageUrl', message: 'The image must be an http(s) link of up to 500 characters, or empty.' });
     else imageUrl = u;
   }
-  if (errors.length || !name || !category || vendorPrice === undefined) return { errors, name };
+  if (errors.length || !name || !category || !priceOk) return { errors, name };
   return {
     errors,
     name,
     row: {
-      name, category, vendorPrice, description, imageUrl,
+      name, category, vendorPrice, menuPrice, position, description, imageUrl,
       isVeg: typeof r.isVeg === 'boolean' ? r.isVeg : undefined,
       isAvailable: typeof r.isAvailable === 'boolean' ? r.isAvailable : undefined,
     },
@@ -186,10 +221,14 @@ const parseRow = (raw: unknown, cats: Map<string, Category>, suggest: (typed: st
 
 type Plan = { report: ImportRowReport[]; planned: Planned[]; summary: { create: number; update: number; skip: number; invalid: number; total: number } };
 
-/** The one place that decides what happens to each row. Used by the dry run and (again, under locks) by the apply. */
+/**
+ * The one place that decides what happens to each row. Used by the dry run and (again, under locks) by the apply.
+ * Docs/26: a `menuPrice` row is turned into a restaurant price here, because only now the row's EFFECTIVE rule is known
+ * (the existing dish's own override for a duplicate, else the restaurant's, else the global one).
+ */
 const planImport = (
   rows: unknown[],
-  ctx: { cats: Category[]; existing: Existing[]; vendorRule: ReturnType<typeof ruleFromColumns>; settings: Awaited<ReturnType<typeof getSettings>>; onDuplicate: 'SKIP' | 'UPDATE'; suggestFrom: string[] },
+  ctx: { cats: Category[]; existing: Existing[]; vendorRule: ReturnType<typeof ruleFromColumns>; settings: Awaited<ReturnType<typeof getSettings>>; onDuplicate: 'SKIP' | 'UPDATE'; suggestFrom: string[]; maxSortOrder: number },
 ): Plan => {
   const cats = new Map(ctx.cats.map((c) => [c.slug, c] as const));
   const byName = new Map<string, Existing[]>();
@@ -205,20 +244,36 @@ const planImport = (
   const seenInFile = new Map<string, number>();
   const planned: Planned[] = [];
   const report: ImportRowReport[] = [];
+  let appended = 0; // rows created without a position go after the last existing dish, in file order
+
+  const step = ctx.settings.rounding.step;
+  /** The restaurant price and customer price of a row under `dishRule`, or the row error. */
+  const resolvePrices = (row: ParsedRow, dishRule: CommissionRule | null): { vendorPrice: number; price: number } | { error: RowError } => {
+    if (row.menuPrice === undefined) {
+      const vendorPrice = row.vendorPrice!;
+      return { vendorPrice, price: priceFor(vendorPrice, { dish: dishRule, vendor: ctx.vendorRule }, ctx.settings).price };
+    }
+    const { rule } = resolveCommission(dishRule, ctx.vendorRule, ctx.settings.commission);
+    const r = vendorPriceForMenuPrice(row.menuPrice, rule, step);
+    if (!r.ok) return { error: { field: 'menuPrice', code: r.code, message: r.message, ...(r.nearestPrice !== undefined ? { nearestPrice: r.nearestPrice } : {}) } };
+    return { vendorPrice: r.vendorPrice, price: priceFor(r.vendorPrice, { dish: dishRule, vendor: ctx.vendorRule }, ctx.settings).price };
+  };
 
   rows.forEach((raw, index) => {
     const parsed = parseRow(raw, cats, suggest);
     const base = { index, name: parsed.name };
+    const none = { computedPrice: null, vendorPrice: null, sortOrder: null };
     if (!parsed.row) {
-      const priceOk = raw && typeof raw === 'object' && priceProblem((raw as Record<string, unknown>).vendorPrice) === null && ((raw as Record<string, unknown>).vendorPrice as number) <= MAX_IMPORT_PRICE;
-      report.push({ ...base, action: 'invalid', errors: parsed.errors, computedPrice: priceOk ? priceFor((raw as Record<string, number>).vendorPrice, { dish: null, vendor: ctx.vendorRule }, ctx.settings).price : null });
+      const rawRow = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+      const priceOk = rawRow.menuPrice === undefined && rawRow.vendorPrice !== undefined && priceProblem(rawRow.vendorPrice) === null && (rawRow.vendorPrice as number) <= MAX_IMPORT_PRICE;
+      report.push({ ...base, action: 'invalid', errors: parsed.errors, computedPrice: priceOk ? priceFor(rawRow.vendorPrice as number, { dish: null, vendor: ctx.vendorRule }, ctx.settings).price : null, vendorPrice: priceOk ? (rawRow.vendorPrice as number) : null, sortOrder: null });
       planned.push({ kind: 'invalid' });
       return;
     }
     const row = parsed.row;
     const key = nameKey(row.name);
     if (seenInFile.has(key)) {
-      report.push({ ...base, action: 'invalid', errors: [{ field: 'name', message: `This dish name is repeated in the file (first at row ${seenInFile.get(key)! + 1}).` }], computedPrice: null });
+      report.push({ ...base, action: 'invalid', errors: [{ field: 'name', message: `This dish name is repeated in the file (first at row ${seenInFile.get(key)! + 1}).` }], ...none });
       planned.push({ kind: 'invalid' });
       return;
     }
@@ -226,40 +281,54 @@ const planImport = (
 
     const matches = byName.get(key) ?? [];
     if (matches.length > 1) {
-      report.push({ ...base, action: 'invalid', errors: [{ field: 'name', message: 'This restaurant already has more than one dish with this name. Fix it in the catalog first.' }], computedPrice: null });
+      report.push({ ...base, action: 'invalid', errors: [{ field: 'name', message: 'This restaurant already has more than one dish with this name. Fix it in the catalog first.' }], ...none });
       planned.push({ kind: 'invalid' });
       return;
     }
     if (matches.length === 0) {
-      const priced = priceFor(row.vendorPrice, { dish: null, vendor: ctx.vendorRule }, ctx.settings);
+      const prices = resolvePrices(row, null);
+      if ('error' in prices) {
+        report.push({ ...base, action: 'invalid', errors: [prices.error], ...none });
+        planned.push({ kind: 'invalid' });
+        return;
+      }
       const id = randomUUID();
-      report.push({ ...base, action: 'create', errors: [], computedPrice: priced.price });
-      planned.push({ kind: 'create', id, row, price: priced.price });
+      const sortOrder = row.position !== undefined ? row.position * SORT_STEP : ctx.maxSortOrder + SORT_STEP * ++appended;
+      report.push({ ...base, action: 'create', errors: [], computedPrice: prices.price, vendorPrice: prices.vendorPrice, sortOrder });
+      planned.push({ kind: 'create', id, row, vendorPrice: prices.vendorPrice, price: prices.price, sortOrder });
       return;
     }
     const existing = matches[0];
-    const priced = priceFor(row.vendorPrice, { dish: ruleFromColumns(existing.commissionType, existing.commissionValue), vendor: ctx.vendorRule }, ctx.settings);
+    const prices = resolvePrices(row, ruleFromColumns(existing.commissionType, existing.commissionValue));
+    if ('error' in prices) {
+      report.push({ ...base, action: 'invalid', errors: [prices.error], ...none, dishId: existing.id });
+      planned.push({ kind: 'invalid' });
+      return;
+    }
+    const priced = { price: prices.price };
+    const sortOrderOf = row.position !== undefined ? row.position * SORT_STEP : null;
     if (ctx.onDuplicate === 'SKIP') {
-      report.push({ ...base, action: 'skip', errors: [], computedPrice: priced.price, reason: 'DUPLICATE_EXISTS', dishId: existing.id });
+      report.push({ ...base, action: 'skip', errors: [], computedPrice: priced.price, vendorPrice: prices.vendorPrice, sortOrder: null, reason: 'DUPLICATE_EXISTS', dishId: existing.id });
       planned.push({ kind: 'skip' });
       return;
     }
     // UPDATE: only what the row carries is compared / written; an empty cell keeps the stored value.
     const data: Prisma.MenuItemUpdateInput = {};
     if (existing.categoryId !== row.category.id || existing.category !== row.category.name) Object.assign(data, { category: row.category.name, categoryRef: { connect: { id: row.category.id } } });
-    if (toPaise(existing.vendorPrice) !== toPaise(row.vendorPrice) || toPaise(existing.price) !== toPaise(priced.price)) {
-      Object.assign(data, { vendorPrice: row.vendorPrice, price: priced.price, pendingVendorPrice: null });
+    if (toPaise(existing.vendorPrice) !== toPaise(prices.vendorPrice) || toPaise(existing.price) !== toPaise(priced.price)) {
+      Object.assign(data, { vendorPrice: prices.vendorPrice, price: priced.price, pendingVendorPrice: null });
     }
+    if (sortOrderOf !== null && sortOrderOf !== existing.sortOrder) data.sortOrder = sortOrderOf;
     if (row.isVeg !== undefined && row.isVeg !== existing.isVeg) data.isVeg = row.isVeg;
     if (row.description !== undefined && row.description !== existing.description) data.description = row.description;
     if (row.imageUrl !== undefined && row.imageUrl !== existing.imageUrl) data.imageUrl = row.imageUrl;
     if (row.isAvailable !== undefined && row.isAvailable !== existing.isAvailable) data.isAvailable = row.isAvailable;
     if (Object.keys(data).length === 0) {
-      report.push({ ...base, action: 'skip', errors: [], computedPrice: priced.price, reason: 'UNCHANGED', dishId: existing.id });
+      report.push({ ...base, action: 'skip', errors: [], computedPrice: priced.price, vendorPrice: prices.vendorPrice, sortOrder: null, reason: 'UNCHANGED', dishId: existing.id });
       planned.push({ kind: 'skip' });
       return;
     }
-    report.push({ ...base, action: 'update', errors: [], computedPrice: priced.price, dishId: existing.id });
+    report.push({ ...base, action: 'update', errors: [], computedPrice: priced.price, vendorPrice: prices.vendorPrice, sortOrder: typeof data.sortOrder === 'number' ? data.sortOrder : null, dishId: existing.id });
     planned.push({ kind: 'update', existing, row, price: priced.price, data });
   });
 
@@ -267,7 +336,7 @@ const planImport = (
   return { report, planned, summary: { create: count('create'), update: count('update'), skip: count('skip'), invalid: count('invalid'), total: report.length } };
 };
 
-const EXISTING_SELECT = { id: true, name: true, category: true, categoryId: true, vendorPrice: true, price: true, isVeg: true, description: true, imageUrl: true, isAvailable: true, commissionType: true, commissionValue: true, pendingVendorPrice: true } as const;
+const EXISTING_SELECT = { id: true, name: true, sortOrder: true, category: true, categoryId: true, vendorPrice: true, price: true, isVeg: true, description: true, imageUrl: true, isAvailable: true, commissionType: true, commissionValue: true, pendingVendorPrice: true } as const;
 
 class Retry extends Error {}
 
@@ -292,7 +361,8 @@ export const importMenu = async (vendorId: string, b: Record<string, unknown>, a
       prisma.category.findMany({ where: { isActive: true, forDishes: true }, take: 600 }),
       prisma.menuItem.findMany({ where: { vendorId, deletedAt: null }, select: EXISTING_SELECT }),
     ]);
-    const plan = planImport(rows, { cats, existing, vendorRule: ruleFromColumns(vendor.commissionType, vendor.commissionValue), settings, onDuplicate, suggestFrom: cats.map((c) => c.name) });
+    const maxSortOrder = Math.max(0, (await prisma.menuItem.aggregate({ where: { vendorId }, _max: { sortOrder: true } }))._max.sortOrder ?? 0);
+    const plan = planImport(rows, { cats, existing, vendorRule: ruleFromColumns(vendor.commissionType, vendor.commissionValue), settings, onDuplicate, suggestFrom: cats.map((c) => c.name), maxSortOrder });
     return { dryRun: true, applied: false, summary: plan.summary, rows: plan.report };
   }
 
@@ -318,7 +388,8 @@ export const importMenu = async (vendorId: string, b: Record<string, unknown>, a
         if (lockedVendor.length === 0) throw new AppError(404, 'NOT_FOUND', 'Vendor not found');
         const vendor = await tx.vendor.findUniqueOrThrow({ where: { id: vendorId }, select: { id: true, name: true, commissionType: true, commissionValue: true } });
         const existing = await tx.menuItem.findMany({ where: { vendorId, deletedAt: null }, select: EXISTING_SELECT });
-        const plan = planImport(rows, { cats, existing, vendorRule: ruleFromColumns(vendor.commissionType, vendor.commissionValue), settings, onDuplicate, suggestFrom: cats.map((c) => c.name) });
+        const maxSortOrder = Math.max(0, (await tx.menuItem.aggregate({ where: { vendorId }, _max: { sortOrder: true } }))._max.sortOrder ?? 0);
+        const plan = planImport(rows, { cats, existing, vendorRule: ruleFromColumns(vendor.commissionType, vendor.commissionValue), settings, onDuplicate, suggestFrom: cats.map((c) => c.name), maxSortOrder });
         if (plan.summary.invalid > 0) {
           throw new AppError(400, 'IMPORT_INVALID', `${plan.summary.invalid} row${plan.summary.invalid === 1 ? ' is' : 's are'} not valid. Nothing was imported. Fix them and try again.`, 'rows', {
             data: { dryRun: false, applied: false, summary: plan.summary, rows: plan.report },
@@ -329,12 +400,15 @@ export const importMenu = async (vendorId: string, b: Record<string, unknown>, a
         const creates = plan.planned.flatMap((p) => (p.kind === 'create' ? [p] : []));
         if (creates.length) {
           await tx.menuItem.createMany({
-            data: creates.map((p) => ({
+            data: creates.map((p, i) => ({
               id: p.id,
               vendorId,
               name: p.row.name,
               price: p.price,
-              vendorPrice: p.row.vendorPrice,
+              vendorPrice: p.vendorPrice,
+              sortOrder: p.sortOrder,
+              // One transaction gives every row the same now(): a later millisecond per row keeps file order for equal positions.
+              createdAt: new Date(now.getTime() + i),
               category: p.row.category.name,
               categoryId: p.row.category.id,
               description: p.row.description ?? '',

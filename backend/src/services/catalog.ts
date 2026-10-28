@@ -3,8 +3,9 @@ import { prisma } from '../db';
 import { AppError } from '../utils/appError';
 import { writeAudit } from './audit';
 import { getSettings } from './settings';
-import { checkCommissionRule, CommissionRule, DishPrice, priceDish, ruleFromColumns, toPaise } from './pricing';
-import { dishStatus, DishStatus, priceProblem, text } from '../utils/catalog';
+import { checkCommissionRule, CommissionRule, DishPrice, fromPaise, priceDish, resolveCommission, ruleFromColumns, toPaise, vendorPaiseForMenuPrice } from './pricing';
+import { dishStatus, DishStatus, MENU_ORDER_BY, priceProblem, text } from '../utils/catalog';
+import { lockVendorAndDishes, moveDishInSection, nextSortOrder, MAX_POSITION } from './menuOrder';
 import { SettingsMap } from './pricing';
 import { resolveDishCategory, resolveDishCategoryForEdit } from './categories';
 import { BAD_LABEL_MESSAGE, badLabel } from '../utils/labels';
@@ -63,6 +64,8 @@ export const adminDishView = (item: DishRow, settings: SettingsMap) => {
     imageUrl: item.imageUrl,
     isVeg: item.isVeg,
     isAvailable: item.isAvailable,
+    /** Docs/26: position in the restaurant's menu (0 = unordered legacy). */
+    sortOrder: item.sortOrder,
     rating: item.rating ?? null,
     ratingCount: item.ratingCount ?? null,
     status,
@@ -133,11 +136,61 @@ const commissionOverrideFrom = (b: Record<string, unknown>): CommissionRule | nu
   return check.value;
 };
 
+/** Highest price a dish may have (restaurant price or menu price): the import cap, so one rule for every writer that takes a menu price. */
+export const MAX_MENU_PRICE_INPUT = 5000;
+
+/** `menuPrice` as sent: a finite number, 0 < x <= 5000, at most 2 decimals. Plain message, `field` = menuPrice. */
+export const menuPriceProblem = (raw: unknown): string | null => {
+  const p = priceProblem(raw);
+  if (p) return p.replace(/^Price/, 'The menu price');
+  if ((raw as number) > MAX_MENU_PRICE_INPUT) return `The menu price cannot be more than ₹${MAX_MENU_PRICE_INPUT}.`;
+  return null;
+};
+
+export type MenuPriceResult =
+  | { ok: true; vendorPrice: number; price: number }
+  | { ok: false; code: 'MENU_PRICE_NEEDS_CUT_RULE' | 'MENU_PRICE_NOT_EXACT'; message: string; nearestPrice?: number };
+
+/**
+ * Docs/26 section 2: the restaurant price that makes a dish sell for exactly `menuPrice` (rupees). Only a CUT rule can do that;
+ * `rule` is the dish's EFFECTIVE rule (dish override, else restaurant, else global). The restaurant share is rounded DOWN to the paisa.
+ */
+export const vendorPriceForMenuPrice = (menuPrice: number, rule: CommissionRule, step: number): MenuPriceResult => {
+  if (rule.type !== 'CUT') {
+    return { ok: false, code: 'MENU_PRICE_NEEDS_CUT_RULE', message: 'A menu price can only be used when the commission is "Cut from sale". Enter the restaurant price instead, or change the commission to "Cut from sale" first.' };
+  }
+  const r = vendorPaiseForMenuPrice(toPaise(menuPrice), rule, step);
+  if (!r.exact) {
+    return {
+      ok: false,
+      code: 'MENU_PRICE_NOT_EXACT',
+      nearestPrice: fromPaise(r.nearest),
+      message: `Rs ${menuPrice} cannot be split exactly at a ${rule.value}% cut${step > 1 ? ` with prices rounded up to Rs ${step}` : ''}. The nearest price that works is Rs ${fromPaise(r.nearest)}.`,
+    };
+  }
+  return { ok: true, vendorPrice: fromPaise(r.vendorPaise), price: menuPrice };
+};
+
+const menuPriceOrThrow = (menuPrice: number, rule: CommissionRule, step: number): { vendorPrice: number; price: number } => {
+  const r = vendorPriceForMenuPrice(menuPrice, rule, step);
+  if (!r.ok) throw new AppError(400, r.code, r.message, 'menuPrice', r.nearestPrice !== undefined ? { nearestPrice: r.nearestPrice } : {});
+  return r;
+};
+
+/** `menuPrice` from a request body, validated (undefined when absent). Together with a restaurant price it is PRICE_REQUIRED. */
+const menuPriceFrom = (b: Record<string, unknown>, hasVendorPrice: boolean): number | undefined => {
+  if (b.menuPrice === undefined) return undefined;
+  if (hasVendorPrice) throw new AppError(400, 'PRICE_REQUIRED', 'Send either the restaurant price (vendorPrice) or the customer menu price (menuPrice), not both.', 'menuPrice');
+  const problem = menuPriceProblem(b.menuPrice);
+  if (problem) throw new AppError(400, 'BAD_REQUEST', problem, 'menuPrice');
+  return b.menuPrice as number;
+};
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Restaurant side
 // ---------------------------------------------------------------------------------------------------------------------
 export const vendorDishes = (vendorId: string) =>
-  prisma.menuItem.findMany({ where: { vendorId, deletedAt: null }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+  prisma.menuItem.findMany({ where: { vendorId, deletedAt: null }, orderBy: MENU_ORDER_BY });
 
 /**
  * POST /vendors/:id/items. A restaurant's dish starts PENDING (vendorPrice = what it typed, customers do not see it until an admin
@@ -145,7 +198,7 @@ export const vendorDishes = (vendorId: string) =>
  */
 export const createDish = async (
   vendorId: string,
-  input: { name: string; price: number; category?: string | null; categoryId?: string | null; description: string; imageUrl: string; isVeg: boolean; isAvailable?: boolean; commission?: CommissionRule | null },
+  input: { name: string; price?: number; menuPrice?: number; category?: string | null; categoryId?: string | null; description: string; imageUrl: string; isVeg: boolean; isAvailable?: boolean; commission?: CommissionRule | null },
   actor: Actor,
 ) => {
   const settings = await getSettings();
@@ -164,14 +217,23 @@ export const createDish = async (
       }
     }
     const rules: Rules = { dish: input.commission ?? null, vendor: ruleFromColumns(vendor.commissionType, vendor.commissionValue) };
-    const priced = priceFor(input.price, rules, settings);
+    // Docs/26: an admin may give the customer's menu price; the restaurant price is derived from the dish's effective CUT rule.
+    let vendorPrice = input.price;
+    if (input.menuPrice !== undefined) {
+      if (!byAdmin) throw new AppError(403, 'FORBIDDEN', 'Only Kraveo can set a menu price.');
+      vendorPrice = menuPriceOrThrow(input.menuPrice, resolveCommission(rules.dish, rules.vendor, settings.commission).rule, settings.rounding.step).vendorPrice;
+    }
+    if (vendorPrice === undefined) throw new AppError(400, 'PRICE_REQUIRED', 'Send the restaurant price (vendorPrice) or the customer menu price (menuPrice).', 'vendorPrice');
+    const priced = priceFor(vendorPrice, rules, settings);
+    const sortOrder = await nextSortOrder(tx, vendorId); // under the restaurant lock: a new dish goes last
     const now = new Date();
     const row = await tx.menuItem.create({
       data: {
         vendorId,
         name: input.name,
         price: priced.price,
-        vendorPrice: input.price,
+        vendorPrice,
+        sortOrder,
         category: cat.name,
         categoryId: cat.id,
         description: input.description,
@@ -293,7 +355,8 @@ export const listCatalog = async (q: { status?: string; vendorId?: string; q?: s
     prisma.menuItem.findMany({
       where: { AND: where },
       include: WITH_VENDOR,
-      orderBy: queue ? [{ updatedAt: 'asc' }, { id: 'asc' }] : [{ updatedAt: 'desc' }, { id: 'asc' }],
+      // Docs/26: one restaurant's list is in MENU order (sortOrder, createdAt, id); the approval queues stay oldest-change-first, the all-restaurants list newest-change-first.
+      orderBy: queue ? [{ updatedAt: 'asc' }, { id: 'asc' }] : q.vendorId ? MENU_ORDER_BY : [{ updatedAt: 'desc' }, { id: 'asc' }],
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
@@ -312,14 +375,19 @@ export const pendingCount = async () => {
 
 /** POST /admin/catalog/preview: the customer price a restaurant price + commission would give, nothing is saved. */
 export const previewPrice = async (b: Record<string, unknown>) => {
-  const vendorPrice = money(b.vendorPrice);
+  const menuPrice = menuPriceFrom(b, b.vendorPrice !== undefined);
+  const askedVendorPrice = menuPrice === undefined ? money(b.vendorPrice) : undefined;
   if (typeof b.vendorId !== 'string') throw new AppError(400, 'BAD_REQUEST', 'vendorId is required.', 'vendorId');
   const vendor = await prisma.vendor.findUnique({ where: { id: b.vendorId }, select: VENDOR_SELECT });
   if (!vendor) throw new AppError(404, 'NOT_FOUND', 'Vendor not found');
   const dish = commissionOverrideFrom(b) ?? null;
   const settings = await getSettings();
-  const out = priceFor(vendorPrice, { dish, vendor: ruleFromColumns(vendor.commissionType, vendor.commissionValue) }, settings);
+  const rules = { dish, vendor: ruleFromColumns(vendor.commissionType, vendor.commissionValue) };
+  // Docs/26: with a menuPrice the restaurant's share is derived (and must be exact), then priced like any other dish.
+  const vendorPrice = menuPrice === undefined ? askedVendorPrice! : menuPriceOrThrow(menuPrice, resolveCommission(rules.dish, rules.vendor, settings.commission).rule, settings.rounding.step).vendorPrice;
+  const out = priceFor(vendorPrice, rules, settings);
   return {
+    ...(menuPrice !== undefined ? { menuPrice } : {}),
     vendorPrice: out.vendorPrice,
     price: out.price,
     effectiveCommission: out.effectiveCommission,
@@ -332,7 +400,7 @@ export const previewPrice = async (b: Record<string, unknown>) => {
 // ---------------------------------------------------------------------------------------------------------------------
 // Admin: approve / reject
 // ---------------------------------------------------------------------------------------------------------------------
-const describeRule = (r: CommissionRule | null) => (r ? (r.type === 'PERCENT' ? `${r.value}%` : `Rs ${r.value} flat`) : 'inherited');
+export const describeRule = (r: CommissionRule | null) => (r ? (r.type === 'PERCENT' ? `${r.value}%` : r.type === 'CUT' ? `${r.value}% of the sale` : `Rs ${r.value} flat`) : 'inherited');
 
 /**
  * POST /admin/catalog/:id/approve `{ commissionType?, commissionValue?, vendorPrice?, applyPending? }`
@@ -451,7 +519,7 @@ const checkImageUrl = (raw: unknown): string => {
   return t;
 };
 
-const EDIT_KEYS = ['name', 'description', 'category', 'categoryId', 'imageUrl', 'isVeg', 'isAvailable', 'vendorPrice', 'commissionType', 'commissionValue'];
+const EDIT_KEYS = ['name', 'description', 'category', 'categoryId', 'imageUrl', 'isVeg', 'isAvailable', 'vendorPrice', 'menuPrice', 'commissionType', 'commissionValue', 'position'];
 
 /** PATCH /admin/catalog/:id. Any change of the restaurant price or the commission recomputes the customer price. */
 export const adminEditDish = async (itemId: string, b: Record<string, unknown>, actor: Actor) => {
@@ -473,9 +541,15 @@ export const adminEditDish = async (itemId: string, b: Record<string, unknown>, 
     if (typeof b.isAvailable !== 'boolean') throw new AppError(400, 'BAD_REQUEST', 'isAvailable must be true or false.', 'isAvailable');
     data.isAvailable = b.isAvailable;
   }
+  const newMenuPrice = menuPriceFrom(b, b.vendorPrice !== undefined);
   const newVendorPrice = b.vendorPrice !== undefined ? money(b.vendorPrice) : undefined;
   const override = commissionOverrideFrom(b);
-  if (Object.keys(data).length === 0 && newVendorPrice === undefined && override === undefined && !categoryTouched) throw new AppError(400, 'BAD_REQUEST', `Send at least one of: ${EDIT_KEYS.join(', ')}.`);
+  // Docs/26: where the dish sits inside its section (1 = first). Takes the restaurant lock, see below.
+  if (b.position !== undefined && (typeof b.position !== 'number' || !Number.isInteger(b.position) || b.position < 1 || b.position > MAX_POSITION)) {
+    throw new AppError(400, 'BAD_REQUEST', `position must be a whole number from 1 to ${MAX_POSITION}.`, 'position');
+  }
+  const position = b.position as number | undefined;
+  if (Object.keys(data).length === 0 && newVendorPrice === undefined && newMenuPrice === undefined && override === undefined && !categoryTouched && position === undefined) throw new AppError(400, 'BAD_REQUEST', `Send at least one of: ${EDIT_KEYS.join(', ')}.`);
 
   const settings = await getSettings();
   const out = await prisma.$transaction(async (tx) => {
@@ -486,21 +560,32 @@ export const adminEditDish = async (itemId: string, b: Record<string, unknown>, 
       if (!current) throw notFound();
       resolved = (await resolveDishCategoryForEdit(tx, { name: category ?? undefined, id: b.categoryId }, { admin: true, current })) ?? undefined;
     }
+    if (position !== undefined) {
+      // Docs/26 lock order: the restaurant row BEFORE its dish rows (menu-order, import and dish create take it first too).
+      // ... and all of that restaurant's dishes by ascending id BEFORE this one (the same order as menu-order, import and recalculate: no deadlock).
+      const owner = await tx.menuItem.findUnique({ where: { id: itemId }, select: { vendorId: true } });
+      if (!owner) throw notFound();
+      await lockVendorAndDishes(tx, owner.vendorId, itemId);
+    }
     const item = await lockDish(tx, itemId);
     if (!item) throw notFound();
     if (item.deletedAt) throw new AppError(409, 'ITEM_DELETED', 'This dish is deleted. Restore it first.');
-    const vendorPrice = newVendorPrice ?? item.vendorPrice;
     const rule = override === undefined ? ruleFromColumns(item.commissionType, item.commissionValue) : override;
-    const priced = priceFor(vendorPrice, { dish: rule, vendor: ruleFromColumns(item.vendor.commissionType, item.vendor.commissionValue) }, settings);
+    const rules = { dish: rule, vendor: ruleFromColumns(item.vendor.commissionType, item.vendor.commissionValue) };
+    const vendorPrice = newMenuPrice !== undefined
+      ? menuPriceOrThrow(newMenuPrice, resolveCommission(rules.dish, rules.vendor, settings.commission).rule, settings.rounding.step).vendorPrice
+      : newVendorPrice ?? item.vendorPrice;
+    const priced = priceFor(vendorPrice, rules, settings);
     const full: Prisma.MenuItemUpdateInput = { ...data };
     if (resolved) Object.assign(full, { category: resolved.name, categoryRef: { connect: { id: resolved.id } } });
-    const repriced = newVendorPrice !== undefined || override !== undefined;
+    const repriced = newVendorPrice !== undefined || newMenuPrice !== undefined || override !== undefined;
     if (repriced) {
       Object.assign(full, { vendorPrice, price: priced.price });
       // The admin's own number supersedes a request the restaurant had open.
-      if (newVendorPrice !== undefined) Object.assign(full, { pendingVendorPrice: null });
+      if (newVendorPrice !== undefined || newMenuPrice !== undefined) Object.assign(full, { pendingVendorPrice: null });
       if (override !== undefined) Object.assign(full, { commissionType: override ? override.type : null, commissionValue: override ? override.value : null });
     }
+    if (position !== undefined) await moveDishInSection(tx, item.vendorId, itemId, resolved ? resolved.name : item.category, position);
     const updated = await tx.menuItem.update({ where: { id: itemId }, data: full, include: WITH_VENDOR });
     return { item: updated, before: item, priced };
   }, TX_OPTS);
@@ -517,8 +602,8 @@ export const adminEditDish = async (itemId: string, b: Record<string, unknown>, 
 /** POST /admin/catalog: a dish for any restaurant, APPROVED at once. */
 export const adminCreateDish = async (b: Record<string, unknown>, actor: Actor) => {
   if (typeof b.vendorId !== 'string' || !b.vendorId) throw new AppError(400, 'BAD_REQUEST', 'vendorId is required.', 'vendorId');
-  const priceRaw = b.vendorPrice !== undefined ? b.vendorPrice : b.price;
-  const price = money(priceRaw);
+  const menuPrice = menuPriceFrom(b, b.vendorPrice !== undefined || b.price !== undefined);
+  const price = menuPrice === undefined ? money(b.vendorPrice !== undefined ? b.vendorPrice : b.price) : undefined;
   const name = requireNonEmptyText(b.name, MAX_NAME, 'name', 'Name');
   const category = optionalText(b.category, 40, 'category', 'Category') || undefined; // blank = 'Main Course' (resolved with the lock)
   const description = optionalText(b.description, 300, 'description', 'Description') ?? '';
@@ -527,7 +612,7 @@ export const adminCreateDish = async (b: Record<string, unknown>, actor: Actor) 
   if (b.isAvailable !== undefined && typeof b.isAvailable !== 'boolean') throw new AppError(400, 'BAD_REQUEST', 'isAvailable must be true or false.', 'isAvailable');
   const commission = commissionOverrideFrom(b);
   const settings = await getSettings();
-  const row = await createDish(b.vendorId, { name, price, category, categoryId: b.categoryId as string | undefined, description, imageUrl, isVeg: b.isVeg !== false, isAvailable: b.isAvailable !== false, commission: commission ?? null }, actor);
+  const row = await createDish(b.vendorId, { name, price, menuPrice, category, categoryId: b.categoryId as string | undefined, description, imageUrl, isVeg: b.isVeg !== false, isAvailable: b.isAvailable !== false, commission: commission ?? null }, actor);
   return { item: row, settings };
 };
 

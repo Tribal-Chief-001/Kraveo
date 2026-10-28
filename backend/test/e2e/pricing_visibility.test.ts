@@ -372,6 +372,50 @@ describe('Pricing: money and visibility', () => {
       await settle();
     });
 
+    test('RESTAURANT with a "cut from sale" rule (Docs/26): paid order, detail, lists, menu endpoints and status answers carry only what it earns, never the customer price or the cut', async () => {
+      await request.patch(`/api/admin/vendors/${VENDOR.vendorId}/commission`).set(H(tAdmin)).send({ type: 'CUT', value: 30 });
+      try {
+        const made = await request.post('/api/admin/catalog').set(H(tAdmin)).send({ vendorId: VENDOR.vendorId, name: 'Cut Dish', menuPrice: 115 });
+        expect(made.body.data).toMatchObject({ vendorPrice: 80.5, price: 115 });
+        const placed = await place(cur.token, { items: [{ itemId: made.body.data.id, quantity: 3 }] });
+        expect(placed.body.data).toMatchObject({ subtotal: 345, deliveryFee: 37, totalAmount: 382 });
+        const id = placed.body.data.id as string;
+        await pay(id);
+        await settle();
+        const CUT_LEAKY = [115, 34.5, 345, 103.5, 382, 37];
+        const checkSafe = (body: unknown, where: string, orderPayload = true) => {
+          if (orderPayload) assertVendorSafe(body, where);
+          const leaked = numbersIn(body).filter((n) => CUT_LEAKY.some((l) => Math.abs(l - n) < 1e-9));
+          if (leaked.length) throw new Error(`[${where}] restaurant payload carries ${leaked.join(', ')}: ${JSON.stringify(body).slice(0, 300)}`);
+          for (const k of ['menuPrice', 'nominalCommission', 'effectiveCommission', 'computedPrice', 'commissionType', 'commissionValue', 'commissionOverride']) {
+            if (keysIn(body).has(k)) throw new Error(`[${where}] restaurant payload has '${k}'`);
+          }
+        };
+        const detail = await request.get(`/api/orders/${id}`).set(H(tVendor));
+        expect(detail.body.data).toMatchObject({ subtotal: 241.5, totalAmount: 241.5 });
+        checkSafe(detail.body, 'GET /orders/:id');
+        for (const scope of ['', '?scope=active', '?scope=history']) checkSafe((await request.get(`/api/orders${scope}`).set(H(tVendor))).body, `GET /orders${scope}`);
+        for (const p of [`/api/vendors/${VENDOR.vendorId}/menu-manage`, `/api/menus/${VENDOR.vendorId}`, '/api/vendors', `/api/vendors/${VENDOR.vendorId}`]) {
+          const r = await request.get(p).set(H(tVendor));
+          expect([p, r.status]).toEqual([p, 200]);
+          checkSafe(r.body, p, false); // menu payloads: no customer price, cut or commission key (the fixed list of order fields does not apply)
+        }
+        const accepted = await status(id, 'ACCEPTED', tVendor);
+        expect(accepted.status).toBe(200);
+        checkSafe(accepted.body, 'PATCH status ACCEPTED');
+        // the restaurant cannot read the rule or set a menu order either
+        for (const [m, path, b] of [['patch', `/api/admin/vendors/${VENDOR.vendorId}/commission`, { type: 'CUT', value: 1 }], ['put', `/api/admin/vendors/${VENDOR.vendorId}/menu-order`, { sections: [] }], ['post', '/api/admin/catalog/preview', { vendorId: VENDOR.vendorId, menuPrice: 115 }], ['post', '/api/admin/catalog', { vendorId: VENDOR.vendorId, name: 'Mine', menuPrice: 115 }]] as const) {
+          const r = await (request as any)[m](path).set(H(tVendor)).send(b);
+          expect([m, path, r.status]).toEqual([m, path, 403]);
+        }
+        // admin still sees all of it
+        const admin = await request.get(`/api/orders/${id}`).set(H(tAdmin));
+        expect(admin.body.data).toMatchObject({ subtotal: 345, vendorSubtotal: 241.5, commissionTotal: 103.5 });
+      } finally {
+        await request.patch(`/api/admin/vendors/${VENDOR.vendorId}/commission`).set(H(tAdmin)).send({ type: null, value: null });
+      }
+    });
+
     test('ADMIN sees everything: customer money, restaurant part, commission, fee breakdown, coupon, per-item snapshots, over REST and sockets', async () => {
       const { id, aLog } = await drive();
       const admin = (await request.get(`/api/orders/${id}`).set(H(tAdmin))).body.data;

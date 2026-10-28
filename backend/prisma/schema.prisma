@@ -111,7 +111,7 @@ model Vendor {
   fssaiNumber       String?
   appliedAt         DateTime?
   reviewedAt        DateTime?
-  // Docs/21: this restaurant's default commission (PERCENT | FLAT). Both null = inherit the global default.
+  // Docs/21 + 26: this restaurant's default commission (PERCENT | FLAT | CUT). Both null = inherit the global default.
   commissionType    String?
   commissionValue   Float?
   createdAt         DateTime @default(now())
@@ -149,7 +149,7 @@ model MenuItem {
   // Pricing and catalog approval (Docs/21 sections 2-4). `price` = roundUp(vendorPrice + commission, step), recomputed on every change.
   // No default on vendorPrice on purpose: a writer that forgets it fails loudly instead of paying a restaurant Rs 0.
   vendorPrice        Float
-  // Dish-level commission override (PERCENT | FLAT). Both null = inherit the restaurant's, then the global default.
+  // Dish-level commission override (PERCENT | FLAT | CUT). Both null = inherit the restaurant's, then the global default.
   commissionType     String?
   commissionValue    Float?
   approvalStatus     MenuApprovalStatus @default(APPROVED)
@@ -163,11 +163,14 @@ model MenuItem {
   reviewedByUserId   String?
   createdBy          String             @default("VENDOR") // VENDOR | ADMIN
   updatedAt          DateTime           @default(now()) @updatedAt
+  // Docs/26: position in the restaurant's menu. Dishes are listed by sortOrder ASC, createdAt ASC, id ASC; 0 = unordered legacy row.
+  sortOrder          Int                @default(0)
 
   vendor      Vendor      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
   categoryRef Category?   @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   orderItems  OrderItem[]
 
+  @@index([vendorId, sortOrder])
   @@index([vendorId, approvalStatus, deletedAt])
   @@index([approvalStatus, deletedAt])
   @@index([categoryId])

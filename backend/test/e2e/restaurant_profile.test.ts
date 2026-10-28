@@ -339,7 +339,7 @@ describe('Restaurant categories and profile edit', () => {
         expect(mine.cuisines).toEqual([{ id: a.id, name: `${P} Pay1`, icon: 'restaurant' }, { id: b.id, name: `${P} Pay2`, icon: 'restaurant' }]);
         expect(mine.tags).toEqual([`${P} Pay1`, `${P} Pay2`]);
         expect(mine.category).toBe(`${P} Pay1 • ${P} Pay2`);
-        expect(Object.keys(mine.menuItems[0]).sort()).toEqual(['id', 'vendorId', 'name', 'price', 'category', 'categoryId', 'description', 'imageUrl', 'isAvailable', 'isVeg', 'rating', 'ratingCount'].sort());
+        expect(Object.keys(mine.menuItems[0]).sort()).toEqual(['id', 'vendorId', 'name', 'price', 'category', 'categoryId', 'description', 'imageUrl', 'isAvailable', 'isVeg', 'rating', 'ratingCount', 'sortOrder'].sort()); // Docs/26 added sortOrder (menu position)
         expect(mine.menuItems[0].price).toBe(110); // the customer price, as before
         const one = await (t ? request.get(`/api/vendors/${R}-1`).set(H(t)) : request.get(`/api/vendors/${R}-1`));
         expect(one.body.data.tags).toEqual(mine.tags);

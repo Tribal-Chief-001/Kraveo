@@ -11,6 +11,7 @@ import {
 } from '../services/catalog';
 import { getSettingGroup, getSettings, updateSettingGroup } from '../services/settings';
 import { bulkDishAction, importMenu } from '../services/catalogBulk';
+import { setMenuOrder } from '../services/menuOrder';
 import { menuImportJson } from '../middleware/bodyLimits';
 import { isSettingGroup, SETTING_GROUPS } from '../services/pricing';
 
@@ -117,6 +118,17 @@ catalogRouter.post('/admin/vendors/:id/menu-import', ...adminOnly, validParams('
     });
   } catch (err) {
     return fail(res, err, 'menu import');
+  }
+});
+
+// Docs/26 section 3: rewrites the menu positions of ONE restaurant in one transaction (sections first, then dishes inside a section).
+// Answers the ordered section list; the same body twice is changed:false.
+catalogRouter.put('/admin/vendors/:id/menu-order', ...adminOnly, validParams('id'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const out = await setMenuOrder(req.params.id, body(req), actorOf(req));
+    return res.json({ success: true, changed: out.changed, message: out.changed ? 'Menu order saved.' : 'Nothing to change: the menu already has this order.', count: out.sections.length, data: out.sections });
+  } catch (err) {
+    return fail(res, err, 'set menu order');
   }
 });
 

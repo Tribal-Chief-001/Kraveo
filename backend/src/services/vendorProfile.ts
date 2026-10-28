@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import { AppError } from '../utils/appError';
-import { CUISINES_INCLUDE, cuisineList } from '../utils/catalog';
+import { CUISINES_INCLUDE, LIVE_MENU_INCLUDE, cuisineList } from '../utils/catalog';
 import { writeAudit } from './audit';
 import { retryStaleRead } from '../utils/prismaRetry';
 import { checkCuisineIds, deriveVendorCategory, lockCuisines, writeVendorCuisines } from './categories';
@@ -50,7 +50,7 @@ const checkEta = (raw: unknown): string => {
   return raw as string;
 };
 
-const ADMIN_INCLUDE = { menuItems: { where: { deletedAt: null } }, ...CUISINES_INCLUDE } satisfies Prisma.VendorInclude;
+const ADMIN_INCLUDE = { ...LIVE_MENU_INCLUDE, ...CUISINES_INCLUDE } satisfies Prisma.VendorInclude;
 export const adminVendorRow = (id: string) => retryStaleRead(() => prisma.vendor.findUnique({ where: { id }, include: ADMIN_INCLUDE }));
 
 export const editVendorProfile = async (vendorId: string, b: Record<string, unknown>, actor: Actor) => {

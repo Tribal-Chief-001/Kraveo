@@ -11,7 +11,15 @@ export const MAX_MENU_PRICE = 10_000;
 export const isCustomerVisible = (m: { approvalStatus?: string | null; deletedAt?: Date | string | null }): boolean =>
   m.approvalStatus === 'APPROVED' && (m.deletedAt === null || m.deletedAt === undefined);
 
-/** What a customer needs to see of a menu item: nothing internal. `price` is the customer price. */
+/**
+ * Docs/26 section 3: the one order in which EVERY payload lists a restaurant's dishes (public, owner, admin). Legacy rows all have
+ * sortOrder 0, so they keep exactly the old order (oldest first); the id makes it total, so a response never reshuffles between calls.
+ */
+export const MENU_ORDER_BY = [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }, { id: 'asc' as const }];
+/** Prisma `include` fragment for a restaurant's non-deleted dishes in menu order. */
+export const LIVE_MENU_INCLUDE = { menuItems: { where: { deletedAt: null }, orderBy: MENU_ORDER_BY } };
+
+/** What a customer needs to see of a menu item: nothing internal. `price` is the customer price. `sortOrder` is the menu position (0 = unordered). */
 export const publicMenuItem = (m: any) => ({
   id: m.id,
   vendorId: m.vendorId,
@@ -25,6 +33,7 @@ export const publicMenuItem = (m: any) => ({
   isVeg: m.isVeg,
   rating: m.rating ?? null,
   ratingCount: m.ratingCount ?? null,
+  sortOrder: typeof m.sortOrder === 'number' ? m.sortOrder : 0,
 });
 
 /** Prisma `include` that loads a restaurant's categories (cuisines) in order: one extra query for a whole list, no N+1. */

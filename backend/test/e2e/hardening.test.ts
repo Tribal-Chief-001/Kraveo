@@ -845,7 +845,7 @@ describe('Backend hardening', () => {
       const [v1, v2] = W.vendors;
       await prisma.vendor.update({ where: { id: v1.vendorId }, data: { fssaiNumber: '12345678901234' } });
       const allowedVendor = ['id', 'name', 'category', 'rating', 'totalRatingsCount', 'eta', 'bannerImage', 'address', 'isAcceptingOrders', 'lat', 'lng', 'menuItems', 'cuisines', 'tags']; // Docs/23 added cuisines + tags
-      const allowedItem = ['id', 'vendorId', 'name', 'price', 'category', 'categoryId', 'description', 'imageUrl', 'isAvailable', 'isVeg', 'rating', 'ratingCount'];
+      const allowedItem = ['id', 'vendorId', 'name', 'price', 'category', 'categoryId', 'description', 'imageUrl', 'isAvailable', 'isVeg', 'rating', 'ratingCount', 'sortOrder']; // Docs/26: the menu position (0 = unordered) is part of the public dish shape;
       const ownerHeaders = bearer(v2.token);
       for (const headers of [{}, bearer(W.customers[0].token), ownerHeaders, bearer(W.riders[0].token)]) {
         const list = await request.get('/api/vendors').set(headers);

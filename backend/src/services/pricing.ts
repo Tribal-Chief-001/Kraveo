@@ -6,7 +6,8 @@
  * so no float is ever compared for equality and a Rs 0.01 error cannot creep into a total.
  *
  * Dish customer price = roundUp(vendorPrice + commission, step)
- *   commission: PERCENT = vendorPrice x value / 100, FLAT = value rupees
+ *   commission: PERCENT = vendorPrice x value / 100, FLAT = value rupees,
+ *               CUT (Docs/26) = `value` percent of the CUSTOMER price: price = vendorPrice x 100 / (100 - value), so Kraveo keeps value% of the sale
  *   resolution: the dish's own override, else the restaurant's default, else the global default (most specific wins)
  *   rounding:   UP to a multiple of `step` rupees (0 = no rounding, only up to the next paisa). The difference goes to Kraveo, so
  *               the EFFECTIVE commission is price - vendorPrice.
@@ -39,7 +40,9 @@ export const roundUpToStep = (paise: number, stepRupees: number): number => {
 // ---------------------------------------------------------------------------------------------------------------------
 // Settings shapes, defaults and limits
 // ---------------------------------------------------------------------------------------------------------------------
-export type CommissionType = 'PERCENT' | 'FLAT';
+export type CommissionType = 'PERCENT' | 'FLAT' | 'CUT';
+export const COMMISSION_TYPES: readonly CommissionType[] = ['PERCENT', 'FLAT', 'CUT'];
+export const isCommissionType = (t: unknown): t is CommissionType => t === 'PERCENT' || t === 'FLAT' || t === 'CUT';
 export type CommissionRule = { type: CommissionType; value: number };
 export type RuleSource = 'DISH' | 'VENDOR' | 'GLOBAL';
 
@@ -89,6 +92,8 @@ export const LIMITS = {
   maxThreshold: 10_000,
   maxPercent: 100,
   maxFlatCommission: 5_000,
+  /** Docs/26: a CUT of 100% would divide by zero (the customer price would be infinite); 90% is the ceiling. */
+  maxCutPercent: 90,
   maxFeeLines: 10,
   maxHoldDays: 30,
   roundingSteps: [0, 1, 2, 5, 10] as readonly number[],
@@ -103,15 +108,16 @@ export type Problem = { field: string; message: string };
 export type Checked<T> = { ok: true; value: T } | { ok: false; error: Problem };
 const bad = (field: string, message: string): { ok: false; error: Problem } => ({ ok: false, error: { field, message } });
 
-/** `type` and `value` as written by an admin: PERCENT 0-100 or FLAT 0-5000 rupees, at most 2 decimals. */
+/** `type` and `value` as written by an admin: PERCENT 0-100, FLAT 0-5000 rupees or CUT 0-90 (percent of the sale), at most 2 decimals. */
 export const checkCommissionRule = (type: unknown, value: unknown, fieldPrefix = ''): Checked<CommissionRule> => {
   const f = (name: string) => `${fieldPrefix}${name}`;
-  if (type !== 'PERCENT' && type !== 'FLAT') return bad(f('type'), 'Commission type must be PERCENT or FLAT.');
+  if (!isCommissionType(type)) return bad(f('type'), 'Commission type must be PERCENT, FLAT or CUT.');
   if (typeof value !== 'number' || !Number.isFinite(value)) return bad(f('value'), 'Commission value must be a number.');
   if (value < 0) return bad(f('value'), 'Commission cannot be negative.');
   if (!hasAtMostTwoDecimals(value)) return bad(f('value'), 'Commission can have at most 2 decimals.');
   if (type === 'PERCENT' && value > LIMITS.maxPercent) return bad(f('value'), `A percentage commission cannot be more than ${LIMITS.maxPercent}%.`);
   if (type === 'FLAT' && value > LIMITS.maxFlatCommission) return bad(f('value'), `A flat commission cannot be more than Rs ${LIMITS.maxFlatCommission}.`);
+  if (type === 'CUT' && value > LIMITS.maxCutPercent) return bad(f('value'), `A cut from the sale cannot be more than ${LIMITS.maxCutPercent}%.`);
   return { ok: true, value: { type, value } };
 };
 
@@ -120,7 +126,9 @@ export const checkCommissionRule = (type: unknown, value: unknown, fieldPrefix =
  * Exactly one set is a data error. Returns null for "inherit".
  */
 export const ruleFromColumns = (type: string | null | undefined, value: number | null | undefined): CommissionRule | null => {
-  if ((type !== 'PERCENT' && type !== 'FLAT') || typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  if (!isCommissionType(type) || typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  // A stored CUT above the ceiling (hand-edited data) would divide by zero or go negative: read it as "inherit", never crash a price.
+  if (type === 'CUT' && value > LIMITS.maxCutPercent) return null;
   return { type, value };
 };
 
@@ -135,11 +143,56 @@ export const resolveCommission = (
   return { rule: global, source: 'GLOBAL' };
 };
 
-/** Customer price in paise BEFORE the rounding step: vendor + commission, rounded up to the next paisa. Exact integer math. */
+/** Exact integer ceil(a / b) for non-negative integers (no float division, so no rounding surprise). */
+const ceilDivExact = (a: number, b: number): number => (a - (a % b)) / b + (a % b === 0 ? 0 : 1);
+
+/** CUT percent -> basis points of the CUSTOMER price Kraveo keeps (30 -> 3000, 12.5 -> 1250). Integer. */
+const cutBasisPoints = (value: number): number => toPaise(value);
+
+/**
+ * Customer price in paise BEFORE the rounding step: vendor + commission, rounded up to the next paisa. Exact integer math.
+ *   PERCENT  ceil(vendor x (10000 + bp) / 10000)
+ *   FLAT     vendor + value
+ *   CUT      ceil(vendor x 10000 / (10000 - bp)): Kraveo keeps bp/10000 of the price, the restaurant gets the rest (Docs/26 section 1)
+ */
 export const priceBeforeStepPaise = (vendorPaise: number, rule: CommissionRule): number => {
   if (rule.type === 'FLAT') return vendorPaise + toPaise(rule.value);
+  if (rule.type === 'CUT') return ceilDivExact(vendorPaise * 10_000, 10_000 - cutBasisPoints(rule.value));
   const hundredths = toPaise(rule.value); // 12.5% -> 1250 (percent in hundredths)
   return ceilDiv(vendorPaise * (10_000 + hundredths), 10_000);
+};
+
+/** The customer price (paise) a restaurant price gets under `rule` and the rounding step. */
+export const customerPaiseFor = (vendorPaise: number, rule: CommissionRule, stepRupees: number): number =>
+  roundUpToStep(priceBeforeStepPaise(vendorPaise, rule), stepRupees);
+
+/**
+ * CUT only (Docs/26 section 2): the restaurant price (paise) to store so that a dish sells for `menuPaise`.
+ * Returns the LARGEST vendorPaise whose customer price (before the step, and after rounding up to `stepRupees`) is <= menuPaise.
+ * The customer price never goes down when vendorPaise goes up, so that largest value also gives EXACTLY menuPaise whenever any value
+ * does. Rounding direction: the restaurant's share is rounded DOWN (floor), never up: Kraveo never overpays a restaurant by a paisa.
+ * `exact` says whether the dish will really sell at menuPaise; when it will not, `nearest` is the closest price it can sell at
+ * (a tie goes to the lower one) and `lower` / `higher` are the achievable prices on either side.
+ * A result with vendorPaise <= 0 means the menu price is too small for this rule and rounding step (`exact` false).
+ */
+export const vendorPaiseForMenuPrice = (
+  menuPaise: number,
+  rule: CommissionRule,
+  stepRupees = 0,
+): { vendorPaise: number; exact: boolean; lower: number; higher: number; nearest: number } => {
+  if (rule.type !== 'CUT') throw new RangeError('vendorPaiseForMenuPrice is only defined for a CUT rule.');
+  const keep = 10_000 - cutBasisPoints(rule.value);
+  const stepP = stepRupees > 0 ? toPaise(stepRupees) : 0;
+  // Largest price before the step that still rounds to <= menuPaise (the largest multiple of the step at or below it).
+  const ceiling = stepP > 0 ? menuPaise - (menuPaise % stepP) : menuPaise;
+  const scaled = Math.max(0, ceiling) * keep;
+  const vendorPaise = (scaled - (scaled % 10_000)) / 10_000;
+  const at = (v: number) => customerPaiseFor(v, rule, stepRupees);
+  const lower = vendorPaise > 0 ? at(vendorPaise) : 0;
+  const higher = at(vendorPaise + 1);
+  const exact = vendorPaise > 0 && lower === menuPaise;
+  const nearest = exact ? menuPaise : lower === 0 || menuPaise - lower > higher - menuPaise ? higher : lower;
+  return { vendorPaise, exact, lower, higher, nearest };
 };
 
 export type DishPrice = {

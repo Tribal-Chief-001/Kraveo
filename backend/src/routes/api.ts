@@ -12,7 +12,7 @@ import { errSummary } from '../utils/log';
 import { NAME_RE } from '../utils/names';
 import { startOfIstDay, istHour } from '../utils/time';
 import { dropFromPartnerRooms } from '../realtime';
-import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem, vendorMenuItemView, isCustomerVisible, CUISINES_INCLUDE, withCuisines, cuisineFields } from '../utils/catalog';
+import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem, vendorMenuItemView, isCustomerVisible, CUISINES_INCLUDE, withCuisines, cuisineFields, LIVE_MENU_INCLUDE, MENU_ORDER_BY } from '../utils/catalog';
 import { catalogRouter } from './catalog';
 import { retryStaleRead } from '../utils/prismaRetry';
 import { categoriesRouter } from './categories';
@@ -619,7 +619,7 @@ export const fullVendorView = (v: any, viewer: { id: string; role: Role } | null
 apiRouter.get('/vendors', async (req: Request, res: Response) => {
   try {
     const viewer = await optionalViewer(req);
-    const dbVendors = await retryStaleRead(() => prisma.vendor.findMany({ include: { menuItems: { where: { deletedAt: null } }, ...CUISINES_INCLUDE } }));
+    const dbVendors = await retryStaleRead(() => prisma.vendor.findMany({ include: { ...LIVE_MENU_INCLUDE, ...CUISINES_INCLUDE } }));
     const visible = dbVendors.filter((v) => canSeeVendor(v, viewer)).map((v) => fullVendorView(v, viewer) ?? publicVendorView(v));
     return res.json({ success: true, count: visible.length, data: visible });
   } catch (err: any) {
@@ -631,7 +631,7 @@ apiRouter.get('/vendors/:id', validParams('id'), async (req: Request, res: Respo
   try {
     const dbVendor = await retryStaleRead(() => prisma.vendor.findUnique({
       where: { id: req.params.id },
-      include: { menuItems: { where: { deletedAt: null } }, ...CUISINES_INCLUDE }
+      include: { ...LIVE_MENU_INCLUDE, ...CUISINES_INCLUDE }
     }));
     const viewer = await optionalViewer(req);
     if (!dbVendor || !canSeeVendor(dbVendor, viewer)) return res.status(404).json({ success: false, message: 'Vendor not found' });
@@ -679,7 +679,7 @@ apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: Authen
         },
       });
       await linkNewVendorCuisines(tx, row.id, prep.cuisines);
-      return retryStaleRead(() => tx.vendor.findUniqueOrThrow({ where: { id: row.id }, include: { menuItems: true, ...CUISINES_INCLUDE } }));
+      return retryStaleRead(() => tx.vendor.findUniqueOrThrow({ where: { id: row.id }, include: { menuItems: { orderBy: MENU_ORDER_BY }, ...CUISINES_INCLUDE } }));
     });
 
     return res.status(201).json({ success: true, message: 'Vendor onboarded successfully', data: withCuisines(createdVendor) });
@@ -794,7 +794,7 @@ apiRouter.get('/menus/:vendorId', validParams('vendorId'), async (req: Request, 
     const owner = await prisma.vendor.findUnique({ where: { id: req.params.vendorId }, select: { approvalStatus: true, userId: true } });
     const viewer = await optionalViewer(req);
     if (!owner || !canSeeVendor(owner, viewer)) return res.json({ success: true, count: 0, data: [] });
-    const dbItems = await prisma.menuItem.findMany({ where: { vendorId: req.params.vendorId, deletedAt: null } });
+    const dbItems = await prisma.menuItem.findMany({ where: { vendorId: req.params.vendorId, deletedAt: null }, orderBy: MENU_ORDER_BY });
     // Customers: approved dishes only. The owning restaurant: its own price + status (pending and rejected included). Admin: everything not deleted.
     let data: unknown[];
     if (viewer?.role === Role.ADMIN) data = dbItems;

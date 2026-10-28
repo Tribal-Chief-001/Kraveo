@@ -352,9 +352,10 @@ describe('Dish categories, bulk actions and menu import', () => {
         expect(r.status).toBe(200);
         expect(r.body.data).toMatchObject({ dryRun: true, applied: false, summary: { create: 2, update: 0, skip: 0, invalid: 1, total: 3 } });
         expect(r.body.data.rows).toEqual([
-          { index: 0, name: 'Paneer Tikka', action: 'create', errors: [], computedPrice: 115 }, // 101 + 10% = 111.1 -> rounded UP to a multiple of 5
-          { index: 1, name: 'Dal Fry', action: 'create', errors: [], computedPrice: 90 }, // 80 + 8 = 88 -> 90
-          { index: 2, name: 'Bad Category', action: 'invalid', errors: [{ field: 'category', message: 'Pick a category from the list.' }], computedPrice: 110 },
+          // Docs/26 added `vendorPrice` (the restaurant's price the row resolves to) and `sortOrder` (the menu position the row writes) to every row.
+          { index: 0, name: 'Paneer Tikka', action: 'create', errors: [], computedPrice: 115, vendorPrice: 101, sortOrder: 10 }, // 101 + 10% = 111.1 -> rounded UP to a multiple of 5
+          { index: 1, name: 'Dal Fry', action: 'create', errors: [], computedPrice: 90, vendorPrice: 80, sortOrder: 20 }, // 80 + 8 = 88 -> 90
+          { index: 2, name: 'Bad Category', action: 'invalid', errors: [{ field: 'category', message: 'Pick a category from the list.' }], computedPrice: 110, vendorPrice: 100, sortOrder: null },
         ]);
       }
       expect(await prisma.menuItem.count({ where: { vendorId: V1 } })).toBe(0);

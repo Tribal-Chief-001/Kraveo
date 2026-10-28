@@ -124,6 +124,8 @@ const RULES: Rule[] = [
   { name: 'ADMIN_VENDOR_PROFILE_WRITE', scope: 'user', max: 120, windowMs: 10 * MIN, applies: (r, p) => r.method === 'PATCH' && /^\/admin\/vendors\/[^/]+\/profile$/.test(p), message: 'Too many restaurant edits. Please wait a few minutes.' },
   { name: 'ADMIN_CATALOG_BULK', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/catalog/bulk', message: 'Too many bulk changes. Please wait a few minutes.' },
   { name: 'ADMIN_MENU_IMPORT', scope: 'user', max: 30, windowMs: 10 * MIN, applies: (r, p) => r.method === 'POST' && /^\/admin\/vendors\/[^/]+\/menu-import$/.test(p), message: 'Too many menu imports. Please wait a few minutes.' },
+  // Docs/26: the menu order of a restaurant (one request rewrites every dish position of it).
+  { name: 'ADMIN_MENU_ORDER', scope: 'user', max: 60, windowMs: 10 * MIN, applies: (r, p) => r.method === 'PUT' && /^\/admin\/vendors\/[^/]+\/menu-order$/.test(p), message: 'Too many menu order changes. Please wait a few minutes.' },
   { name: 'ADMIN_UPLOAD', scope: 'user', max: 60, windowMs: 60 * MIN, applies: (r, p) => r.method === 'POST' && p === '/admin/uploads/image', message: 'Too many image uploads. Please try again in an hour.' },
   // Docs/23: a pending or rejected restaurant re-sending its application may create restaurant categories from its text: a few times an hour.
   { name: 'PARTNER_APPLICATION_WRITE', scope: 'user', max: 10, windowMs: 60 * MIN, applies: (r, p) => r.method === 'PUT' && p === '/partner/application', message: 'You changed the application too many times. Please try again in an hour.' },
