@@ -122,12 +122,17 @@ class _DhabaMenuScreenState extends State<DhabaMenuScreen> {
     final List<MenuItemModel> allItems = dhabaProvider.getMenuItemsForDhaba(dhaba.id);
     final open = dhaba.isAcceptingOrders;
 
-    // Unique categories from menu items
-    final categories = ['All', ...dhabaProvider.orderDishCategories(allItems.map((i) => i.category).toSet())];
+    // The restaurant's own order (Docs/26) when any dish has one; otherwise the global category order.
+    final menuOrder = hasMenuOrder(allItems);
+    final shownItems = menuOrdered(allItems);
+    final categories = [
+      'All',
+      ...(menuOrder ? menuOrderedCategories(shownItems) : dhabaProvider.orderDishCategories(allItems.map((i) => i.category).toSet())),
+    ];
     final selectedCategory = categories.contains(_selectedCategory) ? _selectedCategory : 'All';
 
-    final filteredItems = allItems.where((item) {
-      if (selectedCategory != 'All' && item.category != selectedCategory) return false;
+    final filteredItems = shownItems.where((item) {
+      if (selectedCategory != 'All' && !(menuOrder ? menuCategoryKey(item.category) == menuCategoryKey(selectedCategory) : item.category == selectedCategory)) return false;
       if (_searchQuery.trim().isNotEmpty) {
         final query = _searchQuery.trim().toLowerCase();
         return item.name.toLowerCase().contains(query) || item.description.toLowerCase().contains(query);
