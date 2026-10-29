@@ -8,7 +8,13 @@ export const MAX_IMPORT_ROWS = 200;
 export const MAX_IMPORT_FILE_BYTES = 400 * 1024;
 
 export const TEMPLATE_HEADERS = ['name', 'category', 'vendorPrice', 'isVeg', 'description', 'imageUrl', 'isAvailable'] as const;
-export type ImportField = (typeof TEMPLATE_HEADERS)[number];
+/** Docs/26: for a restaurant on "cut from sale" the file carries the price the CUSTOMER pays, and may say where each dish goes on the menu. */
+export const MENU_PRICE_TEMPLATE_HEADERS = ['name', 'category', 'menuPrice', 'position', 'isVeg', 'description', 'imageUrl', 'isAvailable'] as const;
+export type ImportField = (typeof TEMPLATE_HEADERS)[number] | (typeof MENU_PRICE_TEMPLATE_HEADERS)[number];
+/** The server takes whole positions 1..10000 (backend services/menuOrder.ts MAX_POSITION). */
+export const MAX_IMPORT_POSITION = 10_000;
+/** Which price the file's price column holds (the wizard asks for restaurants on "cut from sale"). */
+export type PricesAre = 'vendor' | 'menu';
 
 export type Delimiter = ',' | ';' | '\t';
 
@@ -17,6 +23,10 @@ export interface ImportRowInput {
   name: string;
   category: string;
   vendorPrice?: number | string;
+  /** Docs/26: the price the customer pays; instead of `vendorPrice`, never both. */
+  menuPrice?: number | string;
+  /** Docs/26: place on the menu, 1-based. */
+  position?: number | string;
   isVeg?: boolean | string;
   description?: string;
   imageUrl?: string;
@@ -127,6 +137,8 @@ const ALIASES: Record<ImportField, string[]> = {
   vendorPrice: ['vendorprice', 'price', 'rate', 'cost', 'amount', 'restaurantprice', 'priceinr', 'pricers', 'baseprice'],
   isVeg: ['isveg', 'veg', 'vegetarian', 'vegnonveg', 'vegornonveg', 'foodtype', 'diet'],
   description: ['description', 'desc', 'details', 'about'],
+  menuPrice: ['menuprice', 'customerprice', 'pricecustomer', 'pricecustomerpays', 'customerpays', 'pricemenu', 'sellingprice', 'saleprice', 'mrp', 'pricepaidbycustomer'],
+  position: ['position', 'pos', 'order', 'sortorder', 'menuorder', 'sequence', 'serial', 'srno'],
   imageUrl: ['imageurl', 'image', 'photo', 'picture', 'img', 'photourl', 'imagelink', 'photolink', 'pic'],
   isAvailable: ['isavailable', 'available', 'availability', 'instock', 'stock'],
 };
@@ -164,6 +176,14 @@ export const parsePriceCell = (raw: string): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
+/** "3", " 12 " -> 3, 12 when it is a whole number from 1 to 10000; anything else -> null. */
+export const parsePositionCell = (raw: string): number | null => {
+  const v = raw.trim();
+  if (!/^\d{1,5}$/.test(v)) return null;
+  const n = Number(v);
+  return n >= 1 && n <= MAX_IMPORT_POSITION ? n : null;
+};
+
 const collapse = (value: string): string => value.trim().replace(/\s+/g, ' ');
 
 // ───────────────────────────── the whole file ─────────────────────────────
@@ -174,7 +194,7 @@ export const tooManyRowsMessage = (count: number): string =>
   `This file has ${plural(count, 'dish', 'dishes')}, but at most ${MAX_IMPORT_ROWS} can be imported at a time. Split the file into parts of ${MAX_IMPORT_ROWS} or fewer and import them one after another.`;
 
 /** Reads CSV / pasted spreadsheet text into import rows. Never throws. */
-export const parseMenuCsv = (input: string): MenuCsvResult => {
+export const parseMenuCsv = (input: string, opts: { pricesAre?: PricesAre } = {}): MenuCsvResult => {
   const delimiter = detectDelimiter(input);
   const empty = (problem: string): MenuCsvResult => ({ delimiter, rows: [], ignoredColumns: [], fileProblems: [problem] });
   if (typeof input !== 'string' || input.trim() === '') return empty('The file is empty. Add one dish per line under the header row.');
@@ -186,7 +206,11 @@ export const parseMenuCsv = (input: string): MenuCsvResult => {
   if (unterminatedQuote) fileProblems.push('A quoted value is never closed (a " is missing). Fix it and choose the file again.');
 
   const header = records[0];
-  const columns: Array<ImportField | null> = header.map((cell) => fieldForHeader(cell));
+  // Restaurant on "cut from sale": a plain "Price" column holds what the customer pays. Names that clearly say "restaurant price" stay vendor prices.
+  const columns: Array<ImportField | null> = header.map((cell) => {
+    const field = fieldForHeader(cell);
+    return field === 'vendorPrice' && opts.pricesAre === 'menu' && !['vendorprice', 'restaurantprice'].includes(normalHeader(cell)) ? 'menuPrice' : field;
+  });
   const ignoredColumns = header.filter((cell, i) => columns[i] === null && cell.trim() !== '').map((cell) => cell.trim());
   const seen = new Set<ImportField>();
   const duplicates = new Set<string>();
@@ -196,10 +220,10 @@ export const parseMenuCsv = (input: string): MenuCsvResult => {
   });
   if (duplicates.size > 0) fileProblems.push(`The header has the same column twice (${Array.from(duplicates).join(', ')}). Keep one of each.`);
 
-  const missing = (['name', 'category', 'vendorPrice'] as ImportField[]).filter((field) => !seen.has(field));
+  const missing = (['name', 'category', 'vendorPrice'] as ImportField[]).filter((field) => !seen.has(field) && !(field === 'vendorPrice' && seen.has('menuPrice')));
   if (missing.length > 0) {
     const label: Record<string, string> = { name: 'name', category: 'category', vendorPrice: 'price (vendorPrice)' };
-    fileProblems.push(`The first line must name the columns. Missing: ${missing.map((m) => label[m]).join(', ')}. Download the template to see the expected header.`);
+    fileProblems.push(`The first line must name the columns. Missing: ${missing.map((m) => label[m]).join(', ')}. Download the template to see the expected header.${missing.includes('vendorPrice') ? ' For a restaurant on "Cut from sale" a menuPrice column (what the customer pays) can be used instead of vendorPrice.' : ''}`);
   }
 
   const dataRecords = records.slice(1);
@@ -223,6 +247,14 @@ export const parseMenuCsv = (input: string): MenuCsvResult => {
         const price = parsePriceCell(raw);
         if (price === null) issues.push({ field, message: `“${raw}” is not a price. Use a number such as 120 or 120.50.` });
         input.vendorPrice = price ?? raw;
+      } else if (field === 'menuPrice') {
+        const price = parsePriceCell(raw);
+        if (price === null) issues.push({ field, message: `“${raw}” is not a menu price. Use a number such as 115 or 115.50.` });
+        input.menuPrice = price ?? raw;
+      } else if (field === 'position') {
+        const place = parsePositionCell(raw);
+        if (place === null) issues.push({ field, message: `“${raw}” is not a position. Use a whole number from 1 to ${MAX_IMPORT_POSITION.toLocaleString('en-IN')}, or leave it empty.` });
+        input.position = place ?? raw;
       } else if (field === 'isVeg') {
         const v = parseVegValue(raw);
         if (v === null) issues.push({ field, message: `“${raw}” is not clear. Write veg or non-veg (yes / no also work).` });
@@ -245,13 +277,20 @@ export const parseMenuCsv = (input: string): MenuCsvResult => {
 const quoteCell = (value: string): string => (/[",\r\n]/.test(value) || value !== value.trim() ? `"${value.replace(/"/g, '""')}"` : value);
 
 /** Header + two sample lines. The wizard tells the admin to replace the samples. */
-export const menuTemplateCsv = (): string => {
-  const lines: string[][] = [
-    [...TEMPLATE_HEADERS],
-    ['Sample Paneer Roll', 'Rolls', '120', 'veg', 'Replace or delete this sample line', '', 'yes'],
-    ['Sample Chicken Roll', 'Rolls', '140', 'non-veg', '', '', 'yes'],
-  ];
+export const menuTemplateCsv = (kind: 'vendor' | 'menu' = 'vendor'): string => {
+  const lines: string[][] = kind === 'menu'
+    ? [
+      [...MENU_PRICE_TEMPLATE_HEADERS],
+      ['Sample Paneer Roll', 'Rolls', '115', '1', 'veg', 'Replace or delete this sample line', '', 'yes'],
+      ['Sample Chicken Roll', 'Rolls', '140', '2', 'non-veg', '', '', 'yes'],
+    ]
+    : [
+      [...TEMPLATE_HEADERS],
+      ['Sample Paneer Roll', 'Rolls', '120', 'veg', 'Replace or delete this sample line', '', 'yes'],
+      ['Sample Chicken Roll', 'Rolls', '140', 'non-veg', '', '', 'yes'],
+    ];
   return `${lines.map((line) => line.map(quoteCell).join(',')).join('\r\n')}\r\n`;
 };
 
 export const TEMPLATE_FILENAME = 'kraveo-menu-template.csv';
+export const MENU_PRICE_TEMPLATE_FILENAME = 'kraveo-menu-template-customer-price.csv';

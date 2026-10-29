@@ -136,7 +136,7 @@ export interface Vendor {
    * The restaurant's own commission (Docs/21). `undefined` = the server did not send the field (unknown),
    * `null` = the restaurant inherits the global default.
    */
-  commissionType?: 'PERCENT' | 'FLAT' | null;
+  commissionType?: 'PERCENT' | 'FLAT' | 'CUT' | null;
   commissionValue?: number | null;
 }
 
@@ -428,8 +428,8 @@ export const normalizeVendor = (raw: any): Vendor => ({
   ...(Array.isArray(raw?.cuisines) ? { cuisines: raw.cuisines.map(normalizeCuisine).filter((c: VendorCuisine | null): c is VendorCuisine => c !== null) } : {}),
   ...(raw && typeof raw === 'object' && 'commissionType' in raw
     ? {
-      commissionType: raw.commissionType === 'PERCENT' || raw.commissionType === 'FLAT' ? raw.commissionType : null,
-      commissionValue: raw.commissionType === 'PERCENT' || raw.commissionType === 'FLAT' ? asNumber(raw.commissionValue, 0) : null,
+      commissionType: raw.commissionType === 'PERCENT' || raw.commissionType === 'FLAT' || raw.commissionType === 'CUT' ? raw.commissionType : null,
+      commissionValue: raw.commissionType === 'PERCENT' || raw.commissionType === 'FLAT' || raw.commissionType === 'CUT' ? asNumber(raw.commissionValue, 0) : null,
     }
     : {}),
 });

@@ -6,7 +6,9 @@ import { Category, dishChoices, slugOf } from '../lib/categoryParse';
 import type { CategoriesState } from '../lib/useCategories';
 import type { ImageEnv } from '../lib/imageCompress';
 import { CatalogDish } from '../lib/catalogParse';
-import { CommissionType, MAX_DISH_PRICE, amountText, commissionLabel, isHttpUrl, parseCommissionValue, parseVendorPrice, rupees, toPaise } from '../lib/pricing';
+import { CommissionType, MAX_DISH_PRICE, MAX_MENU_PRICE, amountText, commissionLabel, isHttpUrl, parseCommissionValue, parseMenuPrice, parseVendorPrice, rupees, toPaise } from '../lib/pricing';
+import { MENU_PRICE_CODES, PriceFieldError, priceFieldError, priceFieldErrorOf } from '../lib/priceErrors';
+import { useGlobalCommission } from '../lib/useGlobalCommission';
 import { PreviewState, usePricePreview } from '../lib/usePricePreview';
 import { Drawer } from './ui/Drawer';
 import { Field } from './ui/Field';
@@ -15,6 +17,7 @@ import { useToast } from './ui/Toast';
 import { useConfirm } from './ui/ConfirmDialog';
 import { StateBadge } from './CatalogStateBadge';
 import { CategoryForm } from './CategoryForm';
+import { CutExplain } from './CutExplain';
 import { ImageUploadField } from './ImageUploadField';
 
 const SOURCE_LABEL = { DISH: 'this dish', VENDOR: 'this restaurant', GLOBAL: 'default' } as const;
@@ -52,6 +55,8 @@ interface FormState {
   isVeg: boolean;
   isAvailable: boolean;
   vendorPrice: string;
+  /** Docs/26: what the customer pays, for a dish on a "cut from sale" rule. Empty until the dish is on such a rule. */
+  menuPrice: string;
   mode: CommissionMode;
   commissionValue: string;
 }
@@ -65,6 +70,7 @@ const formFrom = (item: CatalogDish | null): FormState => ({
   isVeg: item?.isVeg ?? true,
   isAvailable: item?.isAvailable ?? true,
   vendorPrice: amountText(item?.vendorPrice),
+  menuPrice: item?.commission?.type === 'CUT' ? amountText(item.price) : '',
   mode: item?.commissionOverride?.type ?? 'INHERIT',
   commissionValue: item?.commissionOverride ? amountText(item.commissionOverride.value) : '',
 });
@@ -80,19 +86,23 @@ const suggestionText = (error: unknown): string => {
   return list.length > 0 ? ` Did you mean ${list.slice(0, 3).join(' or ')}?` : '';
 };
 
-const PreviewCard: React.FC<{ state: PreviewState; vendorPrice: number | null; title: string }> = ({ state, vendorPrice, title }) => {
+const PreviewCard: React.FC<{ state: PreviewState; vendorPrice: number | null; title: string; menuEntry?: boolean }> = ({ state, vendorPrice, title, menuEntry = false }) => {
   const shown = state.status === 'ready' ? state.preview : state.status === 'loading' ? state.last : null;
+  // A menu-price preview carries the restaurant's share the server worked out; otherwise it is the typed restaurant price.
+  const restaurantGets = shown && shown.vendorPrice !== undefined ? shown.vendorPrice : vendorPrice;
+  const priceProblem = state.status === 'error' && state.code && (MENU_PRICE_CODES as readonly string[]).includes(state.code);
   return (
     <div className="k-inset space-y-2 p-4" aria-live="polite" data-testid="price-preview">
       <p className="k-label">{title}</p>
-      {state.status === 'idle' && <p className="text-sm text-kraveo-ink3">Enter a valid restaurant price to see what the customer pays.</p>}
-      {state.status === 'error' && <p role="alert" className="text-sm font-semibold text-kraveo-danger">{state.message}</p>}
+      {state.status === 'idle' && <p className="text-sm text-kraveo-ink3">{menuEntry ? 'Enter a valid menu price to see what the restaurant gets.' : 'Enter a valid restaurant price to see what the customer pays.'}</p>}
+      {state.status === 'error' && !priceProblem && <p role="alert" className="text-sm font-semibold text-kraveo-danger">{state.message}</p>}
+      {priceProblem && <p className="text-sm text-kraveo-ink3">This price cannot be used yet. See the message under the price field.</p>}
       {(state.status === 'loading' || state.status === 'ready') && (
         <>
           <div className={`flex flex-wrap items-baseline gap-x-6 gap-y-1 ${state.status === 'loading' ? 'opacity-60' : ''}`}>
             <p><span className="k-num text-2xl text-kraveo-ink" data-testid="preview-price">{shown ? rupees(shown.price) : '…'}</span> <span className="text-xs text-kraveo-ink3">customer pays</span></p>
             <p className="text-sm text-kraveo-ink2"><b className="tabular-nums text-kraveo-g300" data-testid="preview-commission">{shown ? rupees(shown.commission) : '…'}</b> Kraveo commission</p>
-            <p className="text-sm text-kraveo-ink2"><b className="tabular-nums text-kraveo-ink">{rupees(vendorPrice)}</b> to the restaurant</p>
+            <p className="text-sm text-kraveo-ink2"><b className="tabular-nums text-kraveo-ink" data-testid="preview-restaurant">{rupees(restaurantGets)}</b> {menuEntry ? 'the restaurant gets' : 'to the restaurant'}</p>
           </div>
           {shown?.rule && <p className="text-xs text-kraveo-ink3" data-testid="preview-rule">Rule: {commissionLabel(shown.rule.type, shown.rule.value)} ({SOURCE_LABEL[shown.rule.source]}){shown.roundingStep ? `, price rounded up to a multiple of ₹${shown.roundingStep}` : ''}{shown.nominalCommission !== null && toPaise(shown.nominalCommission) !== toPaise(shown.commission) ? `; rounding adds ${rupees(shown.commission - shown.nominalCommission)}` : ''}.</p>}
           {state.status === 'loading' && <p className="flex items-center gap-1.5 text-xs text-kraveo-ink3"><Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />Calculating…</p>}
@@ -123,7 +133,7 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
 
   const deleted = item?.state === 'DELETED';
   const baseline = useMemo(() => formFrom(item), [item]);
-  const set = <K extends keyof FormState>(key: K, value: FormState[K]) => { setForm((current) => ({ ...current, [key]: value })); setError(''); };
+  const set = <K extends keyof FormState>(key: K, value: FormState[K]) => { setForm((current) => ({ ...current, [key]: value })); setError(''); setPriceProblem(null); };
 
   // Managed categories (Docs/23): a select of the active dish categories. Without the list (older server, request failed) the old free-text field stays.
   const managed = categoryState !== undefined && !categoryState.error;
@@ -132,8 +142,23 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
   const currentIsExtra = managed && form.category.trim() !== '' && !matched;
 
   // ── validation ──
-  const price = parseVendorPrice(form.vendorPrice);
   const commission = form.mode === 'INHERIT' ? null : parseCommissionValue(form.mode, form.commissionValue);
+
+  // Docs/26: which rule applies to this dish decides whether the price box takes the restaurant's price or the menu price.
+  // Order: the rule picked here, the dish's saved effective rule, the restaurant's own rule, then the default (Settings).
+  const effectiveVendorId = creating ? form.vendorId : item.vendorId;
+  const vendorRule = vendors.find((v) => v.id === effectiveVendorId)?.commissionType;
+  const itemRule = form.mode === 'INHERIT' && item && !item.commissionOverride ? item.commission?.type ?? null : null;
+  const globalRule = useGlobalCommission(form.mode === 'INHERIT' && itemRule === null && vendorRule === null && effectiveVendorId !== '');
+  const effectiveType: CommissionType | null = form.mode !== 'INHERIT' ? form.mode : itemRule ?? (vendorRule || (vendorRule === null ? globalRule?.type ?? null : null));
+  const canApprove = item !== null && (item.state === 'PENDING' || item.state === 'REJECTED');
+  // A dish waiting for approval keeps the restaurant's own price (approval never takes a menu price).
+  const menuEntry = effectiveType === 'CUT' && !canApprove;
+  const price = menuEntry ? parseMenuPrice(form.menuPrice) : parseVendorPrice(form.vendorPrice);
+  const priceDirtyNow = menuEntry ? form.menuPrice !== baseline.menuPrice : form.vendorPrice !== baseline.vendorPrice;
+  // Changing only the commission of a saved dish needs no new price: an empty menu price box then means "keep the restaurant price".
+  const priceOptional = menuEntry && !creating && !priceDirtyNow;
+  const [priceProblem, setPriceProblem] = useState<PriceFieldError | null>(null);
   const errors = {
     vendorId: creating && !form.vendorId ? 'Choose the restaurant this dish belongs to.' : '',
     name: form.name.trim().length < 2 ? 'Enter the dish name (at least 2 letters).' : form.name.trim().length > 80 ? 'Keep the name under 80 letters.' : '',
@@ -143,22 +168,25 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
     imageUrl: form.imageUrl.trim() && !isHttpUrl(form.imageUrl) ? 'Enter a full web address starting with https://'
       : !creating && !form.imageUrl.trim() && baseline.imageUrl.trim() ? 'A dish needs a photo. Enter a new address instead of leaving it empty.' : '',
     description: form.description.length > 300 ? 'Keep the description under 300 letters.' : '',
-    vendorPrice: price.ok ? '' : price.message,
+    vendorPrice: price.ok || priceOptional ? '' : price.message,
     commission: commission && !commission.ok ? commission.message : '',
   };
   const valid = Object.values(errors).every((message) => message === '');
   const show = (message: string) => (touched ? message : '');
 
   const dirty = useMemo(() => (Object.keys(baseline) as Array<keyof FormState>).filter((key) => form[key] !== baseline[key]), [form, baseline]);
-  const dirtyOther = dirty.filter((key) => key !== 'mode' && key !== 'commissionValue' && key !== 'vendorPrice' && key !== 'vendorId');
+  const dirtyOther = dirty.filter((key) => key !== 'mode' && key !== 'commissionValue' && key !== 'vendorPrice' && key !== 'menuPrice' && key !== 'vendorId');
   const commissionDirty = dirty.includes('mode') || dirty.includes('commissionValue');
-  const priceDirty = dirty.includes('vendorPrice');
+  const priceDirty = menuEntry ? dirty.includes('menuPrice') : dirty.includes('vendorPrice');
 
   // ── live preview (asked of the server; never computed here) ──
-  const effectiveVendorId = creating ? form.vendorId : item.vendorId;
   const commissionInput = commission && commission.ok && form.mode !== 'INHERIT' ? { type: form.mode, value: commission.value } : null;
   const commissionInvalid = form.mode !== 'INHERIT' && !(commission && commission.ok);
-  const preview = usePricePreview({ vendorId: effectiveVendorId, vendorPrice: price.ok ? price.value : null, commission: commissionInput, commissionInvalid });
+  // Menu entry asks the server for the restaurant's share of the typed menu price; a saved dish with an untouched box previews its restaurant price under the (new) rule.
+  const askMenu = menuEntry && price.ok && (creating || priceDirtyNow);
+  const previewVendorPrice = askMenu ? null : menuEntry ? (priceOptional ? item?.vendorPrice ?? null : null) : price.ok ? price.value : null;
+  const preview = usePricePreview({ vendorId: effectiveVendorId, vendorPrice: previewVendorPrice, menuPrice: askMenu ? (price as { ok: true; value: number }).value : null, commission: commissionInput, commissionInvalid });
+  const previewProblem = preview.status === 'error' && preview.code && menuEntry ? priceFieldError(preview.code, preview.message, 'menuPrice', { nearestPrice: preview.nearestPrice }) : null;
   const pendingPrice = item?.pendingVendorPrice ?? null;
   const pendingPreview = usePricePreview({ vendorId: effectiveVendorId, vendorPrice: pendingPrice, commission: commissionInput, commissionInvalid });
 
@@ -175,7 +203,8 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
       onClose();
     } catch (failure) {
       onAuthError(failure);
-      setError(plain(failure) + suggestionText(failure));
+      const asPrice = priceFieldErrorOf(failure);
+      if (asPrice) { setPriceProblem(asPrice); setError('The price needs fixing: see the message under the price field.'); } else setError(plain(failure) + suggestionText(failure));
       // The category was hidden or deleted meanwhile: refresh the list so the select matches the server.
       if (failure instanceof ApiError && failure.code === 'CATEGORY_UNKNOWN') categoryState?.reload();
     } finally {
@@ -200,7 +229,7 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
   /** Everything that changed, for PATCH. A commission cleared back to "inherit" is sent as nulls. */
   const patchBody = (): DishWrite => {
     const changes = otherChanges();
-    if (priceDirty && price.ok) changes.vendorPrice = price.value;
+    if (priceDirty && price.ok) { if (menuEntry) changes.menuPrice = price.value; else changes.vendorPrice = price.value; }
     if (commissionDirty) {
       if (form.mode === 'INHERIT') { changes.commissionType = null; changes.commissionValue = null; }
       else if (commissionInput) { changes.commissionType = commissionInput.type; changes.commissionValue = commissionInput.value; }
@@ -223,8 +252,8 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
 
   const onCreate = () => {
     if (submitBlocked() || !price.ok) return;
-    const body: DishWrite & { vendorId: string; name: string; vendorPrice: number } = {
-      vendorId: form.vendorId, name: form.name.trim(), ...(matched ? { categoryId: matched.id } : { category: form.category.trim() }), isVeg: form.isVeg, isAvailable: form.isAvailable, vendorPrice: price.value,
+    const body: DishWrite & { vendorId: string; name: string } & ({ vendorPrice: number } | { menuPrice: number }) = {
+      vendorId: form.vendorId, name: form.name.trim(), ...(matched ? { categoryId: matched.id } : { category: form.category.trim() }), isVeg: form.isVeg, isAvailable: form.isAvailable, ...(menuEntry ? { menuPrice: price.value } : { vendorPrice: price.value }),
       ...(form.description.trim() ? { description: form.description.trim() } : {}),
       ...(form.imageUrl.trim() ? { imageUrl: form.imageUrl.trim() } : {}),
       ...commissionBody(),
@@ -272,7 +301,6 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
 
   // A live dish with a requested price change is declined with a reason (reject); a plain live dish cannot be rejected.
   const declining = item?.state === 'CHANGE_PENDING';
-  const canApprove = item !== null && (item.state === 'PENDING' || item.state === 'REJECTED');
   const disabledAll = busy !== null || uploading;
   const readOnly = deleted || disabledAll;
   const spin = (kind: Busy) => (busy === kind ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null);
@@ -395,9 +423,26 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
 
           <fieldset className="space-y-3" disabled={readOnly}>
             <legend className="k-label mb-2">Pricing</legend>
-            <Field label="Restaurant price (₹)" htmlFor="dish-price" required error={show(errors.vendorPrice)} hint={`What the restaurant gets for one. Up to ${MAX_DISH_PRICE.toLocaleString('en-IN')}, at most 2 decimals.`}>
-              <input id="dish-price" className="k-input" inputMode="decimal" value={form.vendorPrice} onChange={(event) => set('vendorPrice', event.target.value)} aria-invalid={Boolean(show(errors.vendorPrice))} aria-describedby="dish-price-msg" autoComplete="off" />
-            </Field>
+            {menuEntry ? (
+              <>
+                <Field
+                  label="Menu price (customer pays) (₹)"
+                  htmlFor="dish-price"
+                  required={!priceOptional}
+                  error={priceProblem?.message ?? previewProblem?.message ?? show(errors.vendorPrice)}
+                  hint={`What the customer pays for one, up to ${MAX_MENU_PRICE.toLocaleString('en-IN')}, at most 2 decimals. The restaurant gets the rest after Kraveo's cut.${priceOptional ? ` Leave it as it is to keep the restaurant price ${rupees(item?.vendorPrice)}.` : ''}`}
+                >
+                  <input id="dish-price" className="k-input" inputMode="decimal" value={form.menuPrice} placeholder={priceOptional ? 'Type a new menu price' : undefined} onChange={(event) => set('menuPrice', event.target.value)} aria-invalid={Boolean(priceProblem || previewProblem || show(errors.vendorPrice))} aria-describedby="dish-price-msg" autoComplete="off" />
+                </Field>
+                {(priceProblem?.nearestPrice ?? previewProblem?.nearestPrice) != null && !readOnly && (
+                  <button type="button" className="k-btn-ghost !min-h-[36px] text-xs" onClick={() => set('menuPrice', amountText(priceProblem?.nearestPrice ?? previewProblem?.nearestPrice))}>Use {rupees(priceProblem?.nearestPrice ?? previewProblem?.nearestPrice)} instead</button>
+                )}
+              </>
+            ) : (
+              <Field label="Restaurant price (₹)" htmlFor="dish-price" required error={priceProblem?.message ?? show(errors.vendorPrice)} hint={`What the restaurant gets for one. Up to ${MAX_DISH_PRICE.toLocaleString('en-IN')}, at most 2 decimals.`}>
+                <input id="dish-price" className="k-input" inputMode="decimal" value={form.vendorPrice} onChange={(event) => set('vendorPrice', event.target.value)} aria-invalid={Boolean(priceProblem || show(errors.vendorPrice))} aria-describedby="dish-price-msg" autoComplete="off" />
+              </Field>
+            )}
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label="Commission" htmlFor="dish-commission-mode">
@@ -405,19 +450,21 @@ export const CatalogDishDrawer: React.FC<Props> = ({ open, item, vendors, catego
                   <option value="INHERIT">Use the restaurant / global default</option>
                   <option value="PERCENT">Percent of the restaurant price</option>
                   <option value="FLAT">Flat rupee amount</option>
+                  <option value="CUT">Cut from sale (%)</option>
                 </select>
               </Field>
               {form.mode !== 'INHERIT' && (
-                <Field label={form.mode === 'PERCENT' ? 'Percent (%)' : 'Amount (₹)'} htmlFor="dish-commission-value" required error={show(errors.commission)}>
+                <Field label={form.mode === 'PERCENT' ? 'Percent (%)' : form.mode === 'CUT' ? 'Cut from sale (%)' : 'Amount (₹)'} htmlFor="dish-commission-value" required error={show(errors.commission)}>
                   <input id="dish-commission-value" className="k-input" inputMode="decimal" value={form.commissionValue} onChange={(event) => set('commissionValue', event.target.value)} aria-invalid={Boolean(show(errors.commission))} aria-describedby={show(errors.commission) ? 'dish-commission-value-msg' : undefined} autoComplete="off" />
                 </Field>
               )}
             </div>
+            {form.mode === 'CUT' && <CutExplain percentText={form.commissionValue} />}
             {item && item.commissionOverride && form.mode === 'INHERIT' && <p className="text-xs text-kraveo-ink3">This dish had its own commission ({commissionLabel(item.commissionOverride.type, item.commissionOverride.value)}); saving removes it.</p>}
             {item && !item.commissionOverride && form.mode === 'INHERIT' && item.commission && <p className="text-xs text-kraveo-ink3">Uses {commissionLabel(item.commission.type, item.commission.value)} ({SOURCE_LABEL[item.commission.source]}).</p>}
           </fieldset>
 
-          <PreviewCard state={preview} vendorPrice={price.ok ? price.value : null} title="Customer price (live)" />
+          <PreviewCard state={preview} vendorPrice={menuEntry ? previewVendorPrice : price.ok ? price.value : null} title={menuEntry ? 'What the restaurant gets (live)' : 'Customer price (live)'} menuEntry={menuEntry} />
           {!creating && item?.price !== null && item?.price !== undefined && <p className="text-xs text-kraveo-ink3">Right now customers pay {rupees(item.price)}. Saving applies the new price shown above.</p>}
           {item?.priceIsStale && item.computedPrice !== null && <p className="rounded-k-sm border border-kraveo-status-placed/40 bg-kraveo-status-placed/10 px-3 py-2 text-xs text-kraveo-ink">Today's commission and rounding rules would give {rupees(item.computedPrice)}, but customers still pay {rupees(item.price)}. Saving this dish updates it, or run Recalculate prices in Settings for every dish.</p>}
 

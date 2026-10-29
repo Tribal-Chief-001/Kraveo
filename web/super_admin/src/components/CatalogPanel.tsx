@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, FileUp, ImageOff, Plus, RefreshCw, SearchX, UtensilsCrossed } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileUp, ImageOff, ListOrdered, Plus, RefreshCw, SearchX, UtensilsCrossed } from 'lucide-react';
 import { Vendor } from '../types';
 import { apiService } from '../services/api';
 import { CatalogDish, CatalogPage, PendingCounts } from '../lib/catalogParse';
@@ -7,6 +7,7 @@ import { commissionLabel, rupees } from '../lib/pricing';
 import { CatalogDishDrawer } from './CatalogDishDrawer';
 import { BulkResultPanel, BulkSummary, CatalogBulkBar } from './CatalogBulkBar';
 import { ImportMenuWizard } from './ImportMenuWizard';
+import { MenuOrderPanel } from './MenuOrderPanel';
 import { ApiError } from '../services/api';
 import { BULK_ACTION_LABEL, BulkAction, bulkFailures } from '../lib/catalogBulkParse';
 import { dishChoices } from '../lib/categoryParse';
@@ -165,6 +166,7 @@ const CatalogPanelBase: React.FC<Props> = ({ vendors, query, onClearQuery, onAut
   const togglingRef = useRef<Set<string>>(new Set());
   const [drawer, setDrawer] = useState<{ kind: 'edit'; dish: CatalogDish } | { kind: 'create' } | { kind: 'duplicate'; dish: CatalogDish } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [orderOpen, setOrderOpen] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState('');
@@ -319,6 +321,7 @@ const CatalogPanelBase: React.FC<Props> = ({ vendors, query, onClearQuery, onAut
           </select>
           <button type="button" className="k-icon-btn" aria-label="Reload dishes" title="Reload dishes" onClick={reload} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" /></button>
           <button type="button" className="k-btn-ghost" onClick={() => setImportOpen(true)} disabled={vendors.length === 0} title={vendors.length === 0 ? 'No restaurants loaded yet' : 'Add many dishes from a CSV file'}><FileUp className="h-4 w-4" aria-hidden="true" />Import menu</button>
+          <button type="button" className="k-btn-ghost" onClick={() => setOrderOpen(true)} disabled={!vendorId} title={vendorId ? 'Put the sections and dishes of this restaurant in order' : 'Choose one restaurant first'}><ListOrdered className="h-4 w-4" aria-hidden="true" />Menu order</button>
           <button type="button" className="k-btn-accent" onClick={() => setDrawer({ kind: 'create' })} disabled={vendors.length === 0} title={vendors.length === 0 ? 'No restaurants loaded yet' : undefined}><Plus className="h-4 w-4" aria-hidden="true" />Add dish</button>
         </div>
       </div>
@@ -414,6 +417,7 @@ const CatalogPanelBase: React.FC<Props> = ({ vendors, query, onClearQuery, onAut
           onAuthError={onAuthError}
         />
       )}
+      {orderOpen && vendorId && <MenuOrderPanel key={vendorId} vendor={sortedVendors.find((v) => v.id === vendorId) ?? { id: vendorId, name: 'This restaurant' }} onClose={() => setOrderOpen(false)} onSaved={handleChanged} onAuthError={onAuthError} />}
       {importOpen && <ImportMenuWizard vendors={sortedVendors} initialVendorId={vendorId} onClose={() => setImportOpen(false)} onImported={handleChanged} onAuthError={onAuthError} />}
       {confirmDialog}
     </div>

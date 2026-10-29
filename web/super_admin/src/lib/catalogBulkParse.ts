@@ -63,9 +63,13 @@ export interface ImportRowReport {
   index: number;
   name: string;
   action: ImportAction;
-  errors: Array<{ field: string; message: string }>;
+  errors: Array<{ field: string; message: string; /** Docs/26: PRICE_REQUIRED, MENU_PRICE_NEEDS_CUT_RULE, MENU_PRICE_NOT_EXACT. */ code?: string; nearestPrice?: number }>;
   /** The customer price from the pricing engine; null when the price itself is not valid. */
   computedPrice: number | null;
+  /** Docs/26: the restaurant's price (given, or worked out from `menuPrice`); null when the row is not valid. */
+  vendorPrice: number | null;
+  /** Docs/26: the stored menu place this row writes (null = it does not move a dish). */
+  sortOrder: number | null;
   reason: string | null;
   dishId: string | null;
 }
@@ -79,7 +83,12 @@ const parseImportRow = (raw: unknown, position: number): ImportRowReport => {
   const action = ACTIONS.includes(r.action) ? (r.action as ImportAction) : 'invalid';
   const errors = (Array.isArray(r.errors) ? r.errors : [])
     .filter(isObject)
-    .map((e) => ({ field: typeof e.field === 'string' ? e.field : 'row', message: str(e.message) ?? 'This row is not valid.' }));
+    .map((e) => ({
+      field: typeof e.field === 'string' ? e.field : 'row',
+      message: str(e.message) ?? 'This row is not valid.',
+      ...(str(e.code) ? { code: str(e.code)! } : {}),
+      ...(num(e.nearestPrice) !== null ? { nearestPrice: num(e.nearestPrice)! } : {}),
+    }));
   if (action === 'invalid' && errors.length === 0) errors.push({ field: 'row', message: 'This row is not valid.' });
   return {
     index: int(r.index) ?? position,
@@ -87,6 +96,8 @@ const parseImportRow = (raw: unknown, position: number): ImportRowReport => {
     action,
     errors,
     computedPrice: num(r.computedPrice),
+    vendorPrice: num(r.vendorPrice),
+    sortOrder: num(r.sortOrder),
     reason: str(r.reason),
     dishId: str(r.dishId),
   };
@@ -108,6 +119,13 @@ export const parseImportReport = (body: unknown): ImportReport | null => {
     total: int(s.total) ?? rows.length,
   };
   return { dryRun: d.dryRun !== false, applied: d.applied === true, summary, rows, message: typeof b.message === 'string' ? b.message : '' };
+};
+
+/** One extra plain line under a row error that has a code the admin can act on. */
+export const IMPORT_ERROR_HINT: Record<string, string> = {
+  PRICE_REQUIRED: 'Fill in exactly one price per dish: the restaurant price (vendorPrice) or the price the customer pays (menuPrice).',
+  MENU_PRICE_NEEDS_CUT_RULE: 'Use the restaurant price column for this dish, or set the restaurant (or the dish) to "Cut from sale" first.',
+  MENU_PRICE_NOT_EXACT: 'Change the menu price to the nearest one that works, or ask the owner whether the cut should change.',
 };
 
 export const SKIP_REASON_TEXT: Record<string, string> = {

@@ -3,7 +3,12 @@
 // inside a sane range, so NaN, negatives, "1e9" and 3-decimal values can never reach a save button.
 // The server stays authoritative; these limits only stop obvious mistakes early. Adjust them here in one place.
 
-export type CommissionType = 'PERCENT' | 'FLAT';
+export type CommissionType = 'PERCENT' | 'FLAT' | 'CUT';
+
+/** Docs/26: a "cut from sale" is 0..90 percent of what the CUSTOMER pays (server pricing.ts checkCommissionRule). */
+export const MAX_CUT_PERCENT = 90;
+/** The most a menu price (what the customer pays) may be, same as the server's menuPriceProblem. */
+export const MAX_MENU_PRICE = 5_000;
 
 export const MAX_DISH_PRICE = 10_000;
 // Same limits as the backend (services/pricing.ts LIMITS, utils/catalog.ts MAX_MENU_PRICE).
@@ -56,14 +61,57 @@ const capitalise = (text: string): string => text.charAt(0).toUpperCase() + text
 
 export const parseVendorPrice = (text: string): ParsedNumber => parseAmount(text, { label: 'the restaurant price', max: MAX_DISH_PRICE, allowZero: false });
 
-/** A commission value: PERCENT is 0-100, FLAT is a rupee amount. */
-export const parseCommissionValue = (type: CommissionType, text: string): ParsedNumber => (type === 'PERCENT'
-  ? parseAmount(text, { label: 'the commission percent', max: 100 })
-  : parseAmount(text, { label: 'the flat commission', max: MAX_FLAT_COMMISSION }));
+export const parseMenuPrice = (text: string): ParsedNumber => parseAmount(text, { label: 'the menu price', max: MAX_MENU_PRICE, allowZero: false });
 
+/** A commission value: PERCENT is 0-100, FLAT is a rupee amount, CUT is 0-90 percent of the sale. */
+export const parseCommissionValue = (type: CommissionType, text: string): ParsedNumber => {
+  if (type === 'CUT') {
+    const parsed = parseAmount(text, { label: 'the cut percent', max: 100 });
+    return parsed.ok && parsed.value > MAX_CUT_PERCENT ? { ok: false, message: `A cut from the sale cannot be more than ${MAX_CUT_PERCENT}%.` } : parsed;
+  }
+  return type === 'PERCENT'
+    ? parseAmount(text, { label: 'the commission percent', max: 100 })
+    : parseAmount(text, { label: 'the flat commission', max: MAX_FLAT_COMMISSION });
+};
+
+/** Wording of a rule everywhere the dashboard prints one: "12%", "₹7 flat", "30% of the sale". */
 export const commissionLabel = (type: CommissionType | null | undefined, value: number | null | undefined): string => {
-  if (!type || value === null || value === undefined) return 'Default';
+  if (!type || value === null || value === undefined || !Number.isFinite(value)) return 'Default';
+  if (type === 'CUT') return `${trimZeros(value)}% of the sale`;
   return type === 'PERCENT' ? `${trimZeros(value)}%` : `${rupees(value)} flat`;
+};
+
+/** The option names of the commission selects (settings, restaurant, dish). */
+export const COMMISSION_TYPE_OPTIONS: ReadonlyArray<{ type: CommissionType; label: string }> = [
+  { type: 'PERCENT', label: 'Percent of the restaurant price' },
+  { type: 'FLAT', label: 'Flat rupee amount per dish' },
+  { type: 'CUT', label: 'Cut from sale (%)' },
+];
+
+/** One plain sentence about the "cut from sale" type, shown under every editor that offers it. */
+export const CUT_EXPLANATION = 'The customer pays the menu price. Kraveo keeps this percent of that price and pays the restaurant the rest.';
+
+/**
+ * The worked example under a "cut from sale" editor. Whole paise only (like the server): the restaurant's share is rounded down
+ * to the paisa and Kraveo keeps the rest. `null` when the percent is not a usable 0..90 number.
+ */
+export const cutExample = (percent: number, menuPrice = 115): { menuPrice: number; restaurantGets: number; kraveoKeeps: number } | null => {
+  if (!Number.isFinite(percent) || percent < 0 || percent > MAX_CUT_PERCENT || !Number.isFinite(menuPrice) || menuPrice <= 0) return null;
+  const menuPaise = toPaise(menuPrice);
+  const restaurantPaise = Math.floor((menuPaise * (10_000 - toPaise(percent))) / 10_000);
+  return { menuPrice, restaurantGets: restaurantPaise / 100, kraveoKeeps: (menuPaise - restaurantPaise) / 100 };
+};
+
+/** "Menu price ₹115, cut 30%: restaurant gets ₹80.50, Kraveo keeps ₹34.50." Empty when the percent is not valid. */
+export const cutExampleText = (percent: number, menuPrice = 115): string => {
+  const e = cutExample(percent, menuPrice);
+  return e ? `Menu price ${rupees(e.menuPrice)}, cut ${trimZeros(percent)}%: the restaurant gets ${rupees(e.restaurantGets)}, Kraveo keeps ${rupees(e.kraveoKeeps)}.` : '';
+};
+
+/** Is `type` text from the server a rule type this dashboard knows? Unknown text is treated as "no rule". */
+export const asCommissionType = (value: unknown): CommissionType | null => {
+  const text = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  return text === 'PERCENT' || text === 'FLAT' || text === 'CUT' ? text : null;
 };
 
 const trimZeros = (value: number): string => String(Number(value.toFixed(2)));

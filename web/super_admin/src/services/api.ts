@@ -41,6 +41,7 @@ import {
 } from '../lib/catalogBulkParse';
 import { Banner, BannerWrite, parseBannerList, parseBannerResult } from '../lib/bannerParse';
 import type { ImportRowInput } from '../lib/menuCsv';
+import { MenuOrderInput, MenuOrderResult, parseMenuOrderResult } from '../lib/menuOrder';
 import type { CommissionType } from '../lib/pricing';
 import type { DropPointInfo } from '../lib/campus';
 import type { SavedPin } from '../lib/vendorLocation';
@@ -184,6 +185,8 @@ export interface DishWrite {
   isVeg?: boolean;
   isAvailable?: boolean;
   vendorPrice?: number;
+  /** Docs/26: the price the CUSTOMER pays. Only with a "cut from sale" rule, and never together with `vendorPrice`. */
+  menuPrice?: number;
   /** `null` clears the dish's own commission so it inherits the restaurant / global default. */
   commissionType?: CommissionType | null;
   commissionValue?: number | null;
@@ -554,13 +557,14 @@ export const apiService = {
     return request<CustomerDetail>(`/api/admin/customers/${encodeURIComponent(id)}`);
   },
   // ── Catalog, pricing and settings (Docs/21 section 4). Response parsing lives in lib/catalogParse.ts ──
-  async fetchCatalog(filter: { status?: string; vendorId?: string; q?: string; page?: number }): Promise<CatalogPage> {
+  async fetchCatalog(filter: { status?: string; vendorId?: string; q?: string; page?: number; pageSize?: number }): Promise<CatalogPage> {
     const params = new URLSearchParams();
     if (filter.status) params.set('status', filter.status);
     if (filter.vendorId) params.set('vendorId', filter.vendorId);
     if (filter.q?.trim()) params.set('q', filter.q.trim());
     const page = filter.page && filter.page > 0 ? filter.page : 1;
     params.set('page', String(page));
+    if (filter.pageSize && filter.pageSize > 0) params.set('pageSize', String(Math.min(100, Math.floor(filter.pageSize))));
     const parsed = parseDishList(await requestFull<any>(`/api/admin/catalog?${params.toString()}`), page);
     if (!parsed) throw unexpected('dish list');
     return parsed;
@@ -597,13 +601,20 @@ export const apiService = {
   },
 
   /** An admin-created dish is live at once. */
-  async createCatalogItem(input: DishWrite & { vendorId: string; name: string; vendorPrice: number }): Promise<CatalogDish | null> {
+  async createCatalogItem(input: DishWrite & { vendorId: string; name: string } & ({ vendorPrice: number } | { menuPrice: number })): Promise<CatalogDish | null> {
     return parseDishResponse(await requestFull<any>('/api/admin/catalog', { method: 'POST', body: json(input) }));
   },
 
   /** Customer price and effective commission for a typed vendor price (no commission fields = the inherited one). */
   async previewCatalogPrice(input: { vendorId: string; vendorPrice: number; commissionType?: CommissionType; commissionValue?: number }, signal?: AbortSignal): Promise<PricePreview> {
     const preview = parsePreview(await requestFull<any>('/api/admin/catalog/preview', { method: 'POST', body: json(input), signal }), input.vendorPrice);
+    if (!preview) throw unexpected('price preview');
+    return preview;
+  },
+
+  /** Docs/26: the same preview for a typed MENU price (what the customer pays); the answer carries the restaurant's share as `vendorPrice`. */
+  async previewCatalogMenuPrice(input: { vendorId: string; menuPrice: number; commissionType?: CommissionType; commissionValue?: number }, signal?: AbortSignal): Promise<PricePreview> {
+    const preview = parsePreview(await requestFull<any>('/api/admin/catalog/preview', { method: 'POST', body: json(input), signal }), null);
     if (!preview) throw unexpected('price preview');
     return preview;
   },
@@ -623,6 +634,13 @@ export const apiService = {
   async saveSettings(group: SettingsGroup, value: Record<string, unknown>): Promise<SettingSaveResult & { value: Record<string, unknown> }> {
     const result = parseSettingSave(await requestFull<any>(`/api/admin/settings/${group}`, { method: 'PUT', body: json(value) }));
     return { ...result, value: result.view?.value ?? value };
+  },
+
+  /** Docs/26: saves the order of a restaurant's sections and dishes. Answer: the sections now in order, and whether anything changed. */
+  async saveMenuOrder(vendorId: string, input: MenuOrderInput): Promise<MenuOrderResult> {
+    const result = parseMenuOrderResult(await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/menu-order`, { method: 'PUT', body: json(input) }));
+    if (!result) throw unexpected('menu order');
+    return result;
   },
 
   /** A restaurant's own commission. `{ type: null, value: null }` clears it so the restaurant inherits the global default. */

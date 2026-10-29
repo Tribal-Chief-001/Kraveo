@@ -2,10 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, CheckCircle2, Download, FileUp, Loader2 } from 'lucide-react';
 import { Vendor } from '../types';
 import { ApiError, ImportInvalidError, apiService } from '../services/api';
-import { ImportReport, ImportRowReport, importableCount, skipReasonText } from '../lib/catalogBulkParse';
-import { MAX_IMPORT_FILE_BYTES, MAX_IMPORT_ROWS, MenuCsvResult, TEMPLATE_FILENAME, menuTemplateCsv, parseMenuCsv } from '../lib/menuCsv';
+import { IMPORT_ERROR_HINT, ImportReport, ImportRowReport, importableCount, skipReasonText } from '../lib/catalogBulkParse';
+import { MAX_IMPORT_FILE_BYTES, MAX_IMPORT_ROWS, MENU_PRICE_TEMPLATE_FILENAME, MenuCsvResult, PricesAre, TEMPLATE_FILENAME, menuTemplateCsv, parseMenuCsv } from '../lib/menuCsv';
+import { useGlobalCommission } from '../lib/useGlobalCommission';
 import { saveBlob } from '../lib/download';
-import { rupees } from '../lib/pricing';
+import { commissionLabel, rupees } from '../lib/pricing';
 import { errorText } from '../lib/errors';
 import { Drawer } from './ui/Drawer';
 import { Field } from './ui/Field';
@@ -31,6 +32,13 @@ interface ViewRow {
   name: string;
   category: string;
   vendorPrice: string;
+  /** Docs/26: the menu price typed in the file (the customer's price), or null when the row uses a restaurant price. */
+  menuPrice: string | null;
+  /** The place on the menu typed in the file, or null. */
+  position: string | null;
+  /** The restaurant's share the server worked out (or was given), null when the row is not valid. */
+  restaurantGets: number | null;
+  hints: string[];
   action: ImportRowReport['action'];
   reason: string | null;
   computedPrice: number | null;
@@ -49,14 +57,24 @@ const ACTION_STYLE: Record<ImportRowReport['action'], string> = {
 export const buildViewRows = (parsed: MenuCsvResult, report: ImportReport): ViewRow[] => parsed.rows.map((row, index) => {
   const server = report.rows.find((r) => r.index === index);
   const problems: string[] = row.issues.map((i) => i.message);
-  (server?.errors ?? []).forEach((e) => { if (!problems.includes(e.message)) problems.push(e.message); });
+  const hints: string[] = [];
+  (server?.errors ?? []).forEach((e) => {
+    if (!problems.includes(e.message)) problems.push(e.message);
+    const hint = e.code ? IMPORT_ERROR_HINT[e.code] : undefined;
+    if (hint && !hints.includes(hint)) hints.push(hint);
+  });
+  const shownNumber = (value: number | string | undefined): string | null => (value === undefined ? null : typeof value === 'number' ? rupees(value) : String(value));
   const locallyBad = row.issues.length > 0;
   return {
     index,
     line: row.line,
     name: row.input.name || '(no name)',
     category: row.input.category || '-',
-    vendorPrice: row.input.vendorPrice === undefined ? '-' : typeof row.input.vendorPrice === 'number' ? rupees(row.input.vendorPrice) : String(row.input.vendorPrice),
+    vendorPrice: shownNumber(row.input.vendorPrice) ?? '-',
+    menuPrice: shownNumber(row.input.menuPrice),
+    position: row.input.position === undefined ? null : String(row.input.position),
+    restaurantGets: locallyBad ? null : server?.vendorPrice ?? null,
+    hints,
     action: locallyBad || !server ? 'invalid' : server.action,
     reason: server?.reason ?? null,
     computedPrice: locallyBad ? null : server?.computedPrice ?? null,
@@ -90,10 +108,17 @@ export const ImportMenuWizard: React.FC<Props> = ({ vendors, initialVendorId = '
   const seq = useRef(0);
   const sorted = useMemo(() => [...vendors].sort((a, b) => a.name.localeCompare(b.name)), [vendors]);
   const vendor = vendors.find((v) => v.id === vendorId) ?? null;
+  // Docs/26: is this restaurant on "Cut from sale"? Its own rule, else the default in Settings (asked only when needed). A dish can still have its own rule: the server checks every row.
+  const globalRule = useGlobalCommission(vendor !== null && vendor.commissionType === null);
+  const rule = vendor === null || vendor.commissionType === undefined ? null : vendor.commissionType ?? globalRule?.type ?? null;
+  const ruleValue = vendor?.commissionType ? vendor.commissionValue : globalRule?.value;
+  const isCut = rule === 'CUT';
+  const [pricesChoice, setPricesChoice] = useState<PricesAre | null>(null);
+  const pricesAre: PricesAre = pricesChoice ?? (isCut ? 'menu' : 'vendor');
 
   useEffect(() => { headingRef.current?.focus(); }, [step]);
 
-  const download = () => saveBlob(new Blob([`﻿${menuTemplateCsv()}`], { type: 'text/csv;charset=utf-8' }), TEMPLATE_FILENAME);
+  const download = (kind: 'vendor' | 'menu' = 'vendor') => saveBlob(new Blob([`﻿${menuTemplateCsv(kind)}`], { type: 'text/csv;charset=utf-8' }), kind === 'menu' ? MENU_PRICE_TEMPLATE_FILENAME : TEMPLATE_FILENAME);
 
   const readFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -113,7 +138,7 @@ export const ImportMenuWizard: React.FC<Props> = ({ vendors, initialVendorId = '
   const check = async (policy: Duplicate = duplicate) => {
     if (busyRef.current) return;
     if (!vendorId) { setError('Choose the restaurant this menu belongs to.'); return; }
-    const result = parseMenuCsv(text);
+    const result = parseMenuCsv(text, isCut ? { pricesAre } : {});
     setError(''); setProblems(result.fileProblems);
     if (result.fileProblems.length > 0) { setParsed(null); return; }
     busyRef.current = true;
@@ -221,12 +246,37 @@ export const ImportMenuWizard: React.FC<Props> = ({ vendors, initialVendorId = '
             <section className="k-inset space-y-3 p-4" aria-label="The file">
               <p className="text-sm text-kraveo-ink2">One dish per line. Columns: <b>name</b>, <b>category</b>, <b>vendorPrice</b> (what the restaurant gets), and optionally <b>isVeg</b>, <b>description</b>, <b>imageUrl</b>, <b>isAvailable</b>. At most {MAX_IMPORT_ROWS} dishes at a time. The category must already exist in the Categories tab.</p>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className="k-btn-ghost" onClick={download}><Download className="h-4 w-4" aria-hidden="true" />Download the template</button>
+                <button type="button" className="k-btn-ghost" onClick={() => download('vendor')}><Download className="h-4 w-4" aria-hidden="true" />Download the template</button>
+                {rule !== 'PERCENT' && rule !== 'FLAT' && <button type="button" className="k-btn-ghost" onClick={() => download('menu')}><Download className="h-4 w-4" aria-hidden="true" />Template with menuPrice</button>}
                 <label className="k-btn-ghost cursor-pointer focus-within:ring-2 focus-within:ring-kraveo-g400/60">
                   <FileUp className="h-4 w-4" aria-hidden="true" />Choose a CSV file
                   <input type="file" accept=".csv,.tsv,.txt,text/csv,text/plain,text/tab-separated-values" className="sr-only" onChange={readFile} data-testid="import-file" />
                 </label>
               </div>
+              <div className="space-y-2 rounded-k-sm border border-kraveo-line bg-kraveo-surface2/60 px-3 py-2 text-xs text-kraveo-ink2" data-testid="price-column-help">
+                <p className="font-bold text-kraveo-ink">Which price column?</p>
+                {isCut && <p>{vendor?.name} is on <b>{commissionLabel('CUT', ruleValue)}</b> ("Cut from sale"). Put the price the customer pays in a <b>menuPrice</b> column and Kraveo works out what the restaurant gets. A <b>vendorPrice</b> column (what the restaurant gets) also works.</p>}
+                {rule === 'PERCENT' || rule === 'FLAT' ? <p>{vendor?.name} is on <b>{commissionLabel(rule, ruleValue)}</b>. Use the <b>vendorPrice</b> column (what the restaurant gets). A menuPrice column only works for restaurants on "Cut from sale".</p> : null}
+                {rule === null && <p>Use <b>vendorPrice</b> (what the restaurant gets), or <b>menuPrice</b> (what the customer pays) if the restaurant or the dish is on "Cut from sale". Never both in one row.</p>}
+                <p>Optional <b>position</b> column (1, 2, 3 ...): the dish's place on the menu. Without it, dishes keep the order of the file.</p>
+              </div>
+              {isCut && (
+                <fieldset className="space-y-1.5">
+                  <legend className="k-label mb-1">In my file the price column is</legend>
+                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="What the price column holds">
+                    {([['menu', 'What the customer pays', 'The menu price. Kraveo works out the restaurant\'s share.'], ['vendor', 'What the restaurant gets', 'The restaurant\'s own price. Kraveo adds its cut on top.']] as const).map(([id, label, help]) => (
+                      <label key={id} className="relative cursor-pointer">
+                        <input type="radio" name="import-prices-are" value={id} checked={pricesAre === id} onChange={() => setPricesChoice(id)} className="peer sr-only" />
+                        <span className="block rounded-k-md border border-kraveo-line bg-kraveo-surface2 p-3 text-sm peer-checked:border-kraveo-g400 peer-checked:bg-kraveo-g400/10 peer-focus-visible:ring-2 peer-focus-visible:ring-kraveo-g400/60">
+                          <span className="block font-bold text-kraveo-ink">{label}</span>
+                          <span className="block text-xs text-kraveo-ink3">{help}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-kraveo-ink3">Only applies to a column called price, rate, cost and similar. A column named menuPrice or vendorPrice is always read as named.</p>
+                </fieldset>
+              )}
               <p className="text-xs text-kraveo-ink3">The template has two sample lines: replace or delete them. Commas, semicolons and tabs all work, so you can also paste rows copied from Excel or Google Sheets.</p>
               {fileName && <p className="text-xs font-semibold text-kraveo-ink2" role="status">Loaded “{fileName}”. You can still edit the text below.</p>}
               <Field label="Or paste the rows here (first line = column names)" htmlFor="import-text">
@@ -270,10 +320,16 @@ export const ImportMenuWizard: React.FC<Props> = ({ vendors, initialVendorId = '
                     <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide ${ACTION_STYLE[row.action]}`}>{ACTION_LABEL[row.action]}</span>
                   </div>
                   <p className="mt-1 break-words text-xs text-kraveo-ink2">
-                    {row.category} · restaurant price {row.vendorPrice} · customer pays <b className="tabular-nums text-kraveo-ink">{row.computedPrice === null ? '-' : rupees(row.computedPrice)}</b>
+                    {row.category}
+                    {row.menuPrice !== null
+                      ? <> · menu price {row.menuPrice} · restaurant gets <b className="tabular-nums text-kraveo-ink" data-testid="row-restaurant">{row.restaurantGets === null ? '-' : rupees(row.restaurantGets)}</b></>
+                      : <> · restaurant price {row.vendorPrice}</>}
+                    {' '}· customer pays <b className="tabular-nums text-kraveo-ink">{row.computedPrice === null ? '-' : rupees(row.computedPrice)}</b>
+                    {row.position !== null && <> · position {row.position}</>}
                   </p>
                   {row.action === 'skip' && <p className="mt-1 text-xs text-kraveo-ink3">{skipReasonText(row.reason)}</p>}
                   {row.problems.length > 0 && <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-xs font-semibold text-kraveo-danger">{row.problems.map((p) => <li key={p} className="break-words">{p}</li>)}</ul>}
+                  {row.hints.map((hint) => <p key={hint} className="mt-1 break-words text-xs text-kraveo-ink3">{hint}</p>)}
                 </li>
               ))}
             </ul>

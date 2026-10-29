@@ -5,8 +5,9 @@ import { parseSettlementSettings, PayoutProvider } from '../lib/financeParse';
 import { validateSettlementSettings, MAX_HOLD_DAYS } from '../lib/financeInput';
 import { Switch } from './ui/Switch';
 import { asNum, parseFeeLines, RecalcResult } from '../lib/catalogParse';
+import { CutExplain } from './CutExplain';
 import {
-  CommissionType, DEFAULT_RESTAURANTS_PER_ORDER, FeesForm, MAX_EXTRA_RESTAURANT_FEE, MAX_RESTAURANTS_PER_ORDER, MIN_RESTAURANTS_PER_ORDER, ROUNDING_STEPS, RoundingStep, amountText, isRoundingStep, rupees, validateCommissionSetting, validateFees,
+  CommissionType, DEFAULT_RESTAURANTS_PER_ORDER, FeesForm, MAX_EXTRA_RESTAURANT_FEE, MAX_RESTAURANTS_PER_ORDER, MIN_RESTAURANTS_PER_ORDER, ROUNDING_STEPS, RoundingStep, amountText, asCommissionType, commissionLabel, isRoundingStep, rupees, validateCommissionSetting, validateFees,
 } from '../lib/pricing';
 import { Field } from './ui/Field';
 import { Skeleton } from './ui/Skeleton';
@@ -216,7 +217,7 @@ const FeesCard: React.FC<{ raw: Raw; onSaved: (raw: Raw, outcome: Outcome) => vo
 
 const CommissionCard: React.FC<{ raw: Raw; onSaved: (raw: Raw, outcome: Outcome) => void; onDirty: (dirty: boolean) => void; onAuthError: (error: unknown) => void }> = ({ raw, onSaved, onDirty, onAuthError }) => {
   const toast = useToast();
-  const initialType: CommissionType = raw.type === 'FLAT' ? 'FLAT' : 'PERCENT';
+  const initialType: CommissionType = asCommissionType(raw.type) ?? 'PERCENT';
   const [type, setType] = useState<CommissionType>(initialType);
   const [value, setValue] = useState(amountText(asNum(raw.value)));
   const [baseline, setBaseline] = useState(`${initialType}|${amountText(asNum(raw.value))}`);
@@ -235,7 +236,7 @@ const CommissionCard: React.FC<{ raw: Raw; onSaved: (raw: Raw, outcome: Outcome)
     try {
       const saved = await apiService.saveSettings('commission', { ...raw, type: checked.value.type, value: checked.value.value });
       const stored = saved.value;
-      const t: CommissionType = stored.type === 'FLAT' ? 'FLAT' : stored.type === 'PERCENT' ? 'PERCENT' : checked.value.type;
+      const t: CommissionType = asCommissionType(stored.type) ?? checked.value.type;
       const v = amountText(asNum(stored.value) ?? checked.value.value);
       setType(t); setValue(v); setBaseline(`${t}|${v}`); setTouched(false);
       onSaved(stored, saved);
@@ -254,13 +255,16 @@ const CommissionCard: React.FC<{ raw: Raw; onSaved: (raw: Raw, outcome: Outcome)
           <select id="commission-type" className="k-select" value={type} onChange={(e) => { setType(e.target.value as CommissionType); setError(''); }}>
             <option value="PERCENT">Percent of the restaurant price</option>
             <option value="FLAT">Flat rupee amount per dish</option>
+            <option value="CUT">Cut from sale (%)</option>
           </select>
         </Field>
-        <Field label={type === 'PERCENT' ? 'Percent (%)' : 'Amount per dish (₹)'} htmlFor="commission-value" required error={touched && !checked.ok ? checked.message : undefined}>
+        <Field label={type === 'PERCENT' ? 'Percent (%)' : type === 'CUT' ? 'Cut from sale (%)' : 'Amount per dish (₹)'} htmlFor="commission-value" required error={touched && !checked.ok ? checked.message : undefined}>
           <input id="commission-value" className="k-input" inputMode="decimal" value={value} onChange={(e) => { setValue(e.target.value); setError(''); }} aria-invalid={touched && !checked.ok} aria-describedby="commission-value-msg" autoComplete="off" />
         </Field>
       </div>
+      {type === 'CUT' && <CutExplain percentText={value} />}
       <p className="text-xs text-kraveo-ink3">A restaurant or a single dish can have its own commission; the most specific one wins. This is the default for everything else.</p>
+      <p className="text-xs font-semibold text-kraveo-ink2" data-testid="commission-summary">Now: {commissionLabel(checked.ok ? checked.value.type : initialType, checked.ok ? checked.value.value : asNum(raw.value))}{checked.ok ? '' : ' (the value above is not valid yet)'}.</p>
       <SaveBar dirty={dirty} saving={saving} error={error} onSave={save} onUndo={undo} />
     </div>
   );
@@ -511,7 +515,7 @@ export const SettingsPanel: React.FC<Props> = ({ onAuthError }) => {
       <Card title="Fees" description="What the customer pays on top of the food. All amounts come from here, not from the app code.">
         <Loading load={fees.load} onRetry={fees.retry}>{(raw) => <FeesCard raw={raw} onSaved={fees.saved} onDirty={dirtyFees} onAuthError={onAuthError} />}</Loading>
       </Card>
-      <Card title="Default commission" description="Kraveo's share on top of the restaurant's price, unless the restaurant or the dish has its own.">
+      <Card title="Default commission" description="Kraveo's share (on top of the restaurant's price, or cut from the sale), unless the restaurant or the dish has its own.">
         <Loading load={commission.load} onRetry={commission.retry}>{(raw) => <CommissionCard raw={raw} onSaved={onPricingSaved(commission.saved)} onDirty={dirtyCommission} onAuthError={onAuthError} />}</Loading>
       </Card>
       <Card title="Price rounding" description="Customer prices are rounded up to a tidy number.">

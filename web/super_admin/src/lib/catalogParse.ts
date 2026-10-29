@@ -2,6 +2,7 @@
 // The shapes below are the REAL ones from backend/src/routes/catalog.ts and services/catalog.ts. Parsers still never throw:
 // they return null (or null fields) when an answer cannot be understood, and the caller then shows a plain message.
 
+import { asCommissionType } from './pricing';
 import type { CommissionType, FeeLine } from './pricing';
 
 export type CommissionSource = 'DISH' | 'VENDOR' | 'GLOBAL';
@@ -16,6 +17,8 @@ export interface CatalogDish {
   imageUrl: string | null;
   isVeg: boolean;
   isAvailable: boolean;
+  /** Docs/26: the dish's place in the restaurant's menu (0 = never ordered). */
+  sortOrder: number;
   vendorId: string;
   vendorName: string;
   /** What the restaurant asked for (its own price). */
@@ -62,10 +65,7 @@ export const asNum = (value: unknown): number | null => {
 
 const asStr = (value: unknown): string | null => (typeof value === 'string' && value.trim() !== '' ? value : null);
 
-const commissionType = (value: unknown): CommissionType | null => {
-  const text = typeof value === 'string' ? value.toUpperCase() : '';
-  return text === 'PERCENT' || text === 'FLAT' ? text : null;
-};
+const commissionType = asCommissionType;
 
 const round2 = (value: number): number => Math.round(value * 100) / 100;
 
@@ -107,6 +107,7 @@ export const parseDish = (raw: unknown): CatalogDish | null => {
     imageUrl: asStr(raw.imageUrl),
     isVeg: raw.isVeg === true,
     isAvailable: raw.isAvailable !== false,
+    sortOrder: Math.max(0, Math.round(asNum(raw.sortOrder) ?? 0)),
     vendorId: String(raw.vendorId ?? vendor.id ?? ''),
     vendorName: asStr(raw.vendorName ?? vendor.name) ?? 'Unknown restaurant',
     vendorPrice,
@@ -173,10 +174,12 @@ export interface PricePreview {
   roundingStep: number | null;
   /** The rule used and where it comes from. */
   rule: { type: CommissionType; value: number; source: CommissionSource } | null;
+  /** Docs/26: only for a preview asked with `menuPrice` - the restaurant's share the server worked out. */
+  vendorPrice?: number | null;
 }
 
 /** `{ data: { vendorPrice, price, effectiveCommission, nominalCommission, commission:{type,value,source}, roundingStep } }` */
-export const parsePreview = (body: unknown, vendorPrice: number): PricePreview | null => {
+export const parsePreview = (body: unknown, vendorPrice: number | null): PricePreview | null => {
   const data = unwrap(body);
   if (!isObject(data)) return null;
   const price = asNum(data.price);
@@ -185,10 +188,11 @@ export const parsePreview = (body: unknown, vendorPrice: number): PricePreview |
   const source = isObject(data.commission) && SOURCES.includes(data.commission.source) ? (data.commission.source as CommissionSource) : null;
   return {
     price,
-    commission: asNum(data.effectiveCommission) ?? round2(price - vendorPrice),
+    commission: asNum(data.effectiveCommission) ?? round2(price - (asNum(data.vendorPrice) ?? vendorPrice ?? price)),
     nominalCommission: asNum(data.nominalCommission),
     roundingStep: asNum(data.roundingStep),
     rule: rule && source ? { ...rule, source } : null,
+    ...(data.menuPrice !== undefined ? { vendorPrice: asNum(data.vendorPrice) } : {}),
   };
 };
 

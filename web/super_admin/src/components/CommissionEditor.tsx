@@ -4,6 +4,7 @@ import { apiService } from '../services/api';
 import { VendorCommission } from '../lib/catalogParse';
 import { CommissionType, amountText, commissionLabel, parseCommissionValue } from '../lib/pricing';
 import { Field } from './ui/Field';
+import { CutExplain } from './CutExplain';
 import { useToast } from './ui/Toast';
 
 interface Props {
@@ -18,7 +19,7 @@ interface Props {
 
 type Mode = 'INHERIT' | CommissionType;
 
-/** A restaurant's own commission (percent or flat). "Use default" clears it so the global default applies. */
+/** A restaurant's own commission (percent, flat, or a cut from the sale). "Use default" clears it so the global default applies. */
 export const CommissionEditor: React.FC<Props> = ({ id, name, commissionType, commissionValue, onSaved, onAuthError }) => {
   const toast = useToast();
   const [editing, setEditing] = useState(false);
@@ -71,14 +72,16 @@ export const CommissionEditor: React.FC<Props> = ({ id, name, commissionType, co
                 <option value="INHERIT">Use the default</option>
                 <option value="PERCENT">Percent</option>
                 <option value="FLAT">Flat rupees per dish</option>
+                <option value="CUT">Cut from sale (%)</option>
               </select>
             </Field>
             {mode !== 'INHERIT' && (
-              <Field label={mode === 'PERCENT' ? 'Percent (%)' : 'Amount (₹)'} htmlFor={`commission-value-${id}`} required error={touched && parsed && !parsed.ok ? parsed.message : undefined}>
+              <Field label={mode === 'PERCENT' ? 'Percent (%)' : mode === 'CUT' ? 'Cut from sale (%)' : 'Amount (₹)'} htmlFor={`commission-value-${id}`} required error={touched && parsed && !parsed.ok ? parsed.message : undefined}>
                 <input id={`commission-value-${id}`} className="k-input" inputMode="decimal" value={value} onChange={(e) => { setValue(e.target.value); setError(''); }} aria-invalid={touched && invalid} aria-describedby={`commission-value-${id}-msg`} disabled={saving} autoComplete="off" />
               </Field>
             )}
           </div>
+          {mode === 'CUT' && <CutExplain percentText={value} id={`commission-cut-${id}`} />}
           {error && <p role="alert" className="break-words rounded-k-sm border border-kraveo-danger/30 bg-kraveo-danger/10 px-3 py-2 text-xs text-kraveo-ink">{error}</p>}
           <div className="flex gap-2">
             <button type="button" className="k-btn-primary !min-h-[36px] text-xs" onClick={save} disabled={saving} aria-busy={saving}>{saving && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}Save commission</button>
