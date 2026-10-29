@@ -1,7 +1,9 @@
 import { readPin } from './lib/vendorLocation';
 import { OrderGroupInfo, parseGroupInfo } from './lib/orderGroups';
+import type { AccountStatus, BlockOrder, OwnerInfo } from './lib/accountParse';
+import { parseOwner } from './lib/accountParse';
 
-export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'categories' | 'banners' | 'drivers' | 'customers' | 'analytics' | 'catalog' | 'finance' | 'settings';
+export type TabType = 'map' | 'orders' | 'attention' | 'applications' | 'vendors' | 'categories' | 'banners' | 'drivers' | 'customers' | 'analytics' | 'catalog' | 'finance' | 'settings' | 'audit';
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED';
 export type PartnerKind = 'VENDOR' | 'DRIVER';
@@ -138,6 +140,14 @@ export interface Vendor {
    */
   commissionType?: 'PERCENT' | 'FLAT' | 'CUT' | null;
   commissionValue?: number | null;
+  /**
+   * Docs/28: the owner login. `null` = the restaurant has NO owner (customers see it, nobody can open it); `undefined` = an older server
+   * did not send the field, so nothing is claimed either way.
+   */
+  owner?: OwnerInfo | null;
+  /** Set when an admin removed the restaurant (only sent with `includeRemoved=1`, or by the admin action answers). */
+  removedAt?: string | null;
+  removedReason?: string | null;
 }
 
 export interface VendorCuisine { id: string; name: string; icon: string }
@@ -215,6 +225,9 @@ export interface DriverPartner {
   upiId?: string;
   createdAt: string;
   approvalStatus?: ApprovalStatus;
+  /** Docs/28: the state of the rider's login. REMOVED = an admin removed the rider (restorable). `undefined` = older server. */
+  accountStatus?: AccountStatus;
+  lastLoginAt?: string | null;
 }
 
 export interface AnalyticsData {
@@ -426,6 +439,9 @@ export const normalizeVendor = (raw: any): Vendor => ({
   ...(typeof raw?.eta === 'string' && raw.eta ? { eta: raw.eta } : {}),
   ...(raw && typeof raw === 'object' && 'fssaiNumber' in raw ? { fssaiNumber: typeof raw.fssaiNumber === 'string' && raw.fssaiNumber.trim() ? raw.fssaiNumber.trim() : null } : {}),
   ...(Array.isArray(raw?.cuisines) ? { cuisines: raw.cuisines.map(normalizeCuisine).filter((c: VendorCuisine | null): c is VendorCuisine => c !== null) } : {}),
+  // owner: null = ownerless (explicit), absent = older server. Only an explicit null may make the dashboard say "No owner".
+  ...(raw && typeof raw === 'object' && 'owner' in raw ? { owner: parseOwner(raw.owner) } : {}),
+  ...(typeof raw?.removedAt === 'string' && raw.removedAt ? { removedAt: raw.removedAt, removedReason: typeof raw.removedReason === 'string' ? raw.removedReason : null } : {}),
   ...(raw && typeof raw === 'object' && 'commissionType' in raw
     ? {
       commissionType: raw.commissionType === 'PERCENT' || raw.commissionType === 'FLAT' || raw.commissionType === 'CUT' ? raw.commissionType : null,
@@ -454,6 +470,8 @@ export const normalizeDriver = (raw: any): DriverPartner => ({
   upiId: raw?.upiId,
   createdAt: raw?.createdAt || new Date().toISOString(),
   approvalStatus: raw?.approvalStatus,
+  ...(raw?.user?.accountStatus === 'ACTIVE' || raw?.user?.accountStatus === 'SUSPENDED' || raw?.user?.accountStatus === 'REMOVED' ? { accountStatus: raw.user.accountStatus as AccountStatus } : {}),
+  ...(typeof raw?.user?.lastLoginAt === 'string' ? { lastLoginAt: raw.user.lastLoginAt } : {}),
 });
 
 /** One restaurant or rider account, as the Applications tab shows it. */
@@ -470,6 +488,9 @@ export interface Application {
   appliedAt: string;
   reviewedAt: string | null;
   createdAt: string;
+  /** Docs/28: the login behind the profile (REMOVED = removed by an admin). Absent on an older server. */
+  accountStatus?: AccountStatus | null;
+  removedAt?: string | null;
   vendor?: {
     name: string; category: string; address: string; fssaiNumber: string | null; isAcceptingOrders: boolean;
     /** The pin the restaurant sent (or the admin set); absent on an older server. */
@@ -495,6 +516,13 @@ export interface CustomerRow {
   ordersCount: number;
   totalSpent: number;
   lastOrderAt: string | null;
+  /** Docs/28: ACTIVE / SUSPENDED / REMOVED (an admin's decision). `deleted` is the customer's own deletion. */
+  accountStatus: AccountStatus;
+  statusReason: string | null;
+  statusChangedAt: string | null;
+  lastLoginAt: string | null;
+  /** Number of orders in progress. */
+  openOrders: number;
 }
 
 export interface CustomerOrder {
@@ -512,7 +540,12 @@ export interface CustomerOrder {
   payments: Array<{ id: string; razorpayPaymentId: string | null; amount: number; status: PaymentStatus; createdAt: string }>;
 }
 
-export interface CustomerDetail extends Omit<CustomerRow, 'ordersCount' | 'totalSpent' | 'lastOrderAt'> {
+export interface CustomerDetail extends Omit<CustomerRow, 'ordersCount' | 'totalSpent' | 'lastOrderAt' | 'openOrders'> {
+  statusChangedBy: string | null;
+  /** The orders in progress (the ones that block a suspend / remove). */
+  openOrders: BlockOrder[];
+  /** Refunds the customer has not received yet: PENDING or FAILED. */
+  refundsOwed: Array<{ orderId: string; refundStatus: string; amount: number }>;
   stats: {
     ordersCount: number;
     deliveredCount: number;

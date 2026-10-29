@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bike, ClipboardCheck, Landmark, MapPinned, Megaphone, PanelLeftClose, PanelLeftOpen, ShoppingBag, SlidersHorizontal, Store, Tags, TrendingUp, TriangleAlert, Users, UtensilsCrossed, X } from 'lucide-react';
+import { Bike, ClipboardCheck, Landmark, MapPinned, Megaphone, PanelLeftClose, PanelLeftOpen, ScrollText, ShoppingBag, SlidersHorizontal, Store, Tags, TrendingUp, TriangleAlert, Users, UtensilsCrossed, X } from 'lucide-react';
 import { TabType } from '../types';
 import { LogoBadge, LogoMark } from './ui/Logo';
 
@@ -27,6 +27,7 @@ const NAV_ITEMS: Array<{ id: TabType; label: string; hint: string; icon: React.E
   { id: 'finance', label: 'Finance', hint: 'Revenue, settlements and rider payouts', icon: Landmark },
   { id: 'drivers', label: 'Drivers', hint: 'Runner partners and duty', icon: Bike },
   { id: 'customers', label: 'Customers', hint: 'Everyone who ordered', icon: Users },
+  { id: 'audit', label: 'Activity', hint: 'Who changed what', icon: ScrollText },
   { id: 'analytics', label: 'Analytics', hint: 'Campus delivery numbers', icon: TrendingUp },
   { id: 'settings', label: 'Settings', hint: 'Fees, commission and rounding', icon: SlidersHorizontal },
 ];

@@ -28,6 +28,7 @@ const TITLES: Record<TabType, { title: string; subtitle: string; searchHint: str
   customers: { title: 'Customers', subtitle: 'Everyone who signed in, with their order history', searchHint: 'Search name, email, phone or hostel' },
   catalog: { title: 'Catalog', subtitle: 'Approve dishes and set what customers pay', searchHint: 'Search dishes by name, category or restaurant' },
   finance: { title: 'Finance', subtitle: 'Revenue, restaurant settlements and rider payouts', searchHint: '' },
+  audit: { title: 'Activity', subtitle: 'Who changed what, and when', searchHint: '' },
   settings: { title: 'Settings', subtitle: 'Fees, commission, rounding and settlements', searchHint: '' },
   analytics: { title: 'Analytics', subtitle: 'Campus delivery numbers from real orders', searchHint: '' },
 };
@@ -43,7 +44,7 @@ const useNow = (intervalMs: number): number => {
 
 export const Header: React.FC<HeaderProps> = ({ activeTab, isLiveConnected, isLoading, adminProfile, onRefresh, onLogout, onOpenMenu, query, onQueryChange }) => {
   const meta = TITLES[activeTab];
-  const searchEnabled = activeTab !== 'analytics' && activeTab !== 'settings' && activeTab !== 'finance' && activeTab !== 'banners';
+  const searchEnabled = activeTab !== 'analytics' && activeTab !== 'settings' && activeTab !== 'finance' && activeTab !== 'banners' && activeTab !== 'audit';
   const now = useNow(10_000);
   const [lastSynced, setLastSynced] = useState<number | null>(null);
   const wasLoading = useRef(false);

@@ -1,8 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { Bike, ChevronRight, Moon, Phone, Plus, SearchX, Truck, Users, Zap } from 'lucide-react';
+import { Bike, ChevronRight, Loader2, Moon, Phone, Plus, SearchX, Truck, Users, Zap } from 'lucide-react';
 import { DriverPartner, Order } from '../types';
 import { tripsTodayByRider } from '../lib/dashboardStats';
 import { AddPartnerDrawer } from './AddPartnerDrawer';
+import { RiderAction, RiderActionDialogs } from './RiderActions';
+import { apiService } from '../services/api';
+import { adminErrorText } from '../lib/errors';
+import { useToast } from './ui/Toast';
 import { AnimatedNumber } from './ui/AnimatedNumber';
 import { ApprovalPill } from './ui/ApprovalPill';
 import { Avatar } from './ui/Avatar';
@@ -23,9 +27,19 @@ interface DriverManagerProps {
   loading?: boolean;
   query?: string;
   onClearQuery?: () => void;
+  /** Docs/28: a rider was suspended, reactivated, removed or restored: reload the list. Falls back to `onCreated`. */
+  onChanged?: () => void;
+  /** Logs the admin out on 401/403 (the action dialogs). */
+  onAuthError?: (error: unknown) => void;
+  /** Opens an order in the order drawer (the blocking deliveries in the dialogs are links). */
+  onOpenOrder?: (orderId: string) => void;
 }
 
-type DutyFilter = 'ALL' | DriverPartner['dutyStatus'];
+type DutyFilter = 'ALL' | 'REMOVED' | DriverPartner['dutyStatus'];
+
+const isRemoved = (d: Pick<DriverPartner, 'accountStatus'>): boolean => d.accountStatus === 'REMOVED';
+
+const RemovedPill: React.FC = () => <span className="inline-flex whitespace-nowrap rounded-full bg-kraveo-danger/15 px-2.5 py-1 text-[11px] font-bold text-kraveo-danger">Removed</span>;
 
 const DUTY: Record<DriverPartner['dutyStatus'], { label: string; dot: string; text: string; bg: string; live: boolean }> = {
   ONLINE: { label: 'Online', dot: 'bg-kraveo-g400', text: 'text-kraveo-g300', bg: 'bg-kraveo-g400/15', live: true },
@@ -53,7 +67,10 @@ const DetailRow: React.FC<{ label: string; children: React.ReactNode }> = ({ lab
 
 const NO_ORDERS: Order[] = [];
 
-export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, orders = NO_ORDERS, now = Date.now(), onCreated, loading = false, query = '', onClearQuery }) => {
+export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, orders = NO_ORDERS, now = Date.now(), onCreated, loading = false, query = '', onClearQuery, onChanged, onAuthError, onOpenOrder }) => {
+  const toast = useToast();
+  const [action, setAction] = useState<RiderAction | null>(null);
+  const [reactivating, setReactivating] = useState(false);
   const [filter, setFilter] = useState<DutyFilter>('ALL');
   const [showAdd, setShowAdd] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -62,7 +79,7 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, orders = 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return drivers.filter((d) => {
-      const matchesFilter = filter === 'ALL' || d.dutyStatus === filter;
+      const matchesFilter = filter === 'ALL' || (filter === 'REMOVED' ? isRemoved(d) : d.dutyStatus === filter);
       const matchesSearch = !q || d.name.toLowerCase().includes(q) || d.studentRegNo.toLowerCase().includes(q) || d.runnerCode.toLowerCase().includes(q) || d.phone.toLowerCase().includes(q) || d.vehicleRegNo.toLowerCase().includes(q);
       return matchesFilter && matchesSearch;
     });
@@ -73,6 +90,7 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, orders = 
     ONLINE: drivers.filter((d) => d.dutyStatus === 'ONLINE').length,
     IN_TRANSIT: drivers.filter((d) => d.dutyStatus === 'IN_TRANSIT').length,
     OFFLINE: drivers.filter((d) => d.dutyStatus === 'OFFLINE').length,
+    REMOVED: drivers.filter(isRemoved).length,
   }), [drivers]);
 
   const hasData = drivers.length > 0;
@@ -82,6 +100,19 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, orders = 
   const tripsFor = (driver: DriverPartner): number => (driver.userId ? tripsByRider.get(driver.userId) ?? 0 : 0);
   const totalOrdersToday = drivers.reduce((sum, d) => sum + tripsFor(d), 0);
   const initialLoad = loading && !hasData;
+
+  const reactivate = async (rider: DriverPartner) => {
+    if (reactivating) return;
+    setReactivating(true);
+    try {
+      await apiService.decidePartner('DRIVER', rider.id, 'APPROVED');
+      toast.success('Reactivated', `${rider.name} can work again. They go on duty from the app.`);
+      (onChanged ?? onCreated)?.();
+    } catch (e) {
+      onAuthError?.(e);
+      toast.error('Could not reactivate', adminErrorText(e, 'Please try again.'));
+    } finally { setReactivating(false); }
+  };
 
   return (
     <div className="space-y-5">
@@ -99,7 +130,7 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, orders = 
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 scrollbar-none sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0" role="group" aria-label="Filter by duty status">
-        {([['ALL', 'All runners'], ['ONLINE', 'Online'], ['IN_TRANSIT', 'In transit'], ['OFFLINE', 'Offline']] as const).map(([id, label]) => (
+        {([['ALL', 'All runners'], ['ONLINE', 'Online'], ['IN_TRANSIT', 'In transit'], ['OFFLINE', 'Offline'], ...(counts.REMOVED > 0 || filter === 'REMOVED' ? [['REMOVED', 'Removed'] as const] : [])] as const).map(([id, label]) => (
           <button key={id} className="k-chip" aria-pressed={filter === id} onClick={() => setFilter(id)}>
             {label}
             <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-extrabold tabular-nums ${filter === id ? 'bg-kraveo-g400/25' : 'bg-kraveo-line/70'}`}>{counts[id]}</span>
@@ -133,7 +164,7 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, orders = 
               <div className="min-w-0 flex-1">
                 <h3 className="truncate font-display text-lg font-bold leading-tight text-kraveo-ink">{d.name}</h3>
                 <p className="truncate text-xs text-kraveo-ink3">{d.runnerCode ? `Runner ${d.runnerCode}` : 'No runner code'}{d.phone ? ` · ${d.phone}` : ''}</p>
-                <div className="mt-2 flex flex-wrap gap-1.5"><DutyPill status={d.dutyStatus} /><ApprovalPill status={d.approvalStatus} /></div>
+                <div className="mt-2 flex flex-wrap gap-1.5"><DutyPill status={d.dutyStatus} /><ApprovalPill status={d.approvalStatus} />{isRemoved(d) && <RemovedPill />}</div>
               </div>
               <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-kraveo-ink3" aria-hidden="true" />
             </div>
@@ -146,22 +177,36 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, orders = 
 
       <Drawer
         open={Boolean(selectedDriver)}
-        onClose={() => setSelectedId(null)}
+        onClose={() => { setSelectedId(null); setAction(null); }}
         title={selectedDriver?.name ?? 'Runner'}
         subtitle={selectedDriver?.runnerCode ? `Runner code ${selectedDriver.runnerCode}` : 'Runner details'}
         icon={Bike}
-        footer={<button onClick={() => setSelectedId(null)} className="k-btn-ghost mb-1 w-full">Close</button>}
+        focusFirstField={false}
+        footer={(
+          <div className="flex flex-wrap gap-2 pb-4">
+            {selectedDriver && !isRemoved(selectedDriver) && selectedDriver.approvalStatus === 'APPROVED' && <button type="button" className="k-btn-ghost min-w-[7rem] flex-1" onClick={() => setAction('suspend')}>Suspend</button>}
+            {selectedDriver && !isRemoved(selectedDriver) && selectedDriver.approvalStatus === 'SUSPENDED' && (
+              <button type="button" className="k-btn-primary min-w-[7rem] flex-1" disabled={reactivating} aria-busy={reactivating} onClick={() => void reactivate(selectedDriver)}>{reactivating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}Reactivate</button>
+            )}
+            {selectedDriver && isRemoved(selectedDriver) && <button type="button" className="k-btn-primary min-w-[7rem] flex-1" onClick={() => setAction('restore')}>Restore</button>}
+            {selectedDriver && !isRemoved(selectedDriver) && selectedDriver.userId && <button type="button" className="k-btn-ghost min-w-[7rem] flex-1" onClick={() => setAction('reset')}>Reset password</button>}
+            {selectedDriver && !isRemoved(selectedDriver) && <button type="button" className="k-btn-danger min-w-[7rem] flex-1" onClick={() => setAction('remove')}>Remove</button>}
+            <button type="button" onClick={() => { setSelectedId(null); setAction(null); }} className="k-btn-ghost min-w-[7rem] flex-1">Close</button>
+          </div>
+        )}
       >
         {selectedDriver && (
           <div className="space-y-3">
             <div className="flex items-center gap-4 pb-2">
               <Avatar name={selectedDriver.name} imageUrl={selectedDriver.avatarUrl} size="lg" />
-              <div><DutyPill status={selectedDriver.dutyStatus} /><p className="mt-2 text-xs text-kraveo-ink3">Joined {new Date(selectedDriver.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</p></div>
+              <div><div className="flex flex-wrap gap-1.5"><DutyPill status={selectedDriver.dutyStatus} />{isRemoved(selectedDriver) && <RemovedPill />}</div><p className="mt-2 text-xs text-kraveo-ink3">Joined {new Date(selectedDriver.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</p></div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <DetailRow label="Trips today">{tripsFor(selectedDriver)}</DetailRow>
             </div>
+            {isRemoved(selectedDriver) && <p role="status" className="rounded-k-md border border-kraveo-danger/30 bg-kraveo-danger/10 p-3 text-sm text-kraveo-ink">This rider was removed. They cannot sign in. Their past deliveries and payout records stay, and their phone number stays reserved. Restore them to let them sign in again.</p>}
             {selectedDriver.approvalStatus && selectedDriver.approvalStatus !== 'APPROVED' && <DetailRow label="Approval"><ApprovalPill status={selectedDriver.approvalStatus} /></DetailRow>}
+            {selectedDriver.lastLoginAt && <DetailRow label="Last sign-in">{new Date(selectedDriver.lastLoginAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</DetailRow>}
             {selectedDriver.studentRegNo && <DetailRow label="Student reg no.">{dash(selectedDriver.studentRegNo)}</DetailRow>}
             <DetailRow label="Phone">
               {selectedDriver.phone ? <a className="inline-flex items-center gap-1.5 text-kraveo-g300 hover:underline" href={`tel:${selectedDriver.phone}`}><Phone className="h-3.5 w-3.5" aria-hidden="true" />{selectedDriver.phone}</a> : '-'}
@@ -172,6 +217,9 @@ export const DriverManager: React.FC<DriverManagerProps> = ({ drivers, orders = 
             <DetailRow label="Vehicle">{selectedDriver.vehicleType}{selectedDriver.vehicleRegNo !== 'Not registered' ? ` (${selectedDriver.vehicleRegNo})` : ''}</DetailRow>
             <DetailRow label="Payout UPI"><span className="font-mono">{dash(selectedDriver.upiId)}</span></DetailRow>
           </div>
+        )}
+        {selectedDriver && (
+          <RiderActionDialogs action={action} rider={selectedDriver} onClose={() => setAction(null)} onDone={() => (onChanged ?? onCreated)?.()} onAuthError={(e) => onAuthError?.(e)} onOpenOrder={onOpenOrder} />
         )}
       </Drawer>
       <AddPartnerDrawer open={showAdd} kind="DRIVER" onClose={() => setShowAdd(false)} onCreated={() => onCreated?.()} />

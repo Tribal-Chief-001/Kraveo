@@ -13,6 +13,8 @@ import { CatalogPanel } from './components/CatalogPanel';
 import { CategoriesPanel } from './components/CategoriesPanel';
 import { BannersPanel } from './components/BannersPanel';
 import { SettingsPanel } from './components/SettingsPanel';
+import { ActivityPanel } from './components/ActivityPanel';
+import type { OwnerPatch } from './components/OwnerLoginSection';
 import { FinancePanel } from './components/FinancePanel';
 import type { PendingCounts, VendorCommission } from './lib/catalogParse';
 import { AdminProfile, AttentionEntry, DriverPartner, DriverPin, Order, OrderStatus, TabType, Vendor, normalizeDriverPin, normalizeOrderPartial } from './types';
@@ -535,7 +537,9 @@ export const App: React.FC = () => {
     } catch (error) {
       // Put back only this restaurant's switch: a pin saved meanwhile must not be undone.
       setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, isAcceptingOrders: wasAccepting } : vendor));
-      handleAuthFailure(error);
+      // Docs/28: opening a restaurant without an owner login (NO_OWNER) or a removed one (VENDOR_REMOVED) is a plain refusal, not a failure.
+      if (error instanceof ApiError && error.status === 409 && (error.code === 'NO_OWNER' || error.code === 'VENDOR_REMOVED')) toast.error('Cannot open this restaurant', error.message);
+      else handleAuthFailure(error);
     } finally {
       setVendorBusy(vendorId, false);
     }
@@ -570,6 +574,25 @@ export const App: React.FC = () => {
       : vendor)));
     void fetchBackendData();
   }, [fetchBackendData]);
+
+  // Docs/28: a restaurant was suspended / reinstated / removed / restored. Show the fresh admin view at once, then reload the list.
+  const handleVendorChanged = useCallback((fresh: Vendor) => {
+    setVendors((current) => (fresh.removedAt ? current.filter((vendor) => vendor.id !== fresh.id) : current.map((vendor) => (vendor.id === fresh.id
+      ? { ...vendor, ...fresh, activeOrdersCount: vendor.activeOrdersCount, menuItems: fresh.menuItems ?? vendor.menuItems }
+      : vendor))));
+    void fetchBackendData();
+  }, [fetchBackendData]);
+
+  // Docs/28: the owner login (or the open flag) of a restaurant changed in the Edit drawer.
+  const handleOwnerChanged = useCallback((vendorId: string, patch: OwnerPatch) => {
+    setVendors((current) => current.map((vendor) => (vendor.id === vendorId
+      ? {
+        ...vendor,
+        ...(patch.owner !== undefined ? { owner: patch.owner, userId: patch.owner?.id } : {}),
+        ...(patch.isAcceptingOrders !== undefined ? { isAcceptingOrders: patch.isAcceptingOrders } : {}),
+      }
+      : vendor)));
+  }, []);
 
   const handleVendorCommissionSaved = useCallback((vendorId: string, commission: VendorCommission) => {
     setVendors((current) => current.map((vendor) => vendor.id === vendorId ? { ...vendor, commissionType: commission.type, commissionValue: commission.value } : vendor));
@@ -685,9 +708,10 @@ export const App: React.FC = () => {
               />
             )}
             {activeTab === 'applications' && <ApplicationsPanel refreshKey={applicationsKey} query={searchQuery} onChanged={fetchBackendData} onAuthError={handleSessionError} onLocationSaved={handleVendorLocationSaved} />}
-            {activeTab === 'vendors' && <VendorManager vendors={vendors} orders={orders} busyVendorIds={busyVendorIds} onToggleVendor={handleToggleVendor} onLocationSaved={handleVendorLocationSaved} onCommissionSaved={handleVendorCommissionSaved} onProfileSaved={handleVendorProfileSaved} onAuthError={handleSessionError} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
-            {activeTab === 'drivers' && <DriverManager drivers={driverPartners} orders={orders} now={now} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
-            {activeTab === 'customers' && <CustomersPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} />}
+            {activeTab === 'vendors' && <VendorManager vendors={vendors} orders={orders} busyVendorIds={busyVendorIds} onToggleVendor={handleToggleVendor} onLocationSaved={handleVendorLocationSaved} onCommissionSaved={handleVendorCommissionSaved} onProfileSaved={handleVendorProfileSaved} onAuthError={handleSessionError} onVendorChanged={handleVendorChanged} onOwnerChanged={handleOwnerChanged} onOpenOrder={openOrder} onCreated={fetchBackendData} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'drivers' && <DriverManager drivers={driverPartners} orders={orders} now={now} onCreated={fetchBackendData} onChanged={fetchBackendData} onAuthError={handleSessionError} onOpenOrder={openOrder} loading={isLoading} query={searchQuery} onClearQuery={clearQuery} />}
+            {activeTab === 'customers' && <CustomersPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} onOpenOrder={openOrder} />}
+            {activeTab === 'audit' && <ActivityPanel onAuthError={handleSessionError} onOpenOrder={openOrder} onNavigate={handleSelectTab} />}
             {activeTab === 'categories' && <CategoriesPanel query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} onChanged={fetchBackendData} />}
             {activeTab === 'banners' && <BannersPanel onAuthError={handleSessionError} />}
             {activeTab === 'catalog' && <CatalogPanel vendors={vendors} query={searchQuery} onClearQuery={clearQuery} onAuthError={handleSessionError} pendingCounts={pendingDishes} onPendingChanged={refreshPendingDishes} />}

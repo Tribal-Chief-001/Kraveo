@@ -45,6 +45,11 @@ import { MenuOrderInput, MenuOrderResult, parseMenuOrderResult } from '../lib/me
 import type { CommissionType } from '../lib/pricing';
 import type { DropPointInfo } from '../lib/campus';
 import type { SavedPin } from '../lib/vendorLocation';
+import {
+  CustomerStatusFilter, Outcome, OwnerResult, RiderImpact, VendorImpact,
+  parseCustomerDetail, parseCustomerList, parseOutcome, parseOwner, parseOwnerResult, parseRiderImpact, parseVendorImpact,
+} from '../lib/accountParse';
+import { AuditAction, AuditFilters, AuditPage, auditQuery, parseAuditActions, parseAuditPage } from '../lib/auditParse';
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? 'https://api.kraveo.site' : 'http://localhost:5000');
 export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (import.meta.env.PROD ? 'https://api.kraveo.site' : 'http://localhost:5000');
@@ -529,10 +534,20 @@ export const apiService = {
   },
 
   async setPartnerStatus(kind: PartnerKind, id: string, status: ApprovalStatus, reason?: string): Promise<Application> {
-    return request<Application>(`/api/admin/partners/${kind.toLowerCase()}/${encodeURIComponent(id)}/status`, {
+    return (await apiService.decidePartner(kind, id, status, reason)).application;
+  },
+
+  /**
+   * Same call as setPartnerStatus, but keeps what the server says besides the row (Docs/28): `changed`, the orders it cancelled
+   * (`openOrders: 'CANCEL'`, restaurants) or handed back to the pool (`handover: 'RELEASE'`, riders). Suspending with running orders
+   * is a 409 (HAS_OPEN_ORDERS / HAS_ACTIVE_DELIVERY / ORDER_IN_DELIVERY / FOOD_WITH_RIDER) unless one of those two is sent.
+   */
+  async decidePartner(kind: PartnerKind, id: string, status: ApprovalStatus, reason?: string, extra: { openOrders?: 'CANCEL'; handover?: 'RELEASE' } = {}): Promise<{ application: Application; outcome: Outcome }> {
+    const body = await requestFull<any>(`/api/admin/partners/${kind.toLowerCase()}/${encodeURIComponent(id)}/status`, {
       method: 'POST',
-      body: JSON.stringify({ status, ...(reason ? { reason } : {}) }),
+      body: JSON.stringify({ status, ...(reason ? { reason } : {}), ...(status === 'SUSPENDED' && kind === 'VENDOR' && extra.openOrders ? { openOrders: extra.openOrders } : {}), ...(status === 'SUSPENDED' && kind === 'DRIVER' && extra.handover ? { handover: extra.handover } : {}) }),
     });
+    return { application: (body?.data ?? body) as Application, outcome: parseOutcome(body) };
   },
 
   async resetPartnerPassword(userId: string, password: string): Promise<void> {
@@ -544,18 +559,154 @@ export const apiService = {
     return { profileId: body.profileId ?? null };
   },
 
-  // ── Customers ──
-  async fetchCustomers(search: string, cursor?: string | null): Promise<{ total: number; nextCursor: string | null; data: CustomerRow[] }> {
+  // ── Customers (Docs/28 section 2). Response parsing lives in lib/accountParse.ts ──
+  async fetchCustomers(search: string, cursor?: string | null, opts: { status?: CustomerStatusFilter } = {}) {
     const params = new URLSearchParams({ limit: '30' });
+    if (opts.status) params.set('status', opts.status);
+    // Accounts the customer deleted themselves are listed only under "Removed".
+    if (opts.status === 'REMOVED') params.set('includeDeleted', '1');
     if (search.trim()) params.set('search', search.trim());
     if (cursor) params.set('cursor', cursor);
-    const body = await requestFull<{ total: number; nextCursor: string | null; data: CustomerRow[] }>(`/api/admin/customers?${params.toString()}`);
-    return { total: body.total ?? 0, nextCursor: body.nextCursor ?? null, data: Array.isArray(body.data) ? body.data : [] };
+    const parsed = parseCustomerList(await requestFull<any>(`/api/admin/customers?${params.toString()}`));
+    if (!parsed) throw unexpected('customer list');
+    return parsed;
   },
 
   async fetchCustomer(id: string): Promise<CustomerDetail> {
-    return request<CustomerDetail>(`/api/admin/customers/${encodeURIComponent(id)}`);
+    const detail = parseCustomerDetail((await requestFull<any>(`/api/admin/customers/${encodeURIComponent(id)}`))?.data);
+    if (!detail) throw unexpected('customer');
+    return detail;
   },
+
+  /** suspend / remove. `openOrders: 'CANCEL'` cancels the running orders (with refunds) in the same call; it is never sent unless the admin chose it. */
+  async blockCustomer(id: string, action: 'suspend' | 'remove', input: { reason: string; confirmName?: string; scrub?: boolean; openOrders?: 'CANCEL' }): Promise<{ detail: CustomerDetail; outcome: Outcome }> {
+    const body = await requestFull<any>(`/api/admin/customers/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      body: json({
+        reason: input.reason,
+        ...(action === 'remove' ? { confirmName: input.confirmName ?? '', scrub: input.scrub === true } : {}),
+        ...(input.openOrders ? { openOrders: input.openOrders } : {}),
+      }),
+    });
+    const detail = parseCustomerDetail(body?.data);
+    if (!detail) throw unexpected('customer');
+    return { detail, outcome: parseOutcome(body) };
+  },
+
+  async restoreCustomer(id: string, note?: string): Promise<{ detail: CustomerDetail; outcome: Outcome }> {
+    const body = await requestFull<any>(`/api/admin/customers/${encodeURIComponent(id)}/restore`, { method: 'POST', body: json(note ? { note } : {}) });
+    const detail = parseCustomerDetail(body?.data);
+    if (!detail) throw unexpected('customer');
+    return { detail, outcome: parseOutcome(body) };
+  },
+
+  // ── Riders (Docs/28 section 3) ──
+  async fetchRiderImpact(id: string): Promise<RiderImpact> {
+    const impact = parseRiderImpact((await requestFull<any>(`/api/admin/drivers/${encodeURIComponent(id)}/impact`))?.data);
+    if (!impact) throw unexpected('rider impact');
+    return impact;
+  },
+
+  async removeRider(id: string, input: { reason: string; confirmName: string; handover?: 'RELEASE' }): Promise<{ outcome: Outcome }> {
+    const body = await requestFull<any>(`/api/admin/drivers/${encodeURIComponent(id)}/remove`, {
+      method: 'POST', body: json({ reason: input.reason, confirmName: input.confirmName, ...(input.handover ? { handover: input.handover } : {}) }),
+    });
+    return { outcome: parseOutcome(body) };
+  },
+
+  async restoreRider(id: string, note?: string): Promise<{ outcome: Outcome }> {
+    return { outcome: parseOutcome(await requestFull<any>(`/api/admin/drivers/${encodeURIComponent(id)}/restore`, { method: 'POST', body: json(note ? { note } : {}) })) };
+  },
+
+  // ── Restaurants (Docs/28 section 4) ──
+  /** Removed restaurants only (the normal list hides them). */
+  async fetchRemovedVendors(): Promise<Vendor[]> {
+    const data = await request<any[]>('/api/vendors?includeRemoved=1');
+    return (Array.isArray(data) ? data : []).map(normalizeVendor).filter((v) => Boolean(v.removedAt));
+  },
+
+  async fetchVendorImpact(id: string): Promise<VendorImpact> {
+    const impact = parseVendorImpact((await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(id)}/impact`))?.data);
+    if (!impact) throw unexpected('restaurant impact');
+    return impact;
+  },
+
+  /** suspend / remove. `openOrders: 'CANCEL'` and `disableOwner` are sent only when asked for. */
+  async blockVendor(id: string, action: 'suspend' | 'remove', input: { reason: string; confirmName?: string; openOrders?: 'CANCEL'; disableOwner?: boolean }): Promise<{ vendor: Vendor; outcome: Outcome; ownerDisabled: boolean }> {
+    const body = await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      body: json({
+        reason: input.reason,
+        ...(action === 'remove' ? { confirmName: input.confirmName ?? '', disableOwner: input.disableOwner !== false } : {}),
+        ...(input.openOrders ? { openOrders: input.openOrders } : {}),
+      }),
+    });
+    if (!body?.data?.id) throw unexpected('restaurant');
+    return { vendor: normalizeVendor(body.data), outcome: parseOutcome(body), ownerDisabled: body.ownerDisabled === true };
+  },
+
+  /** reinstate (SUSPENDED -> APPROVED, stays closed) or restore (removed -> back, stays suspended and closed). */
+  async reviveVendor(id: string, action: 'reinstate' | 'restore'): Promise<{ vendor: Vendor; outcome: Outcome; ownerRestored: boolean }> {
+    const body = await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: '{}' });
+    if (!body?.data?.id) throw unexpected('restaurant');
+    return { vendor: normalizeVendor(body.data), outcome: parseOutcome(body), ownerRestored: body.ownerRestored === true };
+  },
+
+  // ── Owner login of a restaurant (Docs/28 section 5). A password comes back in the answer of a POST only, once. ──
+  async fetchOwner(vendorId: string) {
+    const body = await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/owner`);
+    return parseOwner(body?.owner);
+  },
+
+  /** Creates a login (`name` + `phone`, `password` optional: the server makes one) or attaches a detached one (`existingUserId`). */
+  async createOwner(vendorId: string, input: { name: string; phone: string; password?: string } | { existingUserId: string; takePayoutAccountFrom?: string }): Promise<OwnerResult> {
+    return parseOwnerResult(await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/owner`, { method: 'POST', body: json(input) }));
+  },
+
+  async patchOwner(vendorId: string, changes: { name?: string; phone?: string }): Promise<OwnerResult> {
+    return parseOwnerResult(await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/owner`, { method: 'PATCH', body: json(changes) }));
+  },
+
+  /** Empty body = the server generates the password and returns it once. */
+  async resetOwnerPassword(vendorId: string): Promise<OwnerResult> {
+    return parseOwnerResult(await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/owner/reset-password`, { method: 'POST', body: '{}' }));
+  },
+
+  async disableOwner(vendorId: string, input: { reason: string; closeRestaurant: boolean }): Promise<OwnerResult> {
+    return parseOwnerResult(await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/owner/disable`, { method: 'POST', body: json(input) }));
+  },
+
+  async enableOwner(vendorId: string): Promise<OwnerResult> {
+    return parseOwnerResult(await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/owner/enable`, { method: 'POST', body: '{}' }));
+  },
+
+  /** detach (the login stays, paused) or remove (the login is removed too, needs the typed name). */
+  async detachOwner(vendorId: string, action: 'detach' | 'remove', input: { reason: string; closeRestaurant: boolean; confirmName?: string; openOrders?: 'CANCEL' }): Promise<OwnerResult> {
+    return parseOwnerResult(await requestFull<any>(`/api/admin/vendors/${encodeURIComponent(vendorId)}/owner/${action}`, {
+      method: 'POST',
+      body: json({ reason: input.reason, closeRestaurant: input.closeRestaurant, ...(action === 'remove' ? { confirmName: input.confirmName ?? '' } : {}), ...(input.openOrders ? { openOrders: input.openOrders } : {}) }),
+    }));
+  },
+
+  // ── Activity log (Docs/28 section 6, read only) ──
+  async fetchAuditLog(filters: AuditFilters, cursor?: string | null, limit = 50): Promise<AuditPage> {
+    const parsed = parseAuditPage(await requestFull<any>(`/api/admin/audit-log?${auditQuery(filters, { cursor, limit })}`));
+    if (!parsed) throw unexpected('activity log');
+    return parsed;
+  },
+
+  async fetchAuditActions(): Promise<AuditAction[]> {
+    const parsed = parseAuditActions(await requestFull<any>('/api/admin/audit-log/actions'));
+    if (!parsed) throw unexpected('activity actions');
+    return parsed;
+  },
+
+  /** The CSV (at most 5000 rows, 366 days; without dates the server uses the last 31 days). Sent with the admin's token. */
+  downloadAuditCsv(filters: AuditFilters) {
+    const query = auditQuery(filters);
+    return download(`/api/admin/audit-log/export.csv${query ? `?${query}` : ''}`);
+  },
+
   // ── Catalog, pricing and settings (Docs/21 section 4). Response parsing lives in lib/catalogParse.ts ──
   async fetchCatalog(filter: { status?: string; vendorId?: string; q?: string; page?: number; pageSize?: number }): Promise<CatalogPage> {
     const params = new URLSearchParams();

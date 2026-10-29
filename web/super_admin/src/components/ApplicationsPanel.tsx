@@ -1,13 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bike, Check, ClipboardCheck, Copy, KeyRound, Loader2, MapPin, Phone, RefreshCw, Store, X } from 'lucide-react';
+import { Bike, Check, ClipboardCheck, KeyRound, Loader2, MapPin, Phone, RefreshCw, Store, X } from 'lucide-react';
 import { Application, ApplicationCounts, ApprovalStatus, PartnerKind } from '../types';
 import type { SavedPin } from '../lib/vendorLocation';
 import { VendorLocationEditor } from './VendorLocationEditor';
 import { ApiError, apiService } from '../services/api';
-import { copyText, generatePassword } from '../lib/credentials';
+import { generatePassword } from '../lib/credentials';
+import { Outcome, blockFromError, outcomeNeedsNotice } from '../lib/accountParse';
 import { decisionToast } from '../lib/adminMessages';
 import { timeAgo } from '../lib/tokens';
 import { vendorHasRealPin } from '../lib/campus';
+import { ReasonDialog } from './ReasonDialog';
+import { CredentialDialog, Credentials } from './CredentialDialog';
+import { OutcomeDialog } from './OutcomeDialog';
 import { ApprovalPill } from './ui/ApprovalPill';
 import { Avatar } from './ui/Avatar';
 import { Drawer } from './ui/Drawer';
@@ -65,6 +69,9 @@ export const ApplicationsPanel: React.FC<Props> = ({ refreshKey, query = '', onC
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
+  // Shown once after a password reset, then dropped.
+  const [credentials, setCredentials] = useState<Credentials | null>(null);
+  const [notice, setNotice] = useState<{ title: string; headline: string; outcome: Outcome; again?: () => Promise<Outcome> } | null>(null);
 
   const load = useCallback(async () => {
     setError('');
@@ -82,15 +89,23 @@ export const ApplicationsPanel: React.FC<Props> = ({ refreshKey, query = '', onC
 
   useEffect(() => { setLoading(true); load(); }, [load, refreshKey]);
 
+  /** Sends the decision. Throws when the server refuses, so a dialog can show why; the caller handles the toast on failure. */
+  const runDecision = async (app: Application, next: ApprovalStatus, reason?: string, extra: { openOrders?: 'CANCEL'; handover?: 'RELEASE' } = {}) => {
+    const { outcome } = await apiService.decidePartner(app.kind, app.id, next, reason, extra);
+    const who = app.kind === 'VENDOR' ? app.vendor?.name ?? app.name : app.name;
+    const [toastTitle, toastText] = decisionToast(app, next, who);
+    toast.success(toastTitle, toastText);
+    // A restaurant suspended with "cancel the orders" cancels at most 25 per request: Continue repeats the same call for the next batch.
+    const again = extra.openOrders ? async () => (await apiService.decidePartner(app.kind, app.id, next, reason, extra)).outcome : undefined;
+    if (outcomeNeedsNotice(outcome)) setNotice({ title: 'What happened to the orders', headline: `${who} is suspended.`, outcome, again });
+    void load();
+    onChanged();
+  };
+
   const decide = async (app: Application, next: ApprovalStatus, reason?: string) => {
     setBusyId(app.id);
     try {
-      await apiService.setPartnerStatus(app.kind, app.id, next, reason);
-      const who = app.kind === 'VENDOR' ? app.vendor?.name ?? app.name : app.name;
-      const [toastTitle, toastText] = decisionToast(app, next, who);
-      toast.success(toastTitle, toastText);
-      await load();
-      onChanged();
+      await runDecision(app, next, reason);
     } catch (e) {
       onAuthError(e);
       toast.error('Could not update', e instanceof Error ? e.message : 'Please try again.');
@@ -210,16 +225,19 @@ export const ApplicationsPanel: React.FC<Props> = ({ refreshKey, query = '', onC
                     <button className="k-btn-danger flex-1" disabled={busy} onClick={() => setDialog({ type: 'reason', app: a, status: 'REJECTED' })}><X className="h-4 w-4" aria-hidden="true" />Reject</button>
                   </>
                 )}
-                {a.status === 'REJECTED' && (
+                {(a.accountStatus === 'REMOVED' || a.removedAt) && (
+                  <p className="w-full rounded-k-sm bg-kraveo-surface2 px-3 py-2 text-xs text-kraveo-ink2">This {isVendor ? 'restaurant' : 'rider'} was removed by an admin. Restore it from the {isVendor ? 'Vendors' : 'Drivers'} tab first.</p>
+                )}
+                {a.status === 'REJECTED' && !(a.accountStatus === 'REMOVED' || a.removedAt) && (
                   <button className="k-btn-primary flex-1" disabled={busy} onClick={() => decide(a, 'APPROVED')}><Check className="h-4 w-4" aria-hidden="true" />Approve anyway</button>
                 )}
-                {a.status === 'SUSPENDED' && (
+                {a.status === 'SUSPENDED' && !(a.accountStatus === 'REMOVED' || a.removedAt) && (
                   <button className="k-btn-primary flex-1" disabled={busy} onClick={() => decide(a, 'APPROVED')}><RefreshCw className="h-4 w-4" aria-hidden="true" />Reactivate</button>
                 )}
                 {a.status === 'APPROVED' && (
                   <button className="k-btn-danger flex-1" disabled={busy} onClick={() => setDialog({ type: 'reason', app: a, status: 'SUSPENDED' })}>Suspend</button>
                 )}
-                {a.userId && a.status !== 'PENDING' && (
+                {a.userId && a.status !== 'PENDING' && a.accountStatus !== 'REMOVED' && (
                   <button className="k-btn-ghost" onClick={() => setDialog({ type: 'password', app: a })}><KeyRound className="h-4 w-4" aria-hidden="true" />Reset password</button>
                 )}
               </div>
@@ -228,93 +246,74 @@ export const ApplicationsPanel: React.FC<Props> = ({ refreshKey, query = '', onC
         })}
       </div>
 
-      <ReasonDrawer
-        dialog={dialog?.type === 'reason' ? dialog : null}
-        onClose={() => setDialog(null)}
-        onSubmit={async (reason) => {
-          const d = dialog;
-          if (d?.type !== 'reason') return;
-          setDialog(null);
-          await decide(d.app, d.status, reason);
-        }}
-      />
+      {dialog?.type === 'reason' && (() => {
+        const d = dialog;
+        const isReject = d.status === 'REJECTED';
+        const isVendor = d.app.kind === 'VENDOR';
+        const who = isVendor ? d.app.vendor?.name ?? d.app.name : d.app.name;
+        return (
+          <ReasonDialog
+            title={isReject ? 'Reject application' : `Suspend ${who}?`}
+            subtitle={isReject ? who : undefined}
+            intro={<p>{isReject ? 'They will see this in the app and can fix their details and apply again.' : isVendor ? 'The restaurant is hidden from customers and closed, and its owner is signed out. Orders in progress are never cancelled unless you choose that on the next screen.' : 'They will see this in the app. They are signed out and go offline at once. Deliveries in hand are never dropped unless you choose that on the next screen.'}</p>}
+            quickReasons={isReject ? REJECT_REASONS : SUSPEND_REASONS}
+            confirmLabel={isReject ? 'Reject' : 'Suspend'}
+            danger
+            toBlock={isReject ? undefined : (e) => blockFromError(e, isVendor ? 'vendor' : 'rider', 'suspend')}
+            onClose={() => setDialog(null)}
+            onAuthError={onAuthError}
+            onSubmit={async (v) => {
+              await runDecision(d.app, d.status, v.reason, v.resolve ? (isVendor ? { openOrders: 'CANCEL' } : { handover: 'RELEASE' }) : {});
+              setDialog(null);
+            }}
+          />
+        );
+      })()}
       <PasswordDrawer
         app={dialog?.type === 'password' ? dialog.app : null}
         onClose={() => setDialog(null)}
         onAuthError={onAuthError}
+        onSaved={(app, password) => {
+          setDialog(null);
+          setCredentials({
+            heading: `Kraveo ${app.kind === 'VENDOR' ? 'Restaurant Partner' : 'Delivery Partner'} login`,
+            who: `${app.name}${app.phone ? ` · ${app.phone}` : ''}`,
+            phone: app.phone,
+            password,
+            note: 'The new password is active now. They are signed out everywhere and any lockout on this number is cleared.',
+          });
+        }}
       />
+      <CredentialDialog credentials={credentials} onDone={() => setCredentials(null)} />
+      {notice && <OutcomeDialog title={notice.title} headline={notice.headline} outcome={notice.outcome} onClose={() => setNotice(null)} onContinue={notice.again} onAuthError={onAuthError} />}
     </div>
   );
 };
 
-// ─────────────────────────── Reason (reject / suspend) ───────────────────────────
-const ReasonDrawer: React.FC<{
-  dialog: Extract<Dialog, { type: 'reason' }> | null;
-  onClose: () => void;
-  onSubmit: (reason: string) => void | Promise<void>;
-}> = ({ dialog, onClose, onSubmit }) => {
-  const [reason, setReason] = useState('');
-  const [touched, setTouched] = useState(false);
-  useEffect(() => { if (dialog) { setReason(''); setTouched(false); } }, [dialog]);
-  const open = Boolean(dialog);
-  const isReject = dialog?.status === 'REJECTED';
-  const chips = isReject ? REJECT_REASONS : SUSPEND_REASONS;
-  const tooShort = reason.trim().length < 3;
-  const name = dialog ? (dialog.app.kind === 'VENDOR' ? dialog.app.vendor?.name : dialog.app.name) : '';
-
-  return (
-    <Drawer
-      open={open}
-      onClose={onClose}
-      title={isReject ? 'Reject application' : 'Suspend partner'}
-      subtitle={name}
-      icon={X}
-      footer={
-        <div className="flex gap-3">
-          <button type="button" className="k-btn-ghost flex-1" onClick={onClose}>Cancel</button>
-          <button type="submit" form="reason-form" className="k-btn-danger flex-1">{isReject ? 'Reject' : 'Suspend'}</button>
-        </div>
-      }
-    >
-      <form id="reason-form" noValidate className="space-y-4" onSubmit={(e) => { e.preventDefault(); setTouched(true); if (!tooShort) onSubmit(reason.trim()); }}>
-        <p className="text-sm text-kraveo-ink2">{isReject ? 'They will see this in the app and can fix their details and apply again.' : 'They will see this in the app. Their orders and online status stop immediately.'}</p>
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Quick reasons">
-          {chips.map((c) => <button key={c} type="button" className="k-chip" aria-pressed={reason === c} onClick={() => setReason(c)}>{c}</button>)}
-        </div>
-        <Field label="Reason" htmlFor="decision-reason" required error={touched && tooShort ? 'Give a short reason (at least 3 characters).' : undefined}>
-          <textarea id="decision-reason" rows={4} maxLength={200} className="k-input !min-h-[110px] py-3" value={reason} onChange={(e) => setReason(e.target.value)} aria-invalid={touched && tooShort} />
-        </Field>
-      </form>
-    </Drawer>
-  );
-};
-
 // ─────────────────────────── Reset password ───────────────────────────
-const PasswordDrawer: React.FC<{ app: Application | null; onClose: () => void; onAuthError: (e: unknown) => void }> = ({ app, onClose, onAuthError }) => {
+const PasswordDrawer: React.FC<{ app: Application | null; onClose: () => void; onAuthError: (e: unknown) => void; onSaved: (app: Application, password: string) => void }> = ({ app, onClose, onAuthError, onSaved }) => {
   const toast = useToast();
   const [password, setPassword] = useState('');
   const [saving, setSaving] = useState(false);
-  const [done, setDone] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => { if (app) { setPassword(generatePassword()); setSaving(false); setDone(false); setCopied(false); setError(''); } }, [app]);
+  useEffect(() => { if (app) { setPassword(generatePassword()); setSaving(false); setError(''); } else setPassword(''); }, [app]);
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!app?.userId) return;
+    if (!app?.userId || saving) return;
     if (password.length < 8) { setError('At least 8 characters.'); return; }
     setSaving(true); setError('');
     try {
       await apiService.resetPartnerPassword(app.userId, password);
-      setDone(true);
       toast.success('Password changed', 'Any lockout on this number is cleared too.');
+      // The password moves to the "show once" dialog and is dropped from this form.
+      onSaved(app, password);
+      setPassword('');
     } catch (err) {
       onAuthError(err);
       setError(err instanceof ApiError || err instanceof Error ? err.message : 'Could not reset the password.');
     } finally { setSaving(false); }
   };
-
-  const text = app ? `Kraveo ${app.kind === 'VENDOR' ? 'Restaurant Partner' : 'Delivery Partner'} login\nPhone: ${(app.phone ?? '').replace(/\D/g, '').slice(-10)}\nNew password: ${password}` : '';
 
   return (
     <Drawer
@@ -323,31 +322,23 @@ const PasswordDrawer: React.FC<{ app: Application | null; onClose: () => void; o
       title="Reset password"
       subtitle={app ? `${app.name} · ${app.phone ?? ''}` : ''}
       icon={KeyRound}
-      footer={done ? <button className="k-btn-primary w-full" onClick={onClose}>Done</button> : (
+      footer={(
         <div className="flex gap-3">
           <button type="button" className="k-btn-ghost flex-1" onClick={onClose} disabled={saving}>Cancel</button>
           <button type="submit" form="reset-form" className="k-btn-primary flex-1" disabled={saving} aria-busy={saving}>{saving ? 'Saving…' : 'Set new password'}</button>
         </div>
       )}
     >
-      {done ? (
-        <div className="space-y-4">
-          <div className="rounded-k-md border border-kraveo-g400/30 bg-kraveo-g400/10 p-4 text-sm text-kraveo-ink">The new password is active. Send it to them; it is not shown again.</div>
-          <div className="k-inset p-4 font-mono"><p className="k-label font-body">New password</p><p className="select-all text-base font-bold text-kraveo-ink">{password}</p></div>
-          <button className="k-btn-accent w-full" onClick={async () => setCopied(await copyText(text))}>{copied ? <><Check className="h-4 w-4" aria-hidden="true" />Copied</> : <><Copy className="h-4 w-4" aria-hidden="true" />Copy login details</>}</button>
-        </div>
-      ) : (
-        <form id="reset-form" noValidate onSubmit={save} className="space-y-4">
-          {error && <div role="alert" className="rounded-k-md border border-kraveo-danger/30 bg-kraveo-danger/10 px-4 py-3 text-sm text-kraveo-ink">{error}</div>}
-          <p className="text-sm text-kraveo-ink2">There is no “forgot password” by SMS, so a partner who forgets theirs asks you for a new one.</p>
-          <Field label="New password" htmlFor="new-pass" required>
-            <div className="flex gap-2">
-              <input id="new-pass" className="k-input font-mono" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="off" />
-              <button type="button" className="k-btn-ghost shrink-0" onClick={() => setPassword(generatePassword())}><RefreshCw className="h-4 w-4" aria-hidden="true" />Generate</button>
-            </div>
-          </Field>
-        </form>
-      )}
+      <form id="reset-form" noValidate onSubmit={save} className="space-y-4">
+        {error && <div role="alert" className="rounded-k-md border border-kraveo-danger/30 bg-kraveo-danger/10 px-4 py-3 text-sm text-kraveo-ink">{error}</div>}
+        <p className="text-sm text-kraveo-ink2">There is no “forgot password” by SMS, so a partner who forgets theirs asks you for a new one.</p>
+        <Field label="New password" htmlFor="new-pass" required>
+          <div className="flex gap-2">
+            <input id="new-pass" className="k-input font-mono" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="off" />
+            <button type="button" className="k-btn-ghost shrink-0" onClick={() => setPassword(generatePassword())}><RefreshCw className="h-4 w-4" aria-hidden="true" />Generate</button>
+          </div>
+        </Field>
+      </form>
     </Drawer>
   );
 };

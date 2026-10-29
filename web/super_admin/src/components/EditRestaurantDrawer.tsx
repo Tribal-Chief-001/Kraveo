@@ -8,6 +8,7 @@ import { ProfileField, PROFILE_FIELDS, changedFieldsText, formFromVendor, profil
 import { errorText, fieldOf } from '../lib/errors';
 import { CategoryMultiSelect } from './CategoryMultiSelect';
 import { ImageUploadField } from './ImageUploadField';
+import { OwnerLoginSection, OwnerPatch } from './OwnerLoginSection';
 import { Drawer } from './ui/Drawer';
 import { Field } from './ui/Field';
 import { useToast } from './ui/Toast';
@@ -19,12 +20,15 @@ interface Props {
   /** The server accepted the change; `vendor` is the fresh admin view. The list should refresh. */
   onSaved: (vendor: Vendor) => void;
   onAuthError?: (error: unknown) => void;
+  /** Docs/28: the owner login or the open flag changed (the Owner login section acts at once, without Save). */
+  onOwnerChanged?: (vendorId: string, patch: OwnerPatch) => void;
+  onOpenOrder?: (orderId: string) => void;
   /** Tests inject a fake canvas. */
   imageEnv?: ImageEnv;
 }
 
 /** "Edit restaurant": name, categories, address, banner, FSSAI and delivery time. Only the fields that changed are sent. */
-export const EditRestaurantDrawer: React.FC<Props> = ({ vendor, onClose, onSaved, onAuthError, imageEnv }) => {
+export const EditRestaurantDrawer: React.FC<Props> = ({ vendor, onClose, onSaved, onAuthError, onOwnerChanged, onOpenOrder, imageEnv }) => {
   const toast = useToast();
   const base = useMemo(() => formFromVendor(vendor), [vendor]);
   const [form, setForm] = useState<ProfileForm>(base);
@@ -94,6 +98,8 @@ export const EditRestaurantDrawer: React.FC<Props> = ({ vendor, onClose, onSaved
       )}
     >
       <div className="space-y-5" onKeyDown={(event) => { if (event.key === 'Enter' && (event.target as HTMLInputElement).tagName === 'INPUT' && (event.target as HTMLInputElement).type === 'text' && !(event.target as HTMLInputElement).closest('[role="group"]')) { event.preventDefault(); void save(); } }}>
+        <OwnerLoginSection vendor={vendor} onChanged={(patch) => onOwnerChanged?.(vendor.id, patch)} onAuthError={onAuthError} onOpenOrder={onOpenOrder} />
+
         <Field label="Restaurant name" htmlFor="er-name" required error={shown('name')}>
           <input id="er-name" className="k-input" value={form.name} maxLength={80} autoComplete="off" disabled={disabled} onChange={(e) => set('name', e.target.value)} aria-invalid={Boolean(shown('name'))} aria-describedby={shown('name') ? 'er-name-msg' : undefined} />
         </Field>

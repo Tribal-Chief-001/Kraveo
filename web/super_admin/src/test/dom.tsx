@@ -38,3 +38,17 @@ export const byText = (selector: string, text: string | RegExp, scope: ParentNod
   Array.from(scope.querySelectorAll(selector)).find((el) => (typeof text === 'string' ? el.textContent?.trim() === text : text.test(el.textContent ?? ''))) as HTMLElement | undefined;
 
 export const byId = (id: string) => document.getElementById(id);
+
+/** Presses a key on the focused element (bubbles through window's capture phase, like a real key press). */
+export const press = (key: string, init: KeyboardEventInit = {}) => act(async () => {
+  (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }));
+});
+
+/** Waits (real time) until `check` is true; for debounced inputs. */
+export const waitFor = async (check: () => boolean, ms = 1500) => {
+  const end = Date.now() + ms;
+  while (!check() && Date.now() < end) await act(async () => { await new Promise((r) => setTimeout(r, 25)); });
+};
+
+export const dialogs = () => Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"]')) as HTMLElement[];
+export const topDialog = () => dialogs()[dialogs().length - 1] as HTMLElement | undefined;
