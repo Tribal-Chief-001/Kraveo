@@ -66,7 +66,8 @@ export const publicVendorView = (v: any) => {
     eta: v.eta,
     bannerImage: v.bannerImage,
     address: v.address,
-    isAcceptingOrders: v.isAcceptingOrders,
+    // Docs/28 decision 1: a restaurant without an owner login is visible but always shown as closed (placeOrder refuses it anyway).
+    isAcceptingOrders: !!v.isAcceptingOrders && !!v.userId,
     lat: v.lat,
     lng: v.lng,
     cuisines,
@@ -150,3 +151,8 @@ export const validateMenuItemFields = (b: any): { ok: true; data: MenuItemInput 
   if (b?.isVeg !== undefined && typeof b.isVeg !== 'boolean') return { ok: false, error: { field: 'isVeg', message: 'isVeg must be true or false.' } };
   return { ok: true, data: { name, price: b.price, category: category || 'Main Course', description: description || '', imageUrl: imageUrl || null, isVeg: b?.isVeg !== false } };
 };
+
+// What an admin sees of a restaurant's owner login (Docs/27 B4). Never the password hash, tokens or the e-mail.
+export const OWNER_VIEW_SELECT = { id: true, name: true, phone: true, accountStatus: true, statusReason: true, lastLoginAt: true, createdAt: true } as const;
+export const ownerView = (u: { id: string; name: string; phone: string | null; accountStatus: string; statusReason?: string | null; lastLoginAt?: Date | null; createdAt?: Date } | null | undefined) =>
+  u ? { id: u.id, name: u.name, phone: u.phone ?? null, accountStatus: u.accountStatus, statusReason: u.statusReason ?? null, lastLoginAt: u.lastLoginAt ?? null } : null;

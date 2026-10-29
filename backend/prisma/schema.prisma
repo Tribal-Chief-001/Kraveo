@@ -54,6 +54,14 @@ enum DutyStatus {
   IN_TRANSIT
 }
 
+// Docs/27 B0 + Docs/28: admin-controlled account state. REMOVED also sets User.deletedAt, so every existing "deletedAt" guard applies.
+// deletedAt set with accountStatus ACTIVE = the person deleted their own account (anonymised, NOT restorable).
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  REMOVED
+}
+
 model User {
   id           String   @id @default(uuid())
   phone        String?  @unique
@@ -74,6 +82,12 @@ model User {
   deletedAt    DateTime?
   // How many times 50 coins were exchanged for the KRAVEO20 coupon (each redemption = one use of the code).
   kraveo20Redeemed Int  @default(0)
+  // Docs/27 B0 + Docs/28: admin suspend / remove. A non-ACTIVE account cannot sign in, use a token, hold a socket or get pushes.
+  accountStatus   AccountStatus @default(ACTIVE)
+  statusReason    String?       // shown to the person when SUSPENDED (max 200)
+  statusChangedAt DateTime?
+  statusChangedBy String?       // admin user id
+  lastLoginAt     DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -86,6 +100,8 @@ model User {
   reviewsReceived ReviewRecord[] @relation("DriverReviews")
   deviceTokens    DeviceToken[]
   payoutAccount   PayoutAccount?
+
+  @@index([accountStatus])
 }
 
 model Vendor {
@@ -114,6 +130,12 @@ model Vendor {
   // Docs/21 + 26: this restaurant's default commission (PERCENT | FLAT | CUT). Both null = inherit the global default.
   commissionType    String?
   commissionValue   Float?
+  // Docs/27 B3: soft remove. A removed restaurant is ALSO approvalStatus SUSPENDED (when it was APPROVED) and closed, so every existing
+  // approval guard hides and blocks it. Dishes, orders, settlements are kept.
+  removedAt         DateTime?
+  removedReason     String?
+  // True when the removal also disabled the owner login, so a restore re-enables exactly that (and nothing else).
+  ownerDisabledByRemoval Boolean @default(false)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -126,6 +148,7 @@ model Vendor {
   cuisines  VendorCategory[]
 
   @@index([approvalStatus])
+  @@index([removedAt])
 }
 
 model MenuItem {
@@ -416,9 +439,17 @@ model AdminAuditLog {
   targetId   String
   summary    String
   createdAt  DateTime @default(now())
+  // Docs/27 B0: who did it. null actor = the system (maintenance job, webhook) or a row written before actors existed.
+  actorId    String?
+  actorName  String?
+  ip         String?
+  // Optional {before, after}. Never secrets, never passwords.
+  meta       Json?
 
   @@index([createdAt])
   @@index([targetType, targetId])
+  @@index([action, createdAt])
+  @@index([actorId, createdAt])
 }
 
 model ReviewRecord {

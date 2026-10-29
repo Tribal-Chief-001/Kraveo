@@ -153,6 +153,13 @@ const RULES: Rule[] = [
     applies: (r, p) => (r.method === 'POST' && /^\/vendors\/[^/]+\/items$/.test(p)) || (r.method === 'PATCH' && /^\/vendors\/items\/[^/]+$/.test(p) && r.body?.price !== undefined),
     message: 'You are changing the menu too fast. Please wait a few minutes.',
   },
+  // Docs/27 B0 + Docs/28: suspend / restore / remove / owner-login actions on customers, riders and restaurants. Passwords generated for an
+  // owner login are only ever answered by POSTs under this limit.
+  {
+    name: 'ADMIN_ACCOUNT_WRITE', scope: 'user', max: 30, windowMs: 10 * MIN,
+    applies: (r, p) => ['POST', 'PATCH'].includes(r.method) && /^\/admin\/(customers|drivers|vendors)\/[^/]+\/(suspend|restore|remove|reinstate|owner(\/[a-z-]+)?)$/.test(p),
+    message: 'Too many account changes. Please wait a few minutes.',
+  },
   {
     name: 'AUTH_IP', scope: 'ip', max: 60, windowMs: MIN,
     applies: (r, p) => r.method === 'POST' && ['/auth/google', '/auth/partner-login', '/auth/admin-login', '/auth/partner-signup'].includes(p),

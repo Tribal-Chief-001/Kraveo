@@ -382,7 +382,15 @@ describe('Partner approval pipeline', () => {
       const ok = await request.post('/api/orders').set(getAuthHeader(getStudentToken())).send({ vendorId, items: [{ itemId: item.id, quantity: 1 }], dropoffHostel: 'Block 1' });
       expect(ok.status).toBe(201);
 
-      await setStatus('vendor', vendorId, 'SUSPENDED', 'Hygiene complaint');
+      // Docs/27 B3 + Docs/28 (changed on purpose): a suspension no longer leaves running orders stranded. It is refused with the exact list...
+      const refusedSuspend = await setStatus('vendor', vendorId, 'SUSPENDED', 'Hygiene complaint');
+      expect(refusedSuspend.status).toBe(409);
+      expect(refusedSuspend.body.code).toBe('HAS_OPEN_ORDERS');
+      expect(refusedSuspend.body.orders.map((o: any) => o.id)).toContain(live.id);
+      expect((await prisma.vendor.findUniqueOrThrow({ where: { id: vendorId } })).approvalStatus).toBe('APPROVED');
+      // ...and the admin cancels them (refunds through the normal cancel code) in the same call when asked.
+      const suspended = await request.post(`/api/admin/partners/vendor/${vendorId}/status`).set(adminHeader()).send({ status: 'SUSPENDED', reason: 'Hygiene complaint', openOrders: 'CANCEL' });
+      expect(suspended.status).toBe(200);
 
       // After: hidden, closed, new orders refused, the owner cannot work, the admin still sees everything.
       expect((await request.get('/api/vendors')).body.data.some((v: any) => v.id === vendorId)).toBe(false);
@@ -396,8 +404,10 @@ describe('Partner approval pipeline', () => {
       expect(accept.status).toBe(403);
       expect(accept.body.code).toBe('PARTNER_NOT_APPROVED');
       expect((await request.get(`/api/orders/${live.id}`).set(adminHeader())).status).toBe(200);
-      // The order that was already placed is NOT cancelled or moved by a suspension: the admin decides what to do with it.
-      expect((await prisma.order.findUniqueOrThrow({ where: { id: live.id } })).status).toBe('PLACED');
+      // The paid order that was already placed was cancelled through the normal cancel path, and its refund started once.
+      const cancelledLive = await prisma.order.findUniqueOrThrow({ where: { id: live.id } });
+      expect(cancelledLive.status).toBe('CANCELLED');
+      expect(cancelledLive.refundStatus).not.toBeNull();
       await prisma.order.deleteMany({ where: { vendorId } });
     });
 

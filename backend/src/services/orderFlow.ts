@@ -13,6 +13,7 @@ import { createRazorpayOrder } from './paymentService';
 import { queuePush } from './push/pushService';
 import { pushEventsForChange, pushEventsForGroupChange } from './push/events';
 import { validateAndCalculateOrder, normaliseCoupon, couponEligibilityProblem } from '../utils/validation';
+import { assertVendorsOrderableInTx, customerBlockError, vendorOrderError } from './orderGuards';
 
 /**
  * Every order state change lives here (Docs/16_order_flow_contract.md sections 1, 2 and 4; Docs/22 for multi-restaurant orders).
@@ -286,12 +287,14 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
   }
 
   // The account must exist and not be deleted (a valid 30-day token of a removed user used to end in a 500).
-  const customer = await prisma.user.findUnique({ where: { id: customerId }, select: { id: true, deletedAt: true } });
+  const customer = await prisma.user.findUnique({ where: { id: customerId }, select: { id: true, deletedAt: true, accountStatus: true, statusReason: true } });
   if (!customer || customer.deletedAt) throw new OrderFlowError(401, 'ACCOUNT_UNAVAILABLE', 'This account is no longer available. Please sign in again.');
+  const blocked = customerBlockError(customer);
+  if (blocked) throw blocked;
 
   const vendor = await prisma.vendor.findUnique({ where: { id: input.vendorId } });
-  if (!vendor || vendor.approvalStatus !== 'APPROVED') throw new OrderFlowError(400, 'VENDOR_UNAVAILABLE', 'This restaurant is not available right now.');
-  if (!vendor.isAcceptingOrders) throw new OrderFlowError(400, 'VENDOR_CLOSED', 'This Dhaba is currently CLOSED for new orders.');
+  const vendorProblem = vendorOrderError(vendor);
+  if (vendorProblem) throw vendorProblem;
 
   const priced = await validateAndCalculateOrder(input.vendorId, input.items, input.couponCode);
   if (!priced.isValid) throw new OrderFlowError(400, 'INVALID_ITEMS', priced.errorMessage || 'Some items are not available.', { field: 'items' });
@@ -303,8 +306,12 @@ export const placeOrder = async (customerId: string, input: PlaceOrderInput): Pr
     const outcome = await prisma.$transaction(
       async (tx): Promise<{ order: OrderWithRelations; replay: boolean }> => {
         // One checkout at a time per customer, so the unpaid-orders limit and single-use coupons cannot be raced.
-        const locked = await tx.$queryRaw<{ deletedAt: Date | null }[]>`SELECT "deletedAt" FROM "User" WHERE "id" = ${customerId} FOR UPDATE`;
+        const locked = await tx.$queryRaw<{ deletedAt: Date | null; accountStatus: string; statusReason: string | null }[]>`SELECT "deletedAt", "accountStatus"::text AS "accountStatus", "statusReason" FROM "User" WHERE "id" = ${customerId} FOR UPDATE`;
         if (locked.length === 0 || locked[0].deletedAt) throw new OrderFlowError(401, 'ACCOUNT_UNAVAILABLE', 'This account is no longer available. Please sign in again.');
+        const blockedNow = customerBlockError(locked[0]);
+        if (blockedNow) throw blockedNow;
+        // Docs/27 B3: the restaurant is re-checked under a row lock, so a removal that committed first is seen and one that waits sees our order.
+        await assertVendorsOrderableInTx(tx, [input.vendorId]);
 
         // The same checkout again that overlapped the first request: that request has committed by now (we waited for the lock),
         // so answer with its order instead of failing the coupon / unpaid-limit checks below against our own twin.

@@ -18,6 +18,11 @@ import { CUISINES_INCLUDE, cuisineFields } from '../utils/catalog';
 import { applyOwnerCategoryText } from '../services/categories';
 import { badLabel } from '../utils/labels';
 import { retryStaleRead } from '../utils/prismaRetry';
+import { customerBase, loadCustomerDetail } from '../services/customerAdmin';
+import { suspendVendor } from '../services/vendorAdmin';
+import { suspendRider } from '../services/riderAdmin';
+import { AppError } from '../utils/appError';
+import { disconnectUser } from '../realtime';
 
 /**
  * Partner (restaurant / rider) applications and the admin tools around them.
@@ -48,15 +53,6 @@ const audit = writeAuditLog;
 const notifyAdmins = (req: Request, event: string, payload: unknown) => {
   const io = req.app.get('io');
   if (io) io.to('admins').emit(event, payload);
-};
-
-/** Closes the live sockets of a user whose sessions were just revoked (they would otherwise keep receiving events). */
-const io_disconnect = (req: Request, userId: string) => {
-  try {
-    req.app.get('io')?.in(`user_${userId}`).disconnectSockets(true);
-  } catch (err) {
-    console.error('disconnect sockets failed:', errSummary(err));
-  }
 };
 
 const notApprovedMessage = (status: ApprovalStatus): string => {
@@ -415,7 +411,7 @@ partnerRouter.put('/partner/application', requireAuth, requireRole('VENDOR', 'DR
 // ----------------------------------------------------------------------------
 // Admin: applications and partner status
 // ----------------------------------------------------------------------------
-const applicationRow = (kind: Kind, row: any) => ({
+export const applicationRow = (kind: Kind, row: any) => ({
   id: row.id,
   kind,
   userId: row.userId ?? row.user?.id ?? null,
@@ -427,6 +423,9 @@ const applicationRow = (kind: Kind, row: any) => ({
   appliedAt: row.appliedAt ?? row.createdAt,
   reviewedAt: row.reviewedAt ?? null,
   createdAt: row.createdAt,
+  // Docs/27 B2/B3: account state of the login behind the profile, and the removal mark of a restaurant.
+  accountStatus: row.user?.accountStatus ?? null,
+  removedAt: row.removedAt ?? null,
   ...(kind === 'VENDOR'
     ? { vendor: { name: row.name, category: row.category, address: row.address, fssaiNumber: row.fssaiNumber ?? null, isAcceptingOrders: row.isAcceptingOrders, ...vendorLocationView(row), ...cuisineFields(row) } }
     : { driver: { runnerCode: row.runnerCode, vehicleType: row.vehicleType, vehicleRegNo: row.vehicleRegNo ?? null, emergencyPhone: row.emergencyPhone ?? null, upiId: row.upiId ?? null } }),
@@ -438,8 +437,8 @@ partnerRouter.get('/admin/applications', requireAuth, requireRole('ADMIN'), asyn
     const kindFilter = String(req.query.kind ?? '').toUpperCase();
     const statusWhere = wanted === 'ALL' ? {} : (['PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED'].includes(wanted) ? { approvalStatus: wanted as ApprovalStatus } : { approvalStatus: 'PENDING' as ApprovalStatus });
     const [vendors, drivers, vc, dc] = await Promise.all([
-      kindFilter === 'DRIVER' ? [] : retryStaleRead(() => prisma.vendor.findMany({ where: { ...statusWhere, userId: { not: null } }, include: { user: { select: { id: true, name: true, phone: true } }, ...CUISINES_INCLUDE }, orderBy: { createdAt: 'desc' }, take: 200 })),
-      kindFilter === 'VENDOR' ? [] : prisma.driverPartner.findMany({ where: statusWhere, include: { user: { select: { id: true, name: true, phone: true } } }, orderBy: { createdAt: 'desc' }, take: 200 }),
+      kindFilter === 'DRIVER' ? [] : retryStaleRead(() => prisma.vendor.findMany({ where: { ...statusWhere, userId: { not: null } }, include: { user: { select: { id: true, name: true, phone: true, accountStatus: true } }, ...CUISINES_INCLUDE }, orderBy: { createdAt: 'desc' }, take: 200 })),
+      kindFilter === 'VENDOR' ? [] : prisma.driverPartner.findMany({ where: statusWhere, include: { user: { select: { id: true, name: true, phone: true, accountStatus: true } } }, orderBy: { createdAt: 'desc' }, take: 200 }),
       prisma.vendor.groupBy({ by: ['approvalStatus'], _count: true, where: { userId: { not: null } } }),
       prisma.driverPartner.groupBy({ by: ['approvalStatus'], _count: true }),
     ]);
@@ -473,32 +472,47 @@ partnerRouter.post('/admin/partners/:kind/:id/status', requireAuth, requireRole(
     if (from === next) return res.status(409).json({ success: false, message: `Already ${next.toLowerCase()}.` });
     if (next === 'REJECTED' && from !== 'PENDING') return res.status(409).json({ success: false, message: 'Only a pending application can be rejected. Suspend an active partner instead.' });
     if (next === 'SUSPENDED' && from !== 'APPROVED') return res.status(409).json({ success: false, message: 'Only an approved partner can be suspended.' });
-
-    const data: any = { approvalStatus: next, reviewedAt: new Date(), rejectionReason: next === 'APPROVED' ? null : reason };
-    if (next === 'SUSPENDED') {
-      if (kind === 'VENDOR') data.isAcceptingOrders = false;
-      else data.dutyStatus = 'OFFLINE';
+    // Docs/27 B2/B3: a removed restaurant / rider cannot be approved again by accident (restore it first).
+    if (next === 'APPROVED') {
+      if (kind === 'VENDOR' && row.removedAt) return res.status(409).json({ success: false, code: 'VENDOR_REMOVED', message: 'This restaurant was removed. Restore it first.' });
+      if (kind === 'DRIVER' && row.user && row.user.accountStatus !== 'ACTIVE') return res.status(409).json({ success: false, code: 'ACCOUNT_NOT_ACTIVE', message: 'This rider account was removed. Restore it first.' });
     }
-    const updated: any = kind === 'VENDOR'
-      ? await prisma.vendor.update({ where: { id: row.id }, data, include: { user: { select: { id: true, name: true, phone: true } }, ...CUISINES_INCLUDE } }).catch(async (e) => { if (!/Inconsistent query result/i.test(String(e?.message))) throw e; return retryStaleRead(() => prisma.vendor.findUniqueOrThrow({ where: { id: row.id }, include: { user: { select: { id: true, name: true, phone: true } }, ...CUISINES_INCLUDE } })); })
-      : await prisma.driverPartner.update({ where: { id: row.id }, data, include: { user: { select: { id: true, name: true, phone: true } } } });
 
-    const label = `${kind.toLowerCase()} ${row.name} (${row.user?.phone ?? 'no phone'})`;
-    await audit(`PARTNER_${next}`, kind, row.id, `${next} ${label} from ${from}${reason ? `: ${reason}` : ''}`);
-    // Rejected / suspended partners get no pushes (new orders, deliveries) on any device; the recipient lookup also checks approval.
-    if (next !== 'APPROVED' && row.userId) await disableUserTokens(row.userId, `PARTNER_${next}`);
-    // A suspended rider must stop hearing about new orders at once (not only after a reconnect).
-    if (next !== 'APPROVED' && kind === 'DRIVER' && row.userId) await dropFromPartnerRooms(row.userId, ['drivers']);
-    if (next !== 'APPROVED' && kind === 'VENDOR' && row.userId) await dropFromPartnerRooms(row.userId, [`vendor_${row.id}`]);
-    // A suspended partner's old sessions end now (they sign in again and get the "suspended" answer). Rejection of a
-    // pending application changes nothing for a signed-in applicant: they keep their session to see the reason / re-apply.
-    if (next === 'SUSPENDED' && row.userId) {
-      await bumpTokenVersion(row.userId);
-      io_disconnect(req, row.userId);
+    let extra: Record<string, unknown> = {};
+    let updated: any;
+    if (next === 'SUSPENDED') {
+      // The suspension guard (Docs/27 B2/B3): open orders of a restaurant / deliveries of a rider are refused with the exact list, or handled when the admin asks.
+      const openOrders = req.body?.openOrders === undefined ? 'REFUSE' : String(req.body.openOrders);
+      const handover = req.body?.handover === undefined ? 'REFUSE' : String(req.body.handover);
+      if (kind === 'VENDOR' && !['REFUSE', 'CANCEL'].includes(openOrders)) return res.status(400).json({ success: false, code: 'BAD_REQUEST', field: 'openOrders', message: 'openOrders must be REFUSE or CANCEL.' });
+      if (kind === 'DRIVER' && !['REFUSE', 'RELEASE'].includes(handover)) return res.status(400).json({ success: false, code: 'BAD_REQUEST', field: 'handover', message: 'handover must be REFUSE or RELEASE.' });
+      if (kind === 'VENDOR') {
+        const out = await suspendVendor({ vendorId: row.id, adminId: req.user!.id, reason, openOrders: openOrders as 'REFUSE' | 'CANCEL' });
+        extra = { changed: out.changed, ...(out.cancelled ? { cancelled: out.cancelled } : {}), ...(out.failed ? { failed: out.failed } : {}) };
+      } else {
+        const out = await suspendRider({ driverId: row.id, reason, handover: handover as 'REFUSE' | 'RELEASE' });
+        extra = { changed: out.changed, ...(out.released ? { released: out.released, releaseFailed: out.releaseFailed } : {}) };
+      }
+      updated = kind === 'VENDOR'
+        ? await retryStaleRead(() => prisma.vendor.findUniqueOrThrow({ where: { id: row.id }, include: { user: { select: { id: true, name: true, phone: true, accountStatus: true } }, ...CUISINES_INCLUDE } }))
+        : await prisma.driverPartner.findUniqueOrThrow({ where: { id: row.id }, include: { user: { select: { id: true, name: true, phone: true, accountStatus: true } } } });
+    } else {
+      const data: any = { approvalStatus: next, reviewedAt: new Date(), rejectionReason: next === 'APPROVED' ? null : reason };
+      updated = kind === 'VENDOR'
+        ? await prisma.vendor.update({ where: { id: row.id }, data, include: { user: { select: { id: true, name: true, phone: true, accountStatus: true } }, ...CUISINES_INCLUDE } }).catch(async (e) => { if (!/Inconsistent query result/i.test(String(e?.message))) throw e; return retryStaleRead(() => prisma.vendor.findUniqueOrThrow({ where: { id: row.id }, include: { user: { select: { id: true, name: true, phone: true, accountStatus: true } }, ...CUISINES_INCLUDE } })); })
+        : await prisma.driverPartner.update({ where: { id: row.id }, data, include: { user: { select: { id: true, name: true, phone: true, accountStatus: true } } } });
+
+      const label = `${kind.toLowerCase()} ${row.name} (${row.user?.phone ?? 'no phone'})`;
+      await audit(`PARTNER_${next}`, kind, row.id, `${next} ${label} from ${from}${reason ? `: ${reason}` : ''}`);
+      // Rejected partners get no pushes (new orders, deliveries) on any device; the recipient lookup also checks approval.
+      if (next !== 'APPROVED' && row.userId) await disableUserTokens(row.userId, `PARTNER_${next}`);
+      if (next !== 'APPROVED' && kind === 'DRIVER' && row.userId) await dropFromPartnerRooms(row.userId, ['drivers']);
+      if (next !== 'APPROVED' && kind === 'VENDOR' && row.userId) await dropFromPartnerRooms(row.userId, [`vendor_${row.id}`]);
     }
     notifyAdmins(req, 'partner_application_updated', { kind, id: row.id, status: next });
-    return res.json({ success: true, data: applicationRow(kind, updated) });
+    return res.json({ success: true, ...extra, data: applicationRow(kind, updated) });
   } catch (err) {
+    if (err instanceof AppError) return res.status(err.status).json({ success: false, code: err.code, message: err.message, ...(err.field ? { field: err.field } : {}), ...err.extra });
     console.error('partner status failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Could not update the partner.' });
   }
@@ -513,7 +527,7 @@ partnerRouter.post('/admin/partners/:userId/reset-password', requireAuth, requir
     if (!user || (user.role !== Role.VENDOR && user.role !== Role.DRIVER)) return res.status(404).json({ success: false, message: 'Partner account not found.' });
     await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await hashPassword(req.body.password), tokenVersion: { increment: 1 } } });
     invalidateAuthCache(user.id); // every session of this partner ends: the old password's tokens are dead
-    io_disconnect(req, user.id);
+    disconnectUser(user.id);
     if (user.phone) recordSuccess(last10(user.phone));
     await audit('PASSWORD_RESET', user.role, user.id, `Reset the password of ${user.role.toLowerCase()} ${user.name} (${user.phone ?? 'no phone'})`);
     return res.json({ success: true });
@@ -523,32 +537,11 @@ partnerRouter.post('/admin/partners/:userId/reset-password', requireAuth, requir
   }
 });
 
-partnerRouter.get('/admin/audit-log', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const limit = Math.min(Math.max(Number.parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 200);
-    const data = await prisma.adminAuditLog.findMany({ orderBy: { createdAt: 'desc' }, take: limit });
-    return res.json({ success: true, data });
-  } catch {
-    return res.status(500).json({ success: false, message: 'Could not load the activity log.' });
-  }
-});
+// The activity log viewer (GET /admin/audit-log and friends) lives in ./adminAudit (Docs/27 B5).
 
 // ----------------------------------------------------------------------------
 // Admin: customers (full detail)
 // ----------------------------------------------------------------------------
-const customerBase = (u: any) => ({
-  id: u.id,
-  name: u.name,
-  email: u.email ?? null,
-  phone: u.phone ?? null,
-  isStudent: u.isStudent ?? null,
-  hostelBlock: u.hostelBlock ?? null,
-  avatarId: u.avatarId ?? null,
-  kraveoCoins: u.kraveoCoins,
-  createdAt: u.createdAt,
-  deleted: !u.email && !u.googleSub && !u.phone && u.name === 'Deleted user',
-});
-
 partnerRouter.get('/admin/customers', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const search = clean(req.query.search, 60);
@@ -556,8 +549,26 @@ partnerRouter.get('/admin/customers', requireAuth, requireRole('ADMIN'), async (
     const limit = Math.min(Number.isFinite(requested) && requested > 0 ? requested : 50, 100);
     const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : undefined;
     const where: any = { role: Role.STUDENT };
-    // Accounts the customer deleted are anonymised ("Deleted user", no email/phone); they are noise in the list.
-    if (req.query.includeDeleted !== '1') where.NOT = { name: 'Deleted user', email: null, googleSub: null };
+    // Docs/27 B1: status=ACTIVE|SUSPENDED|REMOVED|ALL (default: ACTIVE + SUSPENDED). Accounts the customer deleted themselves are
+    // anonymised ("Deleted user", no email / phone) and are noise: they only show with includeDeleted=1 (under REMOVED and ALL, or the default).
+    const statusRaw = typeof req.query.status === 'string' ? req.query.status.toUpperCase() : undefined;
+    if (req.query.status !== undefined && !['ACTIVE', 'SUSPENDED', 'REMOVED', 'ALL'].includes(statusRaw ?? '')) {
+      return res.status(400).json({ success: false, code: 'BAD_REQUEST', field: 'status', message: 'status must be ACTIVE, SUSPENDED, REMOVED or ALL.' });
+    }
+    const includeSelfDeleted = req.query.includeDeleted === '1';
+    const selfDeleted = { deletedAt: { not: null }, accountStatus: 'ACTIVE' as const };
+    const statusWhere: any[] = [];
+    if (statusRaw === 'ACTIVE') statusWhere.push({ accountStatus: 'ACTIVE', deletedAt: null });
+    else if (statusRaw === 'SUSPENDED') statusWhere.push({ accountStatus: 'SUSPENDED' });
+    else if (statusRaw === 'REMOVED') statusWhere.push({ OR: [{ accountStatus: 'REMOVED' }, ...(includeSelfDeleted ? [selfDeleted] : [])] });
+    else {
+      // ALL or no filter: everything an admin can see; ACTIVE + SUSPENDED by default, REMOVED too for ALL.
+      const states = statusRaw === 'ALL' ? ['ACTIVE', 'SUSPENDED', 'REMOVED'] : ['ACTIVE', 'SUSPENDED'];
+      statusWhere.push({ OR: [{ accountStatus: { in: states }, deletedAt: null }, ...(statusRaw === 'ALL' ? [{ accountStatus: 'REMOVED' }] : []), ...(includeSelfDeleted ? [selfDeleted] : [])] });
+    }
+    // A legacy anonymised row (before accountStatus existed) is still recognised by its shape.
+    if (!includeSelfDeleted) statusWhere.push({ NOT: { name: 'Deleted user', email: null, googleSub: null } });
+    where.AND = statusWhere;
     if (search) {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
@@ -578,6 +589,10 @@ partnerRouter.get('/admin/customers', requireAuth, requireRole('ADMIN'), async (
     const paid = users.length
       ? await prisma.order.groupBy({ by: ['customerId'], where: { customerId: { in: users.map((u) => u.id) }, paymentStatus: 'PAID' }, _sum: { totalAmount: true } })
       : [];
+    const open = users.length
+      ? await prisma.order.groupBy({ by: ['customerId'], where: { customerId: { in: users.map((u) => u.id) }, status: { notIn: ['DELIVERED', 'CANCELLED'] } }, _count: { _all: true } })
+      : [];
+    const openById = new Map(open.map((o) => [o.customerId, o._count._all]));
     const byId = new Map(stats.map((s) => [s.customerId, s]));
     const paidById = new Map(paid.map((s) => [s.customerId, s._sum.totalAmount ?? 0]));
     return res.json({
@@ -589,6 +604,7 @@ partnerRouter.get('/admin/customers', requireAuth, requireRole('ADMIN'), async (
         ordersCount: byId.get(u.id)?._count._all ?? 0,
         totalSpent: paidById.get(u.id) ?? 0,
         lastOrderAt: byId.get(u.id)?._max.createdAt ?? null,
+        openOrders: openById.get(u.id) ?? 0,
       })),
     });
   } catch (err) {
@@ -599,52 +615,9 @@ partnerRouter.get('/admin/customers', requireAuth, requireRole('ADMIN'), async (
 
 partnerRouter.get('/admin/customers/:id', requireAuth, requireRole('ADMIN'), validParams('id'), async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const user = await prisma.user.findFirst({ where: { id: req.params.id, role: Role.STUDENT } });
-    if (!user) return res.status(404).json({ success: false, message: 'Customer not found.' });
-    const [orders, grouped, paidSum] = await Promise.all([
-      prisma.order.findMany({
-        where: { customerId: user.id },
-        orderBy: { createdAt: 'desc' },
-        take: 30,
-        include: { items: true, vendor: { select: { id: true, name: true } }, driver: { select: { id: true, name: true, phone: true } }, payments: true },
-      }),
-      prisma.order.groupBy({ by: ['status'], where: { customerId: user.id }, _count: { _all: true } }),
-      prisma.order.aggregate({ where: { customerId: user.id, paymentStatus: 'PAID' }, _sum: { totalAmount: true }, _count: { _all: true } }),
-    ]);
-    const byStatus: Record<string, number> = {};
-    for (const g of grouped) byStatus[g.status] = g._count._all;
-    const ordersCount = Object.values(byStatus).reduce((a, b) => a + b, 0);
-    const first = await prisma.order.findFirst({ where: { customerId: user.id }, orderBy: { createdAt: 'asc' }, select: { createdAt: true } });
-    return res.json({
-      success: true,
-      data: {
-        ...customerBase(user),
-        stats: {
-          ordersCount,
-          deliveredCount: byStatus.DELIVERED ?? 0,
-          cancelledCount: byStatus.CANCELLED ?? 0,
-          activeCount: ordersCount - (byStatus.DELIVERED ?? 0) - (byStatus.CANCELLED ?? 0),
-          paidOrdersCount: paidSum._count._all,
-          totalSpent: paidSum._sum.totalAmount ?? 0,
-          firstOrderAt: first?.createdAt ?? null,
-          lastOrderAt: orders[0]?.createdAt ?? null,
-        },
-        orders: orders.map((o) => ({
-          id: o.id,
-          status: o.status,
-          paymentStatus: o.paymentStatus,
-          totalAmount: o.totalAmount,
-          deliveryFee: o.deliveryFee,
-          dropoffHostel: o.dropoffHostel,
-          dropoffNotes: o.dropoffNotes,
-          createdAt: o.createdAt,
-          vendor: o.vendor,
-          driver: o.driver,
-          items: o.items.map((i) => ({ name: i.name, quantity: i.quantity, price: i.price })),
-          payments: o.payments.map((p) => ({ id: p.id, razorpayPaymentId: p.razorpayPaymentId, amount: p.amount, status: p.status, createdAt: p.createdAt })),
-        })),
-      },
-    });
+    const data = await loadCustomerDetail(req.params.id);
+    if (!data) return res.status(404).json({ success: false, message: 'Customer not found.' });
+    return res.json({ success: true, data });
   } catch (err) {
     console.error('admin/customers/:id failed:', errSummary(err));
     return res.status(500).json({ success: false, message: 'Could not load the customer.' });

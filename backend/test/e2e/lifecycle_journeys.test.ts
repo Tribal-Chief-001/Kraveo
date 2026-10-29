@@ -12,7 +12,7 @@ import { runOrderMaintenance } from '../../src/services/orderMaintenance';
 import { __waitForBackgroundWork } from '../../src/services/refundService';
 import {
   World, Person, Customer, Vendor, Rider, Watcher, Ledger, Api, createWorld, purgeWorld, resetWorldState, createLedger, createApi, keysOf, RAW_KEYS,
-  sleep, until, minutesFromNow, reissue,
+  sleep, until, minutesFromNow, reissue, suspendPartnerDirect,
 } from '../harness/journey';
 
 jest.setTimeout(60_000);
@@ -628,7 +628,10 @@ describe('Lifecycle journeys', () => {
       const { id } = await placePaid(c1, v1);
       await wc.join(`order_${id}`);
       await driveTo(id, 'PICKED_UP', v1, r1);
-      expect((await api.partnerStatus(W.admin, 'driver', r1.profileId, 'SUSPENDED')).status).toBe(200);
+      // Docs/27: the API refuses to suspend a rider whose food is on the way; the journey puts the rider in that state directly.
+      const refusedRider = await api.partnerStatus(W.admin, 'driver', r1.profileId, 'SUSPENDED');
+      expect([refusedRider.status, refusedRider.body.code]).toEqual([409, 'FOOD_WITH_RIDER']);
+      await suspendPartnerDirect('driver', r1.profileId);
       // Suspension revokes the old sessions; signing in again gives a token that can still READ but not WORK.
       expect([(await api.get(r1, id)).status, (await api.get(r1, id)).body.code]).toEqual([401, 'TOKEN_REVOKED']);
       const r1n = await reissue(r1);
@@ -669,7 +672,8 @@ describe('Lifecycle journeys', () => {
       const { id } = await placePaid(c1, v1);
       await api.setStatus(v1, id, 'ACCEPTED');
       await api.claim(r1, id);
-      await api.partnerStatus(W.admin, 'driver', r1.profileId, 'SUSPENDED');
+      expect((await api.partnerStatus(W.admin, 'driver', r1.profileId, 'SUSPENDED')).body.code).toBe('HAS_ACTIVE_DELIVERY'); // Docs/27: refused while a delivery is in hand
+      await suspendPartnerDirect('driver', r1.profileId);
       const m = w2.mark();
       expect((await api.reassign(W.admin, id, null)).status).toBe(200);
       await flushAll();
@@ -683,7 +687,8 @@ describe('Lifecycle journeys', () => {
       const { id } = await placePaid(c1, v1);
       await wc.join(`order_${id}`);
       await driveTo(id, 'PREPARING', v1, r1);
-      expect((await api.partnerStatus(W.admin, 'vendor', v1.vendorId, 'SUSPENDED')).status).toBe(200);
+      expect((await api.partnerStatus(W.admin, 'vendor', v1.vendorId, 'SUSPENDED')).body.code).toBe('HAS_OPEN_ORDERS'); // Docs/27: refused while orders run
+      await suspendPartnerDirect('vendor', v1.vendorId);
       expect((await api.get(v1, id)).status).toBe(401); // suspension revokes the owner's sessions
       const v1n = await reissue(v1);
       expect((await api.get(v1n, id)).status).toBe(200);
@@ -706,7 +711,8 @@ describe('Lifecycle journeys', () => {
     test('restaurant suspended while a PAID order is still PLACED: it cannot accept; the job cancels + refunds after 10 minutes', async () => {
       const [c1] = W.customers; const [v1] = W.vendors;
       const { id } = await placePaid(c1, v1);
-      await api.partnerStatus(W.admin, 'vendor', v1.vendorId, 'SUSPENDED');
+      expect((await api.partnerStatus(W.admin, 'vendor', v1.vendorId, 'SUSPENDED')).body.code).toBe('HAS_OPEN_ORDERS');
+      await suspendPartnerDirect('vendor', v1.vendorId);
       expect((await api.setStatus(v1, id, 'ACCEPTED')).body.code).toBe('TOKEN_REVOKED');
       const v1n = await reissue(v1);
       expect((await api.setStatus(v1n, id, 'ACCEPTED')).body.code).toBe('PARTNER_NOT_APPROVED');

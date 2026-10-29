@@ -869,7 +869,7 @@ describe('Settlements (phase 2)', () => {
       // every earlier migration is untouched by this change (new folder only)
       const dirs = fs.readdirSync(path.join(__dirname, '../../prisma/migrations')).filter((d) => !d.endsWith('.toml'));
       expect(dirs).toContain('20261010_settlements_payouts');
-      expect(dirs.sort().at(-1)).toBe('20261014_menu_order'); // Docs/26 added the next (additive) migration after Docs/25's 20261013_home_banners (Docs/23: 20261012_categories, Docs/22: 20261011_order_groups)
+      expect(dirs.sort().at(-1)).toBe('20261015_admin_user_management'); // Docs/27+28 added the next (additive) migration after Docs/26's 20261014_menu_order (Docs/25: 20261013_home_banners, Docs/23: 20261012_categories, Docs/22: 20261011_order_groups)
     });
   });
 

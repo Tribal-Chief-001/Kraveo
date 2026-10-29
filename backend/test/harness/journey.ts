@@ -11,6 +11,8 @@ import { Role } from '@prisma/client';
 import { prisma } from './db';
 import { generateTestToken } from './auth';
 import { createSimulatedProvider, PaymentProvider } from '../../src/services/paymentService';
+import { revokeUserEverywhere } from '../../src/services/accountControl';
+import { dropFromPartnerRooms } from '../../src/realtime';
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export const until = async (fn: () => boolean | Promise<boolean>, ms = 4000, what = 'condition') => {
@@ -304,3 +306,18 @@ export const RAW_KEYS = ['passwordHash', 'googleSub', 'fcmToken', 'email', 'upiI
 
 export const STATUS_RANK: Record<string, number> = { PLACED: 0, ACCEPTED: 1, PREPARING: 2, READY_FOR_PICKUP: 3, PICKED_UP: 4, ARRIVED_AT_GATE: 5, DELIVERED: 6 };
 export const isTerminal = (s: string) => s === 'DELIVERED' || s === 'CANCELLED';
+
+/**
+ * Docs/27 + Docs/28: suspending a restaurant / rider that still has running orders is now REFUSED by the API (409 HAS_OPEN_ORDERS /
+ * HAS_ACTIVE_DELIVERY / FOOD_WITH_RIDER). The journeys that test what a BLOCKED partner can still do mid-order (read, not work; the admin
+ * reassigns or cancels) need that state anyway, so they put the partner in it with exactly the effects of the suspension, minus the guard.
+ */
+export const suspendPartnerDirect = async (kind: 'vendor' | 'driver', profileId: string) => {
+  const row = kind === 'vendor'
+    ? await prisma.vendor.update({ where: { id: profileId }, data: { approvalStatus: 'SUSPENDED', isAcceptingOrders: false, rejectionReason: 'Testing suspension', reviewedAt: new Date() }, select: { id: true, userId: true } })
+    : await prisma.driverPartner.update({ where: { id: profileId }, data: { approvalStatus: 'SUSPENDED', dutyStatus: 'OFFLINE', rejectionReason: 'Testing suspension', reviewedAt: new Date() }, select: { id: true, userId: true } });
+  if (row.userId) {
+    await revokeUserEverywhere(row.userId, 'PARTNER_SUSPENDED');
+    await dropFromPartnerRooms(row.userId, [kind === 'vendor' ? `vendor_${row.id}` : 'drivers']);
+  }
+};

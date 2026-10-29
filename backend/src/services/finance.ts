@@ -234,8 +234,9 @@ export const createRiderPayout = async (raw: unknown, actor: Actor) => {
     if (typeof b.note !== 'string' || b.note.trim().length > 300) throw bad('note', 'note can be at most 300 characters.');
     note = b.note.trim();
   }
-  const rider = await prisma.user.findUnique({ where: { id: b.driverUserId }, select: { id: true, name: true, role: true, deletedAt: true } });
-  if (!rider || rider.deletedAt || rider.role !== 'DRIVER') throw new AppError(404, 'NOT_FOUND', 'No rider account with this driverUserId.', 'driverUserId');
+  const rider = await prisma.user.findUnique({ where: { id: b.driverUserId }, select: { id: true, name: true, role: true, deletedAt: true, accountStatus: true } });
+  // Docs/27 finding 7: a rider an admin REMOVED can still be paid what is owed; a self-deleted account cannot.
+  if (!rider || (rider.deletedAt && rider.accountStatus !== 'REMOVED') || rider.role !== 'DRIVER') throw new AppError(404, 'NOT_FOUND', 'No rider account with this driverUserId.', 'driverUserId');
   const data = { driverUserId: rider.id, amount: b.amount, method: b.method, reference, periodStart, periodEnd, note, createdBy: actor.id };
   try {
     const row = await prisma.riderPayout.create({ data });

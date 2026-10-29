@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
+import { currentActor } from './actorContext';
 import { AppError } from '../utils/appError';
 import { writeAudit } from './audit';
 import { decryptSecret, encryptSecret, last4, maskAccount } from './payoutCrypto';
@@ -113,8 +114,9 @@ export const getAccount = (userId: string) => prisma.payoutAccount.findUnique({ 
 
 /** The user an admin route points at: must be a restaurant owner or a rider. */
 export const partnerUser = async (userId: string): Promise<{ id: string; name: string; role: PartnerType }> => {
-  const u = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, role: true, deletedAt: true } });
-  if (!u || u.deletedAt || (u.role !== 'VENDOR' && u.role !== 'DRIVER')) throw new AppError(404, 'NOT_FOUND', 'No restaurant or rider account with this id.');
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, role: true, deletedAt: true, accountStatus: true } });
+  // Docs/27 finding 7: a partner an admin REMOVED can still be looked up (the last payout must be possible); a self-deleted one cannot.
+  if (!u || (u.deletedAt && u.accountStatus !== 'REMOVED') || (u.role !== 'VENDOR' && u.role !== 'DRIVER')) throw new AppError(404, 'NOT_FOUND', 'No restaurant or rider account with this id.');
   return { id: u.id, name: u.name, role: u.role };
 };
 
@@ -209,8 +211,30 @@ export const revealAccountNumber = async (userId: string, actor: Actor) => {
     if (!row.accountNumberEnc) throw new AppError(500, 'PAYOUT_DECRYPT_FAILED', 'The stored account number could not be read.');
     accountNumber = decryptSecret(row.accountNumberEnc, userId); // before the audit row: a 503/500 here reveals nothing and logs nothing
   }
+  const by = currentActor();
   await prisma.adminAuditLog.create({
-    data: { action: 'PAYOUT_ACCOUNT_REVEALED', targetType: 'USER', targetId: userId, summary: `Admin ${actor.id} revealed the full ${row.method === 'BANK' ? `bank account number (ending ${row.accountLast4})` : 'UPI id'} of ${row.partnerType} ${userId}.` },
+    data: {
+      action: 'PAYOUT_ACCOUNT_REVEALED', targetType: 'USER', targetId: userId,
+      summary: `Admin ${actor.id} revealed the full ${row.method === 'BANK' ? `bank account number (ending ${row.accountLast4})` : 'UPI id'} of ${row.partnerType} ${userId}.`,
+      ...(by ? { actorId: by.id, ip: by.ip ?? null } : {}),
+    },
   });
   return { row, accountNumber };
+};
+
+/**
+ * Docs/27 B4: hand the payout details of a DETACHED owner login to the new owner of the same restaurant. The account number is
+ * encrypted with the owner's user id as additional data, so it is decrypted with the old id and encrypted again for the new one.
+ * The new owner must not have details of their own; the move clears the verification (a changed holder must be checked again).
+ * Runs inside the caller's transaction, so a failure leaves everything as it was.
+ */
+export const movePayoutAccountInTx = async (tx: Prisma.TransactionClient, fromUserId: string, toUserId: string): Promise<{ last4: string | null; method: string }> => {
+  for (const id of [fromUserId, toUserId].sort()) await lockRow(tx, id); // ascending ids: two moves can never deadlock
+  const src = await tx.payoutAccount.findUnique({ where: { userId: fromUserId } });
+  if (!src) throw new AppError(409, 'NO_PAYOUT_ACCOUNT', 'That login has no payout details to move.');
+  if (src.partnerType !== 'VENDOR') throw new AppError(409, 'NOT_A_VENDOR_ACCOUNT', 'Only restaurant payout details can be moved.');
+  if (await tx.payoutAccount.findUnique({ where: { userId: toUserId }, select: { id: true } })) throw new AppError(409, 'OWNER_HAS_PAYOUT_ACCOUNT', 'The new owner already has payout details.');
+  const enc = src.accountNumberEnc ? encryptSecret(decryptSecret(src.accountNumberEnc, fromUserId), toUserId) : null;
+  await tx.payoutAccount.update({ where: { userId: fromUserId }, data: { userId: toUserId, accountNumberEnc: enc, verifiedAt: null, verifiedBy: null } });
+  return { last4: src.accountLast4, method: src.method };
 };

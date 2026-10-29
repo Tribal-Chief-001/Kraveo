@@ -4,6 +4,7 @@ import { MAX_UNPAID_OPEN_ORDERS } from '../config/orderFlow';
 import { normalizeDropPoint } from '../config/campus';
 import { couponEligibilityProblem, normaliseCoupon, validateAndCalculateGroup, validateAndCalculateOrder, GroupRestaurantInput, GroupValidationResult } from '../utils/validation';
 import { getSettings } from './settings';
+import { assertVendorsOrderableInTx, customerBlockError, vendorOrderError } from './orderGuards';
 import { ORDER_VIEW_INCLUDE, OrderWithRelations, orderView } from './orderView';
 import { publishOrderChange } from '../realtime';
 import {
@@ -36,8 +37,8 @@ const loadOpenVendors = async (restaurants: GroupRestaurantInput[]) => {
   const byId = new Map(vendors.map((v) => [v.id, v]));
   for (const r of restaurants) {
     const v = byId.get(r.vendorId);
-    if (!v || v.approvalStatus !== 'APPROVED') throw new OrderFlowError(400, 'VENDOR_UNAVAILABLE', 'This restaurant is not available right now.', { vendorId: r.vendorId });
-    if (!v.isAcceptingOrders) throw new OrderFlowError(400, 'VENDOR_CLOSED', 'This Dhaba is currently CLOSED for new orders.', { vendorId: r.vendorId });
+    const problem = vendorOrderError(v, { vendorId: r.vendorId });
+    if (problem) throw problem;
   }
   return byId;
 };
@@ -177,8 +178,10 @@ export const placeGroup = async (customerId: string, input: PlaceGroupInput): Pr
     return { ...toBundle(existing), replay: true };
   }
 
-  const customer = await prisma.user.findUnique({ where: { id: customerId }, select: { id: true, deletedAt: true } });
+  const customer = await prisma.user.findUnique({ where: { id: customerId }, select: { id: true, deletedAt: true, accountStatus: true, statusReason: true } });
   if (!customer || customer.deletedAt) throw new OrderFlowError(401, 'ACCOUNT_UNAVAILABLE', 'This account is no longer available. Please sign in again.');
+  const blocked = customerBlockError(customer);
+  if (blocked) throw blocked;
 
   const settings = await getSettings();
   checkCount(input.restaurants, settings.fees.maxRestaurantsPerOrder, true);
@@ -191,8 +194,12 @@ export const placeGroup = async (customerId: string, input: PlaceGroupInput): Pr
     const outcome = await prisma.$transaction(
       async (tx): Promise<GroupBundle & { replay: boolean }> => {
         // One checkout at a time per customer, so the unpaid-orders limit and single-use coupons cannot be raced.
-        const locked = await tx.$queryRaw<{ deletedAt: Date | null }[]>`SELECT "deletedAt" FROM "User" WHERE "id" = ${customerId} FOR UPDATE`;
+        const locked = await tx.$queryRaw<{ deletedAt: Date | null; accountStatus: string; statusReason: string | null }[]>`SELECT "deletedAt", "accountStatus"::text AS "accountStatus", "statusReason" FROM "User" WHERE "id" = ${customerId} FOR UPDATE`;
         if (locked.length === 0 || locked[0].deletedAt) throw new OrderFlowError(401, 'ACCOUNT_UNAVAILABLE', 'This account is no longer available. Please sign in again.');
+        const blockedNow = customerBlockError(locked[0]);
+        if (blockedNow) throw blockedNow;
+        // Docs/27 B3: every restaurant of the combined order is re-checked under a shared row lock (see services/orderGuards.ts).
+        await assertVendorsOrderableInTx(tx, input.restaurants.map((r) => r.vendorId));
 
         // The same checkout again that overlapped the first request: that request has committed by now (we waited for the lock).
         const twin = await tx.orderGroup.findUnique({ where: { customerId_clientRequestId: { customerId, clientRequestId: input.clientRequestId } }, ...GROUP_WITH_ORDERS });

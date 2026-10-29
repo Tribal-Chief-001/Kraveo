@@ -3,6 +3,9 @@ import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { UserRole } from '../types';
 import { prisma } from '../db';
+import { clientIp } from './rateLimit';
+import { runWithActor } from '../services/actorContext';
+import { blockedLogin } from '../services/accountGuard';
 
 dotenv.config();
 
@@ -51,8 +54,9 @@ export const accountMatchesToken = async (userId: string, tv: unknown): Promise<
   const now = Date.now();
   const hit = authCache.get(userId);
   if (hit && hit.until > now) return hit.tv === claimed;
-  const row = await prisma.user.findUnique({ where: { id: userId }, select: { tokenVersion: true, deletedAt: true } });
-  if (!row || row.deletedAt) {
+  const row = await prisma.user.findUnique({ where: { id: userId }, select: { tokenVersion: true, deletedAt: true, accountStatus: true } });
+  // Docs/28: an account an admin suspended or removed has no valid session at all, whatever its tokenVersion says.
+  if (!row || row.deletedAt || row.accountStatus !== 'ACTIVE') {
     authCache.delete(userId);
     return false;
   }
@@ -88,6 +92,16 @@ const partnerIsSuspended = async (userId: string, role: unknown): Promise<boolea
   }
 };
 
+/** Why a (validly signed) token's account is blocked by an admin, or null. Never throws. */
+const blockedAccount = async (userId: string) => {
+  try {
+    const u = await prisma.user.findUnique({ where: { id: userId }, select: { accountStatus: true, statusReason: true } });
+    return u ? blockedLogin(u) : null;
+  } catch {
+    return null;
+  }
+};
+
 // Middleware to verify JWT authentication header
 export const requireAuth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
@@ -116,6 +130,10 @@ export const requireAuth = async (req: AuthenticatedRequest, res: Response, next
     if (!(await accountMatchesToken(decoded.id, decoded.tv))) {
       // The signature and expiry verified and the id belongs to a real account, so this is a session that account really held:
       // it may be told WHY it ended when the admin paused the partner. Anyone without a validly signed token never gets here.
+      const blocked = await blockedAccount(decoded.id);
+      if (blocked) {
+        return res.status(401).json({ success: false, code: 'TOKEN_REVOKED', reason: blocked.code, message: blocked.message });
+      }
       const suspended = await partnerIsSuspended(decoded.id, decoded.role);
       if (suspended) {
         return res.status(401).json({ success: false, code: 'TOKEN_REVOKED', reason: 'ACCOUNT_SUSPENDED', message: 'Your Kraveo account is paused. Log in to see why, or ask Kraveo support.' });
@@ -127,6 +145,8 @@ export const requireAuth = async (req: AuthenticatedRequest, res: Response, next
     return res.status(503).json({ success: false, message: 'Service temporarily unavailable. Please try again.' });
   }
   req.user = { id: decoded.id, phone: decoded.phone, role: decoded.role };
+  // Docs/27 B0: every audit row written while an admin's request runs carries that admin (actorContext).
+  if (decoded.role === 'ADMIN') return runWithActor({ id: decoded.id, ip: clientIp(req) }, () => next());
   return next();
 };
 

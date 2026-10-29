@@ -2,7 +2,7 @@ import { errSummary } from './utils/log';
 import { SlidingWindow } from './middleware/rateLimit';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { prisma } from './db';
-import { verifyTokenForAccount } from './middleware/auth';
+import { verifyTokenForAccount, accountMatchesToken } from './middleware/auth';
 import { orderView, isPoolEligible, OrderWithRelations, ORDER_VIEW_INCLUDE, ACTIVE_RIDER_STATUSES } from './services/orderView';
 
 /**
@@ -103,6 +103,7 @@ export const attachRealtime = (io: SocketIOServer) => {
       // Signature + the account still exists + the token was not revoked (password reset, suspension, deletion).
       const decoded = await verifyTokenForAccount(rawToken.replace(/^Bearer\s+/i, ''));
       socket.data.user = { id: decoded.id, role: decoded.role } as SocketUser;
+      socket.data.tv = decoded.tv;
       const autoRooms = [`user_${decoded.id}`];
       if (decoded.role === 'ADMIN') autoRooms.push('admins');
       if (decoded.role === 'DRIVER' && (await isRiderOnDuty(decoded.id))) autoRooms.push('drivers');
@@ -123,6 +124,9 @@ export const attachRealtime = (io: SocketIOServer) => {
   io.on('connection', (socket: Socket) => {
     const user = socket.data.user as SocketUser;
     socket.join(socket.data.autoRooms as string[]);
+    // Docs/28: the handshake check and the join are not one step. If an admin blocked this account in between (revokeUserEverywhere already swept
+    // the rooms and found nobody), the account is checked once more now that the socket is in its rooms; a database error keeps the socket.
+    accountMatchesToken(user.id, socket.data.tv).then((ok) => { if (!ok) socket.disconnect(true); }).catch(() => undefined);
     socket.on('disconnect', () => joinWindows.delete(socket.id));
 
     // join_room(room, ack?) -> ack({ ok }) so a client knows when it is actually subscribed.
@@ -174,6 +178,18 @@ export const addToPartnerRooms = (userId: string, rooms: string[]) => {
     ioRef?.in(`user_${userId}`).socketsJoin(rooms);
   } catch (err) {
     console.error('addToPartnerRooms failed:', errSummary(err));
+  }
+};
+
+/**
+ * Closes every live socket of `userId` (they would otherwise keep receiving events after a suspension / removal / password reset).
+ * Local to this process (the pilot runs one); with several instances the 15 s auth cache is the backstop. Never throws.
+ */
+export const disconnectUser = (userId: string) => {
+  try {
+    ioRef?.in(`user_${userId}`).disconnectSockets(true);
+  } catch (err) {
+    console.error('disconnectUser failed:', errSummary(err));
   }
 };
 

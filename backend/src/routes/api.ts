@@ -12,7 +12,7 @@ import { errSummary } from '../utils/log';
 import { NAME_RE } from '../utils/names';
 import { startOfIstDay, istHour } from '../utils/time';
 import { dropFromPartnerRooms } from '../realtime';
-import { publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem, vendorMenuItemView, isCustomerVisible, CUISINES_INCLUDE, withCuisines, cuisineFields, LIVE_MENU_INCLUDE, MENU_ORDER_BY } from '../utils/catalog';
+import { OWNER_VIEW_SELECT, ownerView, publicVendorView, publicMenuItem, validateMenuItemFields, priceProblem, vendorMenuItemView, isCustomerVisible, CUISINES_INCLUDE, withCuisines, cuisineFields, LIVE_MENU_INCLUDE, MENU_ORDER_BY } from '../utils/catalog';
 import { catalogRouter } from './catalog';
 import { retryStaleRead } from '../utils/prismaRetry';
 import { categoriesRouter } from './categories';
@@ -30,6 +30,12 @@ import { lockOrderInTx, OrderFlowError } from '../services/orderFlow';
 import { deviceRouter } from './devices';
 import { disableUserTokens } from '../services/push/deviceTokens';
 import { adminPinData, vendorLocationView, describePin, VENDOR_LOCATION_SELECT } from '../services/vendorLocation';
+import { blockedLogin } from '../services/accountGuard';
+import { adminUsersRouter } from './adminUsers';
+import { adminOwnersRouter } from './adminOwners';
+import { adminAuditRouter } from './adminAudit';
+import { adminDriversRouter } from './adminDrivers';
+import { adminVendorsRouter } from './adminVendors';
 import { partnerRouter, requireApprovedPartner, validateVendorFields, validateDriverFields, newRunnerCode, writeAudit, DEFAULT_BANNER, clean } from './partners';
 
 export const apiRouter = Router();
@@ -52,6 +58,12 @@ apiRouter.use(bannersRouter);
 apiRouter.use(uploadRouter);
 // Payout details, settlements, finance analytics and the rider payout ledger (Docs/21 phase 2).
 apiRouter.use(financeRouter);
+// Docs/27 + Docs/28: admin user management. Customers (suspend / restore / remove), riders, restaurants, owner logins, activity log.
+apiRouter.use(adminUsersRouter);
+apiRouter.use(adminDriversRouter);
+apiRouter.use(adminVendorsRouter);
+apiRouter.use(adminOwnersRouter);
+apiRouter.use(adminAuditRouter);
 
 // Admin passcode: only WRONG passcodes count, per client IP (nginx sets X-Forwarded-For, `trust proxy` = 1).
 const adminLoginFailures = new FailureLimiter({ maxFails: 5, windowMs: 15 * 60 * 1000 });
@@ -74,8 +86,9 @@ const optionalViewer = async (req: Request): Promise<{ id: string; role: Role } 
     return null;
   }
 };
-const canSeeVendor = (vendor: { approvalStatus: string; userId: string | null }, viewer: { id: string; role: Role } | null) =>
-  vendor.approvalStatus === 'APPROVED' || viewer?.role === Role.ADMIN || (!!viewer && viewer.role === Role.VENDOR && vendor.userId === viewer.id);
+// Docs/27 B3: a REMOVED restaurant is visible to admins only (not even to its own owner); everything else is as before.
+const canSeeVendor = (vendor: { approvalStatus: string; userId: string | null; removedAt?: Date | null }, viewer: { id: string; role: Role } | null) =>
+  viewer?.role === Role.ADMIN || (!vendor.removedAt && (vendor.approvalStatus === 'APPROVED' || (!!viewer && viewer.role === Role.VENDOR && vendor.userId === viewer.id)));
 
 // ----------------------------------------------------
 // DRIVER PARTNER MANAGEMENT ENDPOINTS
@@ -83,7 +96,7 @@ const canSeeVendor = (vendor: { approvalStatus: string; userId: string | null },
 apiRouter.get('/drivers', requireAuth, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const drivers = await prisma.driverPartner.findMany({
-      include: { user: { select: { id: true, name: true, phone: true, role: true, avatarId: true, createdAt: true } } }
+      include: { user: { select: { id: true, name: true, phone: true, role: true, avatarId: true, createdAt: true, accountStatus: true, lastLoginAt: true } } }
     });
     return res.json({ success: true, count: drivers.length, data: drivers });
   } catch (err: any) {
@@ -134,7 +147,7 @@ apiRouter.get('/drivers/:id', requireAuth, requireRole('DRIVER', 'ADMIN'), valid
     if (req.user!.role === Role.ADMIN) {
       const driver = await prisma.driverPartner.findFirst({
         where,
-        include: { user: { select: { id: true, name: true, phone: true, role: true, avatarId: true, createdAt: true } } },
+        include: { user: { select: { id: true, name: true, phone: true, role: true, avatarId: true, createdAt: true, accountStatus: true, lastLoginAt: true } } },
       });
       if (!driver) return res.status(404).json({ success: false, message: 'Driver partner not found.' });
       return res.json({ success: true, data: driver });
@@ -157,6 +170,17 @@ apiRouter.get('/drivers/:id', requireAuth, requireRole('DRIVER', 'ADMIN'), valid
 // ----------------------------------------------------
 // AUTH: students sign in with Google, partners with phone + password (contract: Docs/15_auth_v2_contract.md)
 // ----------------------------------------------------
+/** Remembers the sign-in time (Docs/27 B6-16). A failed write must never fail the sign-in. */
+const touchLogin = async <T extends { id: string }>(userId: string, row: T): Promise<T> => {
+  try {
+    const at = new Date();
+    await prisma.user.updateMany({ where: { id: userId }, data: { lastLoginAt: at } });
+    return { ...row, lastLoginAt: at };
+  } catch {
+    return row;
+  }
+};
+
 const PLACEHOLDER_NAMES = new Set(['VIT Student', 'Dhaba Owner', 'Delivery Partner']);
 const UPI_RE = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/;
 const AVATAR_COUNT = 15;
@@ -198,21 +222,27 @@ apiRouter.post('/auth/google', async (req: Request, res: Response) => {
 
     // The Google account id (sub) is the identity. An account found only by email is linked to this Google
     // account when it has none yet; it is never re-pointed from one Google account to another.
-    let user = await prisma.user.findFirst({ where: { googleSub: identity.sub, deletedAt: null } });
+    // Docs/28: the lookup includes accounts an admin REMOVED (they keep email + googleSub as the block key), so a removed person is
+    // answered with a plain 403 here instead of hitting the unique index on create. A self-deleted account has no email / googleSub
+    // left (anonymised), so it never matches and that person still gets a fresh account.
+    let user = await prisma.user.findFirst({ where: { googleSub: identity.sub } });
     let isNewUser = false;
 
     if (!user) {
-      const byEmail = await prisma.user.findFirst({ where: { email: identity.email, deletedAt: null } });
+      const byEmail = await prisma.user.findFirst({ where: { email: identity.email } });
       if (byEmail && byEmail.googleSub && byEmail.googleSub !== identity.sub) {
         return res.status(409).json({ success: false, code: 'ACCOUNT_CONFLICT', message: 'This email is already linked to a different Google account. Contact Kraveo support.' });
       }
       user = byEmail;
     }
+    if (user && user.deletedAt && user.accountStatus === 'ACTIVE') user = null; // defensive: a self-deleted row is never signed back in
 
     if (user) {
       if (user.role !== Role.STUDENT) {
         return res.status(403).json({ success: false, message: 'This Google account belongs to a Kraveo partner. Use the partner app.' });
       }
+      const blocked = blockedLogin(user);
+      if (blocked) return res.status(blocked.status).json({ success: false, code: blocked.code, message: blocked.message });
       if (user.googleSub !== identity.sub || user.email !== identity.email) {
         try {
           user = await prisma.user.update({ where: { id: user.id }, data: { googleSub: identity.sub, email: identity.email } });
@@ -222,11 +252,24 @@ apiRouter.post('/auth/google', async (req: Request, res: Response) => {
         }
       }
     } else {
-      user = await prisma.user.create({
-        data: { email: identity.email, googleSub: identity.sub, name: identity.name.slice(0, 60), role: Role.STUDENT },
-      });
-      isNewUser = true;
+      try {
+        user = await prisma.user.create({
+          data: { email: identity.email, googleSub: identity.sub, name: identity.name.slice(0, 60), role: Role.STUDENT },
+        });
+        isNewUser = true;
+      } catch (err: any) {
+        // Two first sign-ins at the same moment (or an admin block that appeared a moment ago): never a 500.
+        if (err?.code !== 'P2002') throw err;
+        const again = await prisma.user.findFirst({ where: { OR: [{ googleSub: identity.sub }, { email: identity.email }] } });
+        const blocked = again ? blockedLogin(again) : null;
+        if (blocked) return res.status(blocked.status).json({ success: false, code: blocked.code, message: blocked.message });
+        if (!again || again.role !== Role.STUDENT || again.deletedAt || again.googleSub !== identity.sub) {
+          return res.status(409).json({ success: false, code: 'ACCOUNT_CONFLICT', message: 'This Google account is already linked to another Kraveo account. Contact Kraveo support.' });
+        }
+        user = again;
+      }
     }
+    user = await touchLogin(user.id, user);
 
     const token = generateToken({ id: user.id, phone: user.phone, role: user.role, tokenVersion: user.tokenVersion });
     return res.json({ success: true, message: isNewUser ? 'Welcome to Kraveo!' : 'Welcome back!', token, user: publicUser(user), isNewUser, needsProfile: needsProfile(user) });
@@ -257,7 +300,10 @@ apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
       return res.status(429).json({ success: false, message: 'Too many wrong attempts. Try again later.', retryAfterSeconds: locked });
     }
 
-    const user = await prisma.user.findFirst({ where: { phone: { endsWith: key }, role: { in: [Role.VENDOR, Role.DRIVER, Role.ADMIN, Role.STUDENT] }, deletedAt: null } });
+    // Docs/28: no deletedAt filter - a person an admin REMOVED keeps their phone and must be answered "removed" (after the password proves
+    // who they are), not "wrong password". A self-deleted account has no phone left, so it still never matches.
+    const found = await prisma.user.findFirst({ where: { phone: { endsWith: key }, role: { in: [Role.VENDOR, Role.DRIVER, Role.ADMIN, Role.STUDENT] } } });
+    const user = found && !(found.deletedAt && found.accountStatus === 'ACTIVE') ? found : null; // a self-deleted account never signs in
     // Always run one scrypt so unknown numbers and wrong passwords take the same time.
     const ok = await verifyPassword(password, user?.passwordHash ?? (await getDummyHash()));
     if (!user || !user.passwordHash || !ok) {
@@ -266,10 +312,14 @@ apiRouter.post('/auth/partner-login', async (req: Request, res: Response) => {
       if (retry) return res.status(429).json({ success: false, message: 'Too many wrong attempts. Try again in 15 minutes.', retryAfterSeconds: retry });
       return res.status(401).json({ success: false, message: 'Wrong phone or password.' });
     }
+    // Identity is proven. An account an admin paused or removed gets the plain 403 (code + message) and no token.
+    const blocked = blockedLogin(user);
+    if (blocked) return res.status(blocked.status).json({ success: false, code: blocked.code, message: blocked.message });
     if (user.role !== role) {
       return res.status(403).json({ success: false, message: 'This account is not registered for this app.' });
     }
     recordSuccess(key);
+    await touchLogin(user.id, user);
 
     const vendors = role === 'VENDOR' ? await retryStaleRead(() => prisma.vendor.findMany({ where: { userId: user.id }, select: { id: true, name: true, isAcceptingOrders: true, approvalStatus: true, rejectionReason: true, category: true, address: true, fssaiNumber: true, ...VENDOR_LOCATION_SELECT, ...CUISINES_INCLUDE }, orderBy: { createdAt: 'asc' } })) : [];
     const vendorRow = vendors.find((v) => v.approvalStatus === 'APPROVED') ?? vendors[0] ?? null;
@@ -341,6 +391,10 @@ apiRouter.post('/auth/admin-login', async (req: Request, res: Response) => {
         }
       });
     }
+
+    const blockedAdmin = blockedLogin(adminUser);
+    if (blockedAdmin) return res.status(blockedAdmin.status).json({ success: false, code: blockedAdmin.code, message: blockedAdmin.message });
+    await touchLogin(adminUser.id, adminUser);
 
     const token = generateToken({
       id: adminUser.id,
@@ -609,9 +663,13 @@ const withoutCommission = <T extends { commissionType?: unknown; commissionValue
 };
 export const fullVendorView = (v: any, viewer: { id: string; role: Role } | null) => {
   // Docs/23: `cuisines` (ordered {id,name,icon}) and `tags` (their names) ride along; the raw link rows are replaced.
-  if (viewer?.role === Role.ADMIN) return { ...withCuisines(v), hasLocation: vendorHasLocation(v.lat, v.lng) };
+  if (viewer?.role === Role.ADMIN) {
+    const { user, ...row } = v;
+    return { ...withCuisines(row), ...(user !== undefined ? { owner: ownerView(user) } : {}), hasLocation: vendorHasLocation(v.lat, v.lng) };
+  }
   if (viewer?.role === Role.VENDOR && !!v.userId && v.userId === viewer.id) {
-    return { ...withoutCommission(withCuisines(v)), menuItems: (v.menuItems ?? []).map(vendorMenuItemView), hasLocation: vendorHasLocation(v.lat, v.lng) };
+    const { removedReason: _r, ownerDisabledByRemoval: _o, user: _u, ...own } = v;
+    return { ...withoutCommission(withCuisines(own)), menuItems: (v.menuItems ?? []).map(vendorMenuItemView), hasLocation: vendorHasLocation(v.lat, v.lng) };
   }
   return null;
 };
@@ -619,7 +677,10 @@ export const fullVendorView = (v: any, viewer: { id: string; role: Role } | null
 apiRouter.get('/vendors', async (req: Request, res: Response) => {
   try {
     const viewer = await optionalViewer(req);
-    const dbVendors = await retryStaleRead(() => prisma.vendor.findMany({ include: { ...LIVE_MENU_INCLUDE, ...CUISINES_INCLUDE } }));
+    const isAdmin = viewer?.role === Role.ADMIN;
+    // Removed restaurants are hidden unless an admin asks for them (?includeRemoved=1).
+    const where = isAdmin && req.query.includeRemoved === '1' ? undefined : { removedAt: null };
+    const dbVendors = await retryStaleRead(() => prisma.vendor.findMany({ where, include: { ...LIVE_MENU_INCLUDE, ...CUISINES_INCLUDE, ...(isAdmin ? { user: { select: OWNER_VIEW_SELECT } } : {}) } }));
     const visible = dbVendors.filter((v) => canSeeVendor(v, viewer)).map((v) => fullVendorView(v, viewer) ?? publicVendorView(v));
     return res.json({ success: true, count: visible.length, data: visible });
   } catch (err: any) {
@@ -631,7 +692,7 @@ apiRouter.get('/vendors/:id', validParams('id'), async (req: Request, res: Respo
   try {
     const dbVendor = await retryStaleRead(() => prisma.vendor.findUnique({
       where: { id: req.params.id },
-      include: { ...LIVE_MENU_INCLUDE, ...CUISINES_INCLUDE }
+      include: { ...LIVE_MENU_INCLUDE, ...CUISINES_INCLUDE, user: { select: OWNER_VIEW_SELECT } }
     }));
     const viewer = await optionalViewer(req);
     if (!dbVendor || !canSeeVendor(dbVendor, viewer)) return res.status(404).json({ success: false, message: 'Vendor not found' });
@@ -675,7 +736,7 @@ apiRouter.post('/vendors', requireAuth, requireRole('ADMIN'), async (req: Authen
           lng: pin ? pin.lng : 76.8524,
           ...(pin ? adminPinData(pin.lat, pin.lng) : {}),
           bannerImage: bannerImage || 'https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=600',
-          isAcceptingOrders: true,
+          isAcceptingOrders: false, // Docs/28: no owner login yet, so it cannot be open (the owner opens it after the first sign-in)
         },
       });
       await linkNewVendorCuisines(tx, row.id, prep.cuisines);
@@ -715,6 +776,19 @@ apiRouter.patch('/admin/vendors/:id/profile', requireAuth, requireRole('ADMIN'),
   }
 });
 
+/**
+ * Opens or closes a restaurant. Closing is always allowed. Opening needs an owner login (Docs/28 decision 1: 409 NO_OWNER) and a
+ * restaurant that is not removed; the check is part of the UPDATE itself, so a detach that commits at the same moment cannot be undone.
+ */
+const setAccepting = async (vendorId: string, open: boolean) => {
+  if (!open) return { ok: true as const, row: await prisma.vendor.update({ where: { id: vendorId }, data: { isAcceptingOrders: false } }) };
+  const done = await prisma.vendor.updateMany({ where: { id: vendorId, userId: { not: null }, removedAt: null }, data: { isAcceptingOrders: true } });
+  const row = await prisma.vendor.findUnique({ where: { id: vendorId } });
+  if (done.count === 1 && row) return { ok: true as const, row };
+  if (row?.removedAt) return { ok: false as const, status: 409, code: 'VENDOR_REMOVED', message: 'This restaurant was removed.' };
+  return { ok: false as const, status: 409, code: 'NO_OWNER', message: 'Add an owner login first.' };
+};
+
 apiRouter.patch('/vendors/:id/status', requireAuth, validParams('id'), requireRole('VENDOR', 'ADMIN'), requireApprovedPartner, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { isAcceptingOrders } = req.body;
@@ -723,12 +797,9 @@ apiRouter.patch('/vendors/:id/status', requireAuth, validParams('id'), requireRo
     if (!(await canManageVendor(vendor.id, req.user))) return res.status(403).json({ success: false, message: 'Forbidden. You do not own this vendor.' });
 
     if (typeof isAcceptingOrders !== 'boolean') return res.status(400).json({ success: false, message: 'isAcceptingOrders boolean field is required.' });
-    const newStatus = isAcceptingOrders;
-
-    const updated = await prisma.vendor.update({
-      where: { id: req.params.id },
-      data: { isAcceptingOrders: newStatus }
-    });
+    const out = await setAccepting(vendor.id, isAcceptingOrders);
+    if (!out.ok) return res.status(out.status).json({ success: false, code: out.code, message: out.message });
+    const updated = out.row;
     return res.json({ success: true, isAcceptingOrders: updated.isAcceptingOrders, data: req.user?.role === Role.ADMIN ? updated : withoutCommission(updated) });
   } catch (err: any) {
     return fail(res, err, 'Error updating vendor status');
@@ -741,11 +812,9 @@ apiRouter.patch('/vendors/:id/toggle', requireAuth, validParams('id'), requireRo
     if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
     if (!(await canManageVendor(vendor.id, req.user))) return res.status(403).json({ success: false, message: 'Forbidden. You do not own this vendor.' });
 
-    const updated = await prisma.vendor.update({
-      where: { id: req.params.id },
-      data: { isAcceptingOrders: !vendor.isAcceptingOrders }
-    });
-    return res.json({ success: true, isAcceptingOrders: updated.isAcceptingOrders });
+    const out = await setAccepting(vendor.id, !vendor.isAcceptingOrders);
+    if (!out.ok) return res.status(out.status).json({ success: false, code: out.code, message: out.message });
+    return res.json({ success: true, isAcceptingOrders: out.row.isAcceptingOrders });
   } catch (err: any) {
     return fail(res, err, 'Error toggling vendor');
   }
@@ -791,7 +860,7 @@ apiRouter.post('/vendors/:id/items', requireAuth, requireRole('VENDOR', 'ADMIN')
 // ----------------------------------------------------
 apiRouter.get('/menus/:vendorId', validParams('vendorId'), async (req: Request, res: Response) => {
   try {
-    const owner = await prisma.vendor.findUnique({ where: { id: req.params.vendorId }, select: { approvalStatus: true, userId: true } });
+    const owner = await prisma.vendor.findUnique({ where: { id: req.params.vendorId }, select: { approvalStatus: true, userId: true, removedAt: true } });
     const viewer = await optionalViewer(req);
     if (!owner || !canSeeVendor(owner, viewer)) return res.json({ success: true, count: 0, data: [] });
     const dbItems = await prisma.menuItem.findMany({ where: { vendorId: req.params.vendorId, deletedAt: null }, orderBy: MENU_ORDER_BY });

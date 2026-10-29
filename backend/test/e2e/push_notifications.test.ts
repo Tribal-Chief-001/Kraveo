@@ -3,6 +3,7 @@
  * idempotency, retries, dead tokens, privacy (no OTP / phone / address), and "push can never change an order result".
  * Real PostgreSQL, real HTTP endpoints; the sender is a fake PushProvider (Firebase is never contacted).
  */
+import { suspendPartnerDirect } from '../harness/journey';
 import { randomUUID } from 'crypto';
 import supertest from 'supertest';
 import { Role } from '@prisma/client';
@@ -689,8 +690,11 @@ describe('Push notifications', () => {
       await registerAll();
       const id = await placeOnly(); // placed while the restaurant was fine
       const vendorRow = await prisma.vendor.findUniqueOrThrow({ where: { id: 'ven-1' } });
-      const s = await request.post(`/api/admin/partners/vendor/${vendorRow.id}/status`).set(H(tAdmin)).send({ status: 'SUSPENDED', reason: 'Hygiene check failed' });
-      expect(s.status).toBe(200);
+      // Docs/27: the unpaid checkout is an open order, so the API refuses to suspend. This scenario is "the order is paid AFTER the restaurant
+      // was suspended", so the suspension is applied directly (same effects as the route, minus the guard).
+      const refused = await request.post(`/api/admin/partners/vendor/${vendorRow.id}/status`).set(H(tAdmin)).send({ status: 'SUSPENDED', reason: 'Hygiene check failed' });
+      expect([refused.status, refused.body.code]).toEqual([409, 'HAS_OPEN_ORDERS']);
+      await suspendPartnerDirect('vendor', vendorRow.id);
       expect((await prisma.deviceToken.findUniqueOrThrow({ where: { token: TOK.vendor } }))).toMatchObject({ disabledReason: 'PARTNER_SUSPENDED' });
       await prisma.user.update({ where: { id: VENDOR.id }, data: { tokenVersion: 0 } });
       await payOrder(id);

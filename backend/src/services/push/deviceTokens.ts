@@ -51,4 +51,5 @@ export const disableToken = async (token: string, reason: string): Promise<void>
 };
 
 export const activeTokensFor = (userId: string, app: PushApp) =>
-  prisma.deviceToken.findMany({ where: { userId, app, disabledAt: null }, select: { token: true }, orderBy: { lastSeenAt: 'desc' } });
+  // Docs/28: a suspended or removed account gets no push on any device, even if one of its tokens was somehow left enabled.
+  prisma.deviceToken.findMany({ where: { userId, app, disabledAt: null, user: { accountStatus: 'ACTIVE', deletedAt: null } }, select: { token: true }, orderBy: { lastSeenAt: 'desc' } });
