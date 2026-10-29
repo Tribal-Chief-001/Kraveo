@@ -56,7 +56,7 @@ export const vendorImpact = async (vendorId: string) => {
   };
 };
 
-export type VendorChange = { changed: boolean; cancelled?: CancelOutcome[]; failed?: CancelFailure[]; ownerDisabled?: boolean; ownerRestored?: boolean; warning?: string };
+export type VendorChange = { changed: boolean; cancelled?: CancelOutcome[]; failed?: CancelFailure[]; remaining?: string[]; ownerDisabled?: boolean; ownerRestored?: boolean; warning?: string };
 
 const cancelOpen = async (vendorId: string, adminId: string) => {
   const { open } = await findOpenOrders(prisma, { vendorId });

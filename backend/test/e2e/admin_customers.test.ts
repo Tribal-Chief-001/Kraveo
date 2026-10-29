@@ -302,7 +302,7 @@ describe('Admin customers: suspend / restore / remove', () => {
       expect(res.body.failed).toEqual([]);
       expect(res.body.cancelled).toHaveLength(2);
       expect(res.body.cancelled).toEqual(expect.arrayContaining([
-        expect.objectContaining({ orderId: paid.id, cancelledOrders: 1, refund: 'STARTED' }),
+        expect.objectContaining({ orderId: paid.id, cancelledOrders: 1, refund: 'DONE' }),
         expect.objectContaining({ orderId: unpaid.body.data.id, cancelledOrders: 1, refund: 'NONE' }),
       ]));
       const o1 = await prisma.order.findUniqueOrThrow({ where: { id: paid.id } });
@@ -330,7 +330,7 @@ describe('Admin customers: suspend / restore / remove', () => {
       const res = await act(c.id, 'remove', { reason: 'Fraud', confirmName: 'Cust Tester', openOrders: 'CANCEL' });
       await __waitForBackgroundWork();
       expect(res.status).toBe(200);
-      expect(res.body.cancelled).toEqual([expect.objectContaining({ groupId: g.body.data.id, cancelledOrders: 2, refund: 'STARTED' })]);
+      expect(res.body.cancelled).toEqual([expect.objectContaining({ groupId: g.body.data.id, cancelledOrders: 2, refund: 'DONE' })]);
       const kids = await prisma.order.findMany({ where: { groupId: g.body.data.id }, orderBy: { groupIndex: 'asc' } });
       expect(kids.map((k) => k.status)).toEqual(['CANCELLED', 'CANCELLED']);
       expect(ledger.refundsOf('pay_ac_grp')).toEqual([expect.objectContaining({ amountPaise: cp.body.amountInPaise })]);

@@ -516,7 +516,11 @@ apiRouter.delete('/auth/account', requireAuth, requireRole('STUDENT'), async (re
     const userId = req.user!.id;
     // Lock the account row (placing an order takes the same lock), so no order can slip in between the check and the delete.
     const blocked = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+      const row = await tx.$queryRaw<{ accountStatus: string; statusReason: string | null; deletedAt: Date | null }[]>`SELECT "accountStatus"::text AS "accountStatus", "statusReason", "deletedAt" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+      // An admin block that landed while this request was already running must not be erased: the e-mail / Google id KEEP the person blocked.
+      if (row.length === 0 || row[0].deletedAt) return 'GONE' as const;
+      const blockedNow = blockedLogin(row[0]);
+      if (blockedNow) return blockedNow;
       const active = await tx.order.count({ where: { customerId: userId, status: { notIn: ['DELIVERED', 'CANCELLED'] } } });
       if (active > 0) return true;
       await tx.user.update({
@@ -529,6 +533,8 @@ apiRouter.delete('/auth/account', requireAuth, requireRole('STUDENT'), async (re
       });
       return false;
     });
+    if (blocked === 'GONE') return res.status(401).json({ success: false, code: 'TOKEN_REVOKED', message: 'This session is no longer valid. Please sign in again.' });
+    if (blocked && typeof blocked === 'object') return res.status(blocked.status).json({ success: false, code: blocked.code, message: blocked.message });
     if (blocked) {
       return res.status(409).json({ success: false, message: 'You have an order in progress. You can delete your account once it is delivered.' });
     }

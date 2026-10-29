@@ -157,7 +157,9 @@ const RULES: Rule[] = [
   // owner login are only ever answered by POSTs under this limit.
   {
     name: 'ADMIN_ACCOUNT_WRITE', scope: 'user', max: 30, windowMs: 10 * MIN,
-    applies: (r, p) => ['POST', 'PATCH'].includes(r.method) && /^\/admin\/(customers|drivers|vendors)\/[^/]+\/(suspend|restore|remove|reinstate|owner(\/[a-z-]+)?)$/.test(p),
+    applies: (r, p) => ['POST', 'PATCH'].includes(r.method) && (/^\/admin\/(customers|drivers|vendors)\/[^/]+\/(suspend|restore|remove|reinstate|owner(\/[a-z-]+)?)$/.test(p)
+      // the older routes that can now cancel and refund a whole restaurant, and the partner password reset
+      || /^\/admin\/partners\/(vendor|driver)\/[^/]+\/status$/.test(p) || /^\/admin\/partners\/[^/]+\/reset-password$/.test(p)),
     message: 'Too many account changes. Please wait a few minutes.',
   },
   {

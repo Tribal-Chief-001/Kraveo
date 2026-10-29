@@ -2,8 +2,11 @@ import { prisma } from '../db';
 import { errSummary } from '../utils/log';
 import { Actor, currentActor } from './actorContext';
 
-/** Keys that must never reach the log, at any depth (a safety net: callers are not supposed to pass secrets at all). */
-const SECRET_KEY = /pass(word)?|token|secret|hash|otp|authorization|cookie/i;
+/**
+ * Keys that must never reach the log, at any depth (a safety net: callers are not supposed to pass secrets at all). Only REAL secret names: a flag
+ * such as `passwordGenerated` or a counter such as `tokenVersion` is harmless and stays readable.
+ */
+const SECRET_KEY = /^(otp|pin)$|(password|passwordhash|passwd|token|secret|accountnumber|otpcode|authorization|cookie|apikey|privatekey)$/i;
 const scrubMeta = (v: unknown, depth = 0): unknown => {
   if (v === null || typeof v !== 'object') return typeof v === 'string' ? v.slice(0, 300) : v;
   if (depth > 4) return null;

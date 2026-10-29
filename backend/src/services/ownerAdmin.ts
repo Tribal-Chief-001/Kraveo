@@ -27,6 +27,10 @@ import { movePayoutAccountInTx } from './payoutAccount';
 const conflict = (code: string, message: string, extra: Record<string, unknown> = {}) => new AppError(409, code, message, undefined, extra);
 const badReq = (field: string, message: string) => new AppError(400, 'BAD_REQUEST', message, field);
 
+/** Reason written on a login paused by a detach: the only paused logins that can be attached to another restaurant again. */
+export const DETACHED_PREFIX = 'Detached from ';
+const attachable = (u: { accountStatus: string; statusReason: string | null }) => u.accountStatus === 'ACTIVE' || (u.accountStatus === 'SUSPENDED' && (u.statusReason ?? '').startsWith(DETACHED_PREFIX));
+
 const PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'; // no 0 O 1 l I: easy to read out over the phone
 export const generatePassword = (): string => Array.from({ length: 16 }, () => PASSWORD_ALPHABET[randomInt(PASSWORD_ALPHABET.length)]).join('');
 
@@ -101,6 +105,8 @@ export const createOrAttachOwner = async (input: CreateOwnerInput): Promise<{ ow
     if (!u) throw new AppError(404, 'NOT_FOUND', 'That owner login does not exist.');
     if (u.role !== 'VENDOR') throw conflict('NOT_A_VENDOR_USER', 'Only a restaurant owner login can be attached.');
     if (u.accountStatus === 'REMOVED' || u.deletedAt) throw conflict('OWNER_REMOVED', 'That owner login was removed and cannot be attached.');
+    // A login an admin paused for another reason stays paused: attaching must not silently un-pause it. Only a login paused by a detach is attachable.
+    if (!attachable(u)) throw conflict('LOGIN_NOT_ACTIVE', 'That owner login is paused. Enable it first, or create a new owner login.');
     if (u._count.vendorsOwned > 0) throw conflict('OWNER_HAS_RESTAURANT', 'That owner login already runs a restaurant. One login runs one restaurant.');
     ownerId = u.id;
   } else {
@@ -140,7 +146,11 @@ export const createOrAttachOwner = async (input: CreateOwnerInput): Promise<{ ow
       if (linked.count !== 1) throw conflict('OWNER_EXISTS', 'This restaurant already has an owner login.');
       const n = await tx.vendor.count({ where: { userId: ownerId } });
       if (n > 1) throw conflict('OWNER_HAS_RESTAURANT', 'That owner login already runs a restaurant. One login runs one restaurant.');
-      await tx.user.update({ where: { id: ownerId }, data: { accountStatus: 'ACTIVE', statusReason: null, statusChangedAt: new Date(), statusChangedBy: adminId } });
+      const awake = await tx.user.updateMany({
+        where: { id: ownerId, OR: [{ accountStatus: 'ACTIVE' }, { accountStatus: 'SUSPENDED', statusReason: { startsWith: DETACHED_PREFIX } }] },
+        data: { accountStatus: 'ACTIVE', statusReason: null, statusChangedAt: new Date(), statusChangedBy: adminId },
+      });
+      if (awake.count !== 1) throw conflict('LOGIN_NOT_ACTIVE', 'That owner login is paused. Enable it first, or create a new owner login.');
       if (typeof from === 'string') {
         await assertDetached(tx, from);
         await movePayoutAccountInTx(tx, from, ownerId);
@@ -209,18 +219,30 @@ export const patchOwner = async (input: { vendorId: string; name?: unknown; phon
   return { changed: true, owner: view(await loadOwner(owner.id)) };
 };
 
-export const resetOwnerPassword = async (input: { vendorId: string; password?: unknown }): Promise<{ generatedPassword?: string }> => {
+/**
+ * Reset the owner's password. Resets of the same restaurant run one after the other (Vendor row lock, then the owner's User row): the
+ * password that works is always the one stored last, and every answer carries `issuedAt` (the commit time of ITS password) so a screen that
+ * receives two answers out of order keeps the newest.
+ */
+export const resetOwnerPassword = async (input: { vendorId: string; password?: unknown }): Promise<{ generatedPassword?: string; issuedAt: string }> => {
   const { vendor, owner } = await vendorWithOwner(input.vendorId);
   if (owner.accountStatus === 'REMOVED' || owner.deletedAt) throw conflict('OWNER_REMOVED', 'This owner login was removed.');
   const typed = checkPassword(input.password);
-  const generatedPassword = typed ? undefined : generatePassword();
-  const passwordHash = await hashPassword(typed ?? generatedPassword!);
-  await prisma.user.update({ where: { id: owner.id }, data: { passwordHash, tokenVersion: { increment: 1 } } });
+  let generatedPassword: string | undefined;
+  const issuedAt = await prisma.$transaction(async (tx) => {
+    sameOwner(await lockVendorRow(tx, vendor.id), owner.id);
+    const u = await tx.$queryRaw<{ accountStatus: string; deletedAt: Date | null }[]>`SELECT "accountStatus"::text AS "accountStatus", "deletedAt" FROM "User" WHERE "id" = ${owner.id} FOR UPDATE`;
+    if (u.length === 0 || u[0].accountStatus === 'REMOVED' || u[0].deletedAt) throw conflict('OWNER_REMOVED', 'This owner login was removed.');
+    generatedPassword = typed ? undefined : generatePassword(); // chosen under the lock, so it is the one that gets stored
+    const passwordHash = await hashPassword(typed ?? generatedPassword!);
+    await tx.user.update({ where: { id: owner.id }, data: { passwordHash, tokenVersion: { increment: 1 } } });
+    return new Date();
+  }, { maxWait: 15_000, timeout: 30_000 });
   invalidateAuthCache(owner.id); // every session of this login ends; the old password stops working now
   disconnectUser(owner.id);
   if (owner.phone) recordSuccess(last10(owner.phone));
-  await writeAudit('PASSWORD_RESET', 'VENDOR', owner.id, `Reset the owner password of ${vendor.name} (owner ${id8(owner.id)}); ${generatedPassword ? 'generated' : 'typed'} by the admin`, { meta: { passwordGenerated: !!generatedPassword } });
-  return generatedPassword ? { generatedPassword } : {};
+  await writeAudit('PASSWORD_RESET', 'USER', owner.id, `Reset the owner password of ${vendor.name} (owner ${id8(owner.id)}); ${generatedPassword ? 'generated' : 'typed'} by the admin`, { meta: { passwordGenerated: !!generatedPassword, vendorId: vendor.id } });
+  return { ...(generatedPassword ? { generatedPassword } : {}), issuedAt: issuedAt.toISOString() };
 };
 
 export const disableOwner = async (input: { vendorId: string; adminId: string; reason: string; closeRestaurant: boolean }): Promise<{ changed: boolean; owner: OwnerView; warning?: string; openOrders: number }> => {
@@ -267,7 +289,7 @@ export const enableOwner = async (input: { vendorId: string; adminId: string }):
  * Detach (the login is paused and no longer linked) or, with `removeUser`, also REMOVE the login (accountStatus REMOVED + deletedAt; its
  * payout details stay for the settlements). Open orders: refused with the exact list, or cancelled through the normal cancel code.
  */
-export const detachOwner = async (input: { vendorId: string; adminId: string; reason: string; openOrders: OpenOrdersMode; closeRestaurant: boolean; removeUser: boolean; confirmName?: unknown }): Promise<{ changed: boolean; detachedUser: { id: string; name: string } | null; cancelled?: CancelOutcome[]; failed?: CancelFailure[] }> => {
+export const detachOwner = async (input: { vendorId: string; adminId: string; reason: string; openOrders: OpenOrdersMode; closeRestaurant: boolean; removeUser: boolean; confirmName?: unknown }): Promise<{ changed: boolean; detachedUser: { id: string; name: string } | null; cancelled?: CancelOutcome[]; failed?: CancelFailure[]; remaining?: string[] }> => {
   const { vendorId, adminId, reason, openOrders } = input;
   const { vendor, owner } = await vendorWithOwner(vendorId);
   if (input.removeUser) checkConfirmName(input.confirmName, vendor.name, owner.name);
@@ -282,13 +304,13 @@ export const detachOwner = async (input: { vendorId: string; adminId: string; re
       where: { id: owner.id },
       data: input.removeUser
         ? { accountStatus: 'REMOVED', statusReason: reason, statusChangedAt: now, statusChangedBy: adminId, deletedAt: now }
-        : { accountStatus: 'SUSPENDED', statusReason: `Detached from ${vendor.name}`.slice(0, 200), statusChangedAt: now, statusChangedBy: adminId },
+        : { accountStatus: 'SUSPENDED', statusReason: `${DETACHED_PREFIX}${vendor.name}`.slice(0, 200), statusChangedAt: now, statusChangedBy: adminId },
     });
     return true;
   }, { maxWait: 15_000, timeout: 30_000 });
   await revokeUserEverywhere(owner.id, input.removeUser ? 'ACCOUNT_REMOVED' : 'OWNER_DETACHED');
   await dropFromPartnerRooms(owner.id, [`vendor_${vendorId}`]);
-  let out: { cancelled?: CancelOutcome[]; failed?: CancelFailure[] } = {};
+  let out: { cancelled?: CancelOutcome[]; failed?: CancelFailure[]; remaining?: string[] } = {};
   if (openOrders === 'CANCEL') {
     const { open } = await findOpenOrders(prisma, { vendorId });
     out = await cancelOrdersGuarded(open, { id: adminId }, 'Restaurant is no longer available');

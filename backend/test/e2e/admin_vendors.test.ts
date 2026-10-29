@@ -171,7 +171,7 @@ describe('Admin restaurants: suspend / reinstate / remove / restore', () => {
       await api.verify(c, cp.body.razorpayOrderId, 'pay_av_grp');
       const res = await post(v1.vendorId, 'suspend', { reason: 'Hygiene failure', openOrders: 'CANCEL' });
       await __waitForBackgroundWork();
-      expect(res.body.cancelled).toEqual([expect.objectContaining({ groupId: g.body.data.id, cancelledOrders: 2, refund: 'STARTED' })]);
+      expect(res.body.cancelled).toEqual([expect.objectContaining({ groupId: g.body.data.id, cancelledOrders: 2, refund: 'DONE' })]);
       expect((await prisma.order.findMany({ where: { groupId: g.body.data.id } })).map((k) => k.status)).toEqual(['CANCELLED', 'CANCELLED']);
       expect((await vrow(v2.vendorId)).approvalStatus).toBe('APPROVED'); // the other restaurant is not suspended, only its part was cancelled
       expect(ledger.refundsOf('pay_av_grp')).toEqual([expect.objectContaining({ amountPaise: cp.body.amountInPaise })]);

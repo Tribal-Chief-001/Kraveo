@@ -273,7 +273,7 @@ describe('Admin owner logins', () => {
       expect((await login(v.phone, pw)).status).toBe(200);
       expect((await request.get('/api/auth/profile').set({ Authorization: `Bearer ${v.token}` })).status).toBe(401);
       const typed = await post(v.vendorId, '/reset-password', { password: 'Typed-Pass-99' });
-      expect([typed.status, typed.body.generatedPassword, JSON.stringify(typed.body)]).toEqual([200, undefined, '{"success":true}']);
+      expect([typed.status, typed.body.generatedPassword, Object.keys(typed.body).sort()]).toEqual([200, undefined, ['issuedAt', 'success']]);
       expect((await login(v.phone, 'Typed-Pass-99')).status).toBe(200);
       expect((await post(v.vendorId, '/reset-password', { password: 'short' })).body.field).toBe('password');
       const rows = await prisma.adminAuditLog.findMany({ where: { action: 'PASSWORD_RESET' } });

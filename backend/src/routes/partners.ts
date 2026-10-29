@@ -488,7 +488,7 @@ partnerRouter.post('/admin/partners/:kind/:id/status', requireAuth, requireRole(
       if (kind === 'DRIVER' && !['REFUSE', 'RELEASE'].includes(handover)) return res.status(400).json({ success: false, code: 'BAD_REQUEST', field: 'handover', message: 'handover must be REFUSE or RELEASE.' });
       if (kind === 'VENDOR') {
         const out = await suspendVendor({ vendorId: row.id, adminId: req.user!.id, reason, openOrders: openOrders as 'REFUSE' | 'CANCEL' });
-        extra = { changed: out.changed, ...(out.cancelled ? { cancelled: out.cancelled } : {}), ...(out.failed ? { failed: out.failed } : {}) };
+        extra = { changed: out.changed, ...(out.cancelled ? { cancelled: out.cancelled } : {}), ...(out.failed ? { failed: out.failed } : {}), ...(out.remaining ? { remaining: out.remaining } : {}) };
       } else {
         const out = await suspendRider({ driverId: row.id, reason, handover: handover as 'REFUSE' | 'RELEASE' });
         extra = { changed: out.changed, ...(out.released ? { released: out.released, releaseFailed: out.releaseFailed } : {}) };

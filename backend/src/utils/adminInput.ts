@@ -1,6 +1,6 @@
 import { Request } from 'express';
 import { AppError } from './appError';
-import { badLabel, collapse } from './labels';
+import { badLabel, collapse, nameKey } from './labels';
 
 /** Strict body checks shared by the admin account endpoints (Docs/27 B0: types, lengths, unknown keys). All throw AppError 400 BAD_REQUEST. */
 export const badField = (field: string, message: string, code = 'BAD_REQUEST') => new AppError(400, code, message, field);
@@ -40,11 +40,16 @@ export const enumField = <T extends string>(v: unknown, field: string, allowed: 
   return v as T;
 };
 
-/** The typed-name confirmation of every REMOVE: equal to the target's current name ignoring case and spacing (CONFIRM_MISMATCH otherwise). */
+/**
+ * The typed-name confirmation of every REMOVE: equal to the target's current name after the SAME normalisation on both sides (NFC, zero-width /
+ * bidi / control characters dropped, white space collapsed, case ignored) - a Google display name may carry a ZWJ or LRM, and the admin who pastes it
+ * must still match. CONFIRM_MISMATCH otherwise.
+ */
 export const checkConfirmName = (given: unknown, ...names: (string | null | undefined)[]): void => {
-  if (typeof given !== 'string' || badLabel(given)) throw badField('confirmName', 'Type the name to confirm.', 'CONFIRM_MISMATCH');
-  const g = collapse(given).toLowerCase();
-  if (!g || !names.some((n) => !!n && collapse(n).toLowerCase() === g)) throw badField('confirmName', 'The name you typed does not match.', 'CONFIRM_MISMATCH');
+  const g = typeof given === 'string' ? nameKey(given.normalize('NFC').replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f]/g, '')) : '';
+  if (!g || !names.some((n) => !!n && nameKey(n.normalize('NFC').replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f]/g, '')) === g)) {
+    throw badField('confirmName', 'The name you typed does not match.', 'CONFIRM_MISMATCH');
+  }
 };
 
 export const id8 = (id: string) => id.slice(0, 8);

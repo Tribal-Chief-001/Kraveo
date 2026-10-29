@@ -33,7 +33,8 @@ export const loadRider = async (idOrUserId: string): Promise<RiderRow> => {
 };
 
 const activeDeliveries = async (db: Prisma.TransactionClient | typeof prisma, riderUserId: string) =>
-  db.order.findMany({ where: { driverId: riderUserId, status: { in: [...ACTIVE_RIDER_STATUSES] } }, select: { id: true, status: true, groupId: true }, orderBy: { createdAt: 'asc' } });
+  // PLACED too: an admin may pre-assign a rider to a paid order the restaurant has not accepted yet; it must not stay on a removed rider.
+  db.order.findMany({ where: { driverId: riderUserId, status: { in: ['PLACED', ...ACTIVE_RIDER_STATUSES] } }, select: { id: true, status: true, groupId: true }, orderBy: { createdAt: 'asc' } });
 
 const assertNoDelivery = async (db: Prisma.TransactionClient | typeof prisma, riderUserId: string, handover: Handover) => {
   const active = await activeDeliveries(db, riderUserId);

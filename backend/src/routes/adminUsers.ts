@@ -17,7 +17,7 @@ const send = async (res: Response, userId: string, out: BlockResult | { changed:
   const data = await loadCustomerDetail(userId);
   if (!data) throw new AppError(404, 'NOT_FOUND', 'Customer not found.');
   const b = out as BlockResult;
-  return res.json({ success: true, changed: out.changed, data, ...(b.cancelled ? { cancelled: b.cancelled } : {}), ...(b.failed ? { failed: b.failed } : {}) });
+  return res.json({ success: true, changed: out.changed, data, ...(b.cancelled ? { cancelled: b.cancelled } : {}), ...(b.failed ? { failed: b.failed } : {}), ...(b.remaining ? { remaining: b.remaining } : {}) });
 };
 
 adminUsersRouter.post('/admin/customers/:id/suspend', ...adminOnly, validParams('id'), async (req: AuthenticatedRequest, res: Response) => {

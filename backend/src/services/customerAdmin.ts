@@ -124,7 +124,7 @@ const assertCanBlock = async (db: Prisma.TransactionClient | typeof prisma, cust
   }
 };
 
-export type BlockResult = { changed: boolean; cancelled?: CancelOutcome[]; failed?: CancelFailure[] };
+export type BlockResult = { changed: boolean; cancelled?: CancelOutcome[]; failed?: CancelFailure[]; remaining?: string[] };
 
 export const blockCustomer = async (input: { userId: string; adminId: string; target: Target; reason: string; confirmName?: unknown; scrub: boolean; openOrders: OpenOrdersMode }): Promise<BlockResult> => {
   const { userId, adminId, target, reason, scrub, openOrders } = input;
@@ -166,21 +166,22 @@ export const blockCustomer = async (input: { userId: string; adminId: string; ta
 
   let cancelled: CancelOutcome[] | undefined;
   let failed: CancelFailure[] | undefined;
+  let remaining: string[] | undefined;
   if (openOrders === 'CANCEL') {
     // The account is blocked now (or was), so no new order can appear: this list is final. Refunds start inside the normal cancel path.
     const { open } = await findOpenOrders(prisma, { customerId: userId });
-    ({ cancelled, failed } = await cancelOrdersGuarded(open, { id: adminId }, target === 'REMOVED' ? 'Account removed by Kraveo' : 'Account suspended by Kraveo'));
+    ({ cancelled, failed, remaining } = await cancelOrdersGuarded(open, { id: adminId }, target === 'REMOVED' ? 'Account removed by Kraveo' : 'Account suspended by Kraveo'));
   }
 
   if (changed) {
     const n = cancelled?.reduce((a, c) => a + c.cancelledOrders, 0) ?? 0;
     await writeAudit(
       target === 'REMOVED' ? 'CUSTOMER_REMOVED' : 'CUSTOMER_SUSPENDED', 'USER', userId,
-      `${target === 'REMOVED' ? 'Removed' : 'Suspended'} ${label}: ${reason}; ${n} open order(s) cancelled${failed?.length ? `, ${failed.length} could not be cancelled` : ''}${target === 'REMOVED' && scrub ? '; profile erased' : ''}`,
-      { meta: { before: { accountStatus: user.accountStatus }, after: { accountStatus: target, scrub: target === 'REMOVED' ? scrub : undefined }, openOrders: { mode: openOrders, cancelled: n, failed: failed?.length ?? 0 } } },
+      `${target === 'REMOVED' ? 'Removed' : 'Suspended'} ${label}: ${reason}; ${n} open order(s) cancelled${failed?.length ? `, ${failed.length} could not be cancelled` : ''}${remaining?.length ? `, ${remaining.length} left for the next call` : ''}${target === 'REMOVED' && scrub ? '; profile erased' : ''}`,
+      { meta: { before: { accountStatus: user.accountStatus }, after: { accountStatus: target, scrub: target === 'REMOVED' ? scrub : undefined }, openOrders: { mode: openOrders, cancelled: n, failed: failed?.length ?? 0, remaining: remaining?.length ?? 0 } } },
     );
   }
-  return { changed, ...(cancelled ? { cancelled } : {}), ...(failed ? { failed } : {}) };
+  return { changed, ...(cancelled ? { cancelled } : {}), ...(failed ? { failed } : {}), ...(remaining ? { remaining } : {}) };
 };
 
 export const restoreCustomer = async (input: { userId: string; adminId: string; note: string | null }): Promise<{ changed: boolean }> => {
